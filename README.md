@@ -24,6 +24,17 @@ python3 -m venv "${venv_path}"
 source "${venv_path}/bin/activate"
 ```
 
+Install project tooling into the active runtime venv:
+
+```bash
+export UV_LINK_MODE=copy
+uv sync --group dev --active
+pre-commit install --install-hooks
+```
+
+Note: `uv sync --group dev` without `--active` will target the project default `.venv`
+and may recreate `.venv` in the repository root.
+
 Or set it explicitly when initializing scaffold content:
 
 ```bash
