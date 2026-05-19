@@ -9,12 +9,14 @@ from typing import Any
 from .core import (
     ConfigError,
     build_paths,
+    doctor_config,
     get_value,
     init_config,
     load_config,
     save_config,
     set_value,
     show_config,
+    validate_config,
 )
 
 
@@ -30,6 +32,37 @@ def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
                 print(f"  {sub_key}={sub_value}")
         else:
             print(f"{key}: {value}")
+    return 0
+
+
+def _emit_validation(payload: dict[str, Any], *, json_output: bool) -> int:
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if payload["valid"] else 2
+
+    print(f"profile: {payload['profile']}")
+    if payload["valid"]:
+        print("status: valid")
+        return 0
+
+    print("status: invalid")
+    for issue in payload["errors"]:
+        print(f"- [{issue['code']}] {issue['field']}: {issue['message']}")
+        print(f"  remediation: {issue['remediation']}")
+    return 2
+
+
+def _emit_doctor(payload: dict[str, Any], *, json_output: bool) -> int:
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(f"profile: {payload['profile']}")
+    print(f"status: {payload['status']}")
+    print(f"issues: {payload['summary']['issue_count']}")
+    for issue in payload["issues"]:
+        print(f"- [{issue['code']}] {issue['field']}: {issue['message']}")
+        print(f"  remediation: {issue['remediation']}")
     return 0
 
 
@@ -70,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     set_parser.add_argument("--apply", action="store_true", help="Write config changes")
     set_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    validate_parser = subparsers.add_parser("validate", help="Validate required config settings")
+    validate_parser.add_argument("--profile", help="Profile to validate")
+    validate_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    doctor_parser = subparsers.add_parser("doctor", help="Run config diagnostics")
+    doctor_parser.add_argument("--profile", help="Profile to diagnose")
+    doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     return parser
 
@@ -123,6 +164,14 @@ def main(argv: list[str] | None = None) -> int:
                 "profile": args.profile or updated["active_profile"],
             }
             return _emit(payload, json_output=args.json)
+
+        if args.command == "validate":
+            payload = validate_config(document, profile=args.profile)
+            return _emit_validation(payload, json_output=args.json)
+
+        if args.command == "doctor":
+            payload = doctor_config(document, profile=args.profile)
+            return _emit_doctor(payload, json_output=args.json)
 
         parser.error("Unknown command")
         return 2

@@ -47,12 +47,12 @@ Install project tooling into the active runtime venv:
 
 ```bash
 export UV_LINK_MODE=copy
-uv sync --group dev --active
+bash scripts/uv_active.sh sync --group dev
 pre-commit install --install-hooks
 ```
 
-Note: `uv sync --group dev` without `--active` will target the project default `.venv`
-and may recreate `.venv` in the repository root.
+Note: Run project `uv` commands through `scripts/uv_active.sh` to guarantee
+they target your external runtime venv and do not recreate a local `./.venv`.
 
 ## Initialize Scaffold
 
@@ -92,14 +92,14 @@ Notes:
 ## Run Tests
 
 ```bash
-pytest
+bash scripts/uv_active.sh run pytest
 ```
 
 ## Run Lint and Format Checks
 
 ```bash
-ruff check .
-ruff format --check .
+bash scripts/uv_active.sh run ruff check .
+bash scripts/uv_active.sh run ruff format --check .
 ```
 """
 
@@ -268,6 +268,51 @@ PRE_COMMIT_TEMPLATE = """repos:
 """
 
 
+UV_ACTIVE_SCRIPT_TEMPLATE = """#!/usr/bin/env bash
+set -euo pipefail
+
+project_slug="$(basename "$PWD" | tr '[:upper:] _' '[:lower:]-' | tr -s '-')"
+runtime_venv="${HOME}/.wood/runtime/venvs/${project_slug}"
+
+if [[ ! -d "${runtime_venv}" ]]; then
+  cat >&2 <<EOF
+Error: expected external runtime venv not found:
+  ${runtime_venv}
+
+Create it first:
+  mkdir -p "$HOME/.wood/runtime/venvs"
+  python3 -m venv "${runtime_venv}"
+EOF
+  exit 2
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: bash scripts/uv_active.sh <uv args...>" >&2
+  echo "Example: bash scripts/uv_active.sh run pytest" >&2
+  exit 2
+fi
+
+export VIRTUAL_ENV="${runtime_venv}"
+export UV_PROJECT_ENVIRONMENT="${runtime_venv}"
+export PATH="${runtime_venv}/bin:${PATH}"
+export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
+
+subcommand="$1"
+shift
+
+case "${subcommand}" in
+  run|sync)
+    exec uv "${subcommand}" --active "$@"
+    ;;
+  *)
+    echo "Error: unsupported subcommand '${subcommand}'." >&2
+    echo "Use 'run' or 'sync' with this wrapper." >&2
+    exit 2
+    ;;
+esac
+"""
+
+
 AGENTS_TEMPLATE = """# AGENTS.md
 
 ## Operating Principles
@@ -277,6 +322,9 @@ AGENTS_TEMPLATE = """# AGENTS.md
 - Do not implement unrelated Stories.
 - Prefer deterministic scripts over ad hoc manual changes.
 - Preserve explicit approval gates for mutating operations.
+- For this repository, run `uv` project commands with the active external venv:
+  use `uv run --active ...` and `uv sync --active ...` (or set
+  `UV_PROJECT_ENVIRONMENT`) so `uv` does not recreate a local `./.venv`.
 - Do not store secrets in source code, config files, logs, generated docs, test
   fixtures, or output files.
 - Do not mutate OpenProject, Vaultwarden, ntfy, GitHub, or other external
@@ -907,6 +955,7 @@ def build_scaffold_items(project_name: str) -> tuple[ScaffoldItem, ...]:
         ScaffoldItem(".env.example", ENV_EXAMPLE_TEMPLATE),
         ScaffoldItem(".pre-commit-config.yaml", PRE_COMMIT_TEMPLATE),
         ScaffoldItem("AGENTS.md", AGENTS_TEMPLATE),
+        ScaffoldItem("scripts/uv_active.sh", UV_ACTIVE_SCRIPT_TEMPLATE),
         ScaffoldItem(
             "scripts/resolve_env_refs.py",
             (script_dir / "resolve_env_refs.py").read_text(encoding="utf-8"),
