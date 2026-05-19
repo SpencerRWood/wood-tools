@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -10,6 +11,7 @@ from typing import Any
 
 DEFAULT_PROFILE = "default"
 KEY_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]*$")
+SENSITIVE_PARTS = ("token", "secret", "password")
 
 
 class ConfigError(ValueError):
@@ -32,10 +34,35 @@ def build_paths(path: Path | None = None) -> ConfigPaths:
 
 
 def _default_document() -> dict[str, Any]:
+    default_values: dict[str, Any] = {
+        "paths": {
+            "project_root": "./projects",
+            "artifact_root": "./artifacts",
+            "project_aliases": {},
+            "artifact_aliases": {},
+            "scheduler_root": "./scheduler",
+            "template_search_paths": ["./templates"],
+        },
+        "integrations": {
+            "openproject": {
+                "url": None,
+                "project_id": None,
+                "token_ref": None,
+            },
+            "ntfy": {
+                "url": None,
+                "token_ref": None,
+            },
+            "vaultwarden": {
+                "url": None,
+                "config_ref": None,
+            },
+        },
+    }
     return {
         "version": 1,
         "active_profile": DEFAULT_PROFILE,
-        "profiles": {DEFAULT_PROFILE: {}},
+        "profiles": {DEFAULT_PROFILE: default_values},
     }
 
 
@@ -104,7 +131,7 @@ def set_active_profile(document: dict[str, Any], profile: str) -> dict[str, Any]
         raise ConfigError("Profile name cannot be empty")
     profiles = document["profiles"]
     if profile not in profiles:
-        profiles[profile] = {}
+        profiles[profile] = deepcopy(profiles[DEFAULT_PROFILE])
     document["active_profile"] = profile
     return document
 
@@ -112,6 +139,48 @@ def set_active_profile(document: dict[str, Any], profile: str) -> dict[str, Any]
 def _validate_key_name(key: str) -> None:
     if not KEY_PATTERN.fullmatch(key):
         raise ConfigError("Key must match pattern: [a-zA-Z][a-zA-Z0-9_.-]*")
+
+
+def _split_path(key: str) -> list[str]:
+    parts = key.split(".")
+    if any(not part for part in parts):
+        raise ConfigError("Key path segments cannot be empty")
+    return parts
+
+
+def _lookup(values: dict[str, Any], key: str) -> Any:
+    current: Any = values
+    for part in _split_path(key):
+        if not isinstance(current, dict) or part not in current:
+            raise ConfigError(f"Key '{key}' is not set")
+        current = current[part]
+    return current
+
+
+def _set_nested(values: dict[str, Any], key: str, value: Any) -> None:
+    current: dict[str, Any] = values
+    parts = _split_path(key)
+    for part in parts[:-1]:
+        existing = current.get(part)
+        if existing is None:
+            current[part] = {}
+            existing = current[part]
+        if not isinstance(existing, dict):
+            raise ConfigError(f"Cannot set nested key under non-object path segment '{part}'")
+        current = existing
+    current[parts[-1]] = value
+
+
+def _validate_secret_reference_key_and_value(key: str, value: Any) -> None:
+    final_segment = _split_path(key)[-1]
+    if any(
+        part in final_segment.lower() for part in SENSITIVE_PARTS
+    ) and not final_segment.endswith("_ref"):
+        raise ConfigError(
+            "Sensitive values must be stored as references only. Use keys ending in '_ref'."
+        )
+    if final_segment.endswith("_ref") and value is not None and not isinstance(value, str):
+        raise ConfigError("Reference values must be string values or null")
 
 
 def _resolve_profile(document: dict[str, Any], profile: str | None) -> tuple[str, dict[str, Any]]:
@@ -135,9 +204,7 @@ def show_config(document: dict[str, Any], profile: str | None = None) -> dict[st
 def get_value(document: dict[str, Any], key: str, profile: str | None = None) -> Any:
     _validate_key_name(key)
     _, values = _resolve_profile(document, profile)
-    if key not in values:
-        raise ConfigError(f"Key '{key}' is not set")
-    return values[key]
+    return _lookup(values, key)
 
 
 def set_value(
@@ -149,15 +216,16 @@ def set_value(
     activate_profile: bool = False,
 ) -> dict[str, Any]:
     _validate_key_name(key)
+    _validate_secret_reference_key_and_value(key, value)
 
     if profile:
         if profile not in document["profiles"]:
-            document["profiles"][profile] = {}
+            document["profiles"][profile] = deepcopy(document["profiles"][DEFAULT_PROFILE])
         selected_profile = profile
     else:
         selected_profile = get_active_profile(document)
 
-    document["profiles"][selected_profile][key] = value
+    _set_nested(document["profiles"][selected_profile], key, value)
     if activate_profile:
         document["active_profile"] = selected_profile
     return document
