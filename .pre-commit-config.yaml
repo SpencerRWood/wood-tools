@@ -13,4 +13,24 @@ repos:
     rev: v0.11.13
     hooks:
       - id: ruff
+        args: ["--fix"]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: block-resolved-env
+        name: block staged .env.resolved
+        entry: >-
+          bash -c 'git diff --cached --name-only | grep -qx "\.env\.resolved" &&
+          { echo "Do not commit .env.resolved"; exit 1; } || exit 0'
+        language: system
+        pass_filenames: false
+
+      - id: block-raw-env-secrets
+        name: block raw tokens in staged .env
+        entry: >-
+          bash -c 'git diff --cached --name-only | grep -qx "\.env" || exit 0;
+          git show :.env | grep -Eq "^(OPENPROJECT_API_TOKEN|NTFY_TOKEN)=" &&
+          { echo "Use *_REF entries in .env, not raw tokens"; exit 1; } || exit
+          0'
+        language: system
+        pass_filenames: false
