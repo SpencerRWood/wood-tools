@@ -41,6 +41,39 @@ Notes:
 - `.env.resolved` may contain secrets and must never be committed.
 - OpenProject next-story lookup is read-only.
 
+## wood-config
+
+Configuration file path defaults to:
+
+- `$XDG_CONFIG_HOME/wood-tools/config.json` when `XDG_CONFIG_HOME` is set
+- `~/.config/wood-tools/config.json` otherwise
+
+Profile format:
+
+```json
+{
+  "version": 1,
+  "active_profile": "default",
+  "profiles": {
+    "default": {
+      "example.key": "value"
+    }
+  }
+}
+```
+
+Commands:
+
+```bash
+wood-config init --apply
+wood-config show
+wood-config get example.key
+wood-config set example.key '"new value"' --apply
+wood-config set env.name dev --profile dev --activate-profile --apply
+```
+
+Mutating commands keep an explicit approval gate via `--apply`.
+
 ## Run Tests
 
 ```bash

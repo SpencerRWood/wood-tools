@@ -21,7 +21,8 @@ README_TEMPLATE = """# {project_name}
 
 ## Quick Setup
 
-1. Create and activate a Python 3.11+ virtual environment.
+1. Create and activate a Python virtual environment in local runtime storage:
+   `~/.wood/runtime/venvs/{project_name}`
 2. Install development tools you plan to use (for example, pytest, ruff, and pre-commit).
 3. Copy `.env.example` to `.env` and set reference-only values (never raw secrets).
 
@@ -72,6 +73,16 @@ pytest
 ruff check .
 ruff format --check .
 ```
+"""
+
+PROJECT_METADATA_TEMPLATE = """{{
+  "dev_environment": {{
+    "python_version": "3.14",
+    "venv_strategy": "external",
+    "venv_path": "~/.wood/runtime/venvs/{project_name}",
+    "uv_link_mode": "copy"
+  }}
+}}
 """
 
 
@@ -837,6 +848,10 @@ def build_scaffold_items(project_name: str) -> tuple[ScaffoldItem, ...]:
     return (
         ScaffoldItem("README.md", README_TEMPLATE.format(project_name=project_name)),
         ScaffoldItem("pyproject.toml", PYPROJECT_TEMPLATE.format(project_name=project_name)),
+        ScaffoldItem(
+            "docs/project.metadata.json",
+            PROJECT_METADATA_TEMPLATE.format(project_name=project_name),
+        ),
         ScaffoldItem(".gitignore", GITIGNORE_TEMPLATE),
         ScaffoldItem(".env.example", ENV_EXAMPLE_TEMPLATE),
         ScaffoldItem(".pre-commit-config.yaml", PRE_COMMIT_TEMPLATE),
