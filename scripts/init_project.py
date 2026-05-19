@@ -31,16 +31,16 @@ Use your current project folder name as the slug:
 
 ```bash
 project_slug="$(basename "$PWD" | tr '[:upper:] _' '[:lower:]-' | tr -s '-')"
-venv_path="$HOME/.wood/runtime/venvs/${project_slug}"
-echo "${venv_path}"
+venv_path="$HOME/.wood/runtime/venvs/${{project_slug}}"
+echo "${{venv_path}}"
 ```
 
 Create and activate it:
 
 ```bash
 mkdir -p "$HOME/.wood/runtime/venvs"
-python3 -m venv "${venv_path}"
-source "${venv_path}/bin/activate"
+python3 -m venv "${{venv_path}}"
+source "${{venv_path}}/bin/activate"
 ```
 
 Install project tooling into the active runtime venv:
@@ -109,6 +109,18 @@ PROJECT_METADATA_TEMPLATE = """{{
     "venv_strategy": "external",
     "venv_path": "~/.wood/runtime/venvs/{project_name}",
     "uv_link_mode": "copy"
+  }}
+}}
+"""
+
+VSCODE_SETTINGS_TEMPLATE = """{{
+  "python.defaultInterpreterPath": "${{env:HOME}}/.wood/runtime/venvs/{project_name}/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "terminal.integrated.env.osx": {{
+    "VIRTUAL_ENV": "${{env:HOME}}/.wood/runtime/venvs/{project_name}",
+    "UV_PROJECT_ENVIRONMENT": "${{env:HOME}}/.wood/runtime/venvs/{project_name}",
+    "PATH": "${{env:HOME}}/.wood/runtime/venvs/{project_name}/bin:${{env:PATH}}"
   }}
 }}
 """
@@ -886,6 +898,10 @@ def build_scaffold_items(project_name: str) -> tuple[ScaffoldItem, ...]:
         ScaffoldItem(
             "docs/project.metadata.json",
             PROJECT_METADATA_TEMPLATE.format(project_name=project_name),
+        ),
+        ScaffoldItem(
+            ".vscode/settings.json",
+            VSCODE_SETTINGS_TEMPLATE.format(project_name=project_name),
         ),
         ScaffoldItem(".gitignore", GITIGNORE_TEMPLATE),
         ScaffoldItem(".env.example", ENV_EXAMPLE_TEMPLATE),
