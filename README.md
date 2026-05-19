@@ -2,9 +2,34 @@
 
 ## Quick Setup
 
-1. Create and activate a Python 3.11+ virtual environment.
+1. Create and activate a Python virtual environment in local runtime storage.
 2. Install development tools you plan to use (for example, pytest, ruff, and pre-commit).
 3. Copy `.env.example` to `.env` and set reference-only values (never raw secrets).
+
+### Find Runtime Venv Path
+
+Use your current project folder name as the slug:
+
+```bash
+project_slug="$(basename "$PWD" | tr '[:upper:] _' '[:lower:]-' | tr -s '-')"
+venv_path="$HOME/.wood/runtime/venvs/${project_slug}"
+echo "${venv_path}"
+```
+
+Create and activate it:
+
+```bash
+mkdir -p "$HOME/.wood/runtime/venvs"
+python3 -m venv "${venv_path}"
+source "${venv_path}/bin/activate"
+```
+
+Or set it explicitly when initializing scaffold content:
+
+```bash
+python scripts/init_project.py --dry-run --project-name wood-tools
+python scripts/init_project.py --apply --project-name wood-tools
+```
 
 ## Initialize Scaffold
 

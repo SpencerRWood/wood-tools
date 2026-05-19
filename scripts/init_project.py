@@ -826,6 +826,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force", action="store_true", help="Overwrite managed files when used with --apply."
     )
+    parser.add_argument(
+        "--project-name",
+        help=(
+            "Project name used for scaffold content and slug generation. "
+            "Defaults to the current directory name."
+        ),
+    )
     args = parser.parse_args()
     if args.force and not args.apply:
         parser.error("--force can only be used with --apply")
@@ -875,7 +882,8 @@ def main() -> int:
         args = parse_args()
         root = Path.cwd()
         ensure_repo_root(root)
-        project_name = normalize_project_name(root.name)
+        project_name_source = args.project_name or root.name
+        project_name = normalize_project_name(project_name_source)
     except (RuntimeError, ValueError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
