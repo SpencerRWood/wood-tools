@@ -12,6 +12,13 @@ from typing import Any
 DEFAULT_PROFILE = "default"
 KEY_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]*$")
 SENSITIVE_PARTS = ("token", "secret", "password")
+REQUIRED_PATH_KEYS = (
+    "project_root",
+    "artifact_root",
+    "scheduler_root",
+    "template_search_paths",
+)
+REFERENCE_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://.+$")
 
 
 class ConfigError(ValueError):
@@ -229,3 +236,197 @@ def set_value(
     if activate_profile:
         document["active_profile"] = selected_profile
     return document
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() != ""
+
+
+def _validate_path_aliases(aliases: Any, *, field_name: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    if not isinstance(aliases, dict):
+        findings.append(
+            {
+                "code": "malformed_aliases",
+                "field": f"paths.{field_name}",
+                "message": f"'{field_name}' must be an object mapping alias names to paths.",
+                "remediation": f'Set paths.{field_name} to an object like {{"demo":"./path"}}.',
+            }
+        )
+        return findings
+
+    for alias, target in aliases.items():
+        if not isinstance(alias, str) or alias.strip() == "":
+            findings.append(
+                {
+                    "code": "invalid_alias_name",
+                    "field": f"paths.{field_name}",
+                    "message": "Alias names must be non-empty strings.",
+                    "remediation": "Rename empty/non-string aliases to a non-empty string key.",
+                }
+            )
+        if not _is_non_empty_string(target):
+            findings.append(
+                {
+                    "code": "invalid_alias_target",
+                    "field": f"paths.{field_name}.{alias}",
+                    "message": "Alias targets must be non-empty string paths.",
+                    "remediation": f"Set paths.{field_name}.{alias} to a non-empty path string.",
+                }
+            )
+    return findings
+
+
+def _validate_reference(value: Any, *, field: str, required: bool) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    if value is None and required:
+        findings.append(
+            {
+                "code": "missing_reference",
+                "field": field,
+                "message": "Required integration reference is missing.",
+                "remediation": f"Set {field} to a secret reference such as 'env://YOUR_ENV_VAR'.",
+            }
+        )
+        return findings
+    if value is None:
+        return findings
+    if not isinstance(value, str) or not REFERENCE_PATTERN.fullmatch(value):
+        findings.append(
+            {
+                "code": "malformed_reference",
+                "field": field,
+                "message": "Integration reference must be a URI-like reference (scheme://value).",
+                "remediation": f"Set {field} to a valid reference, for example 'env://YOUR_ENV_VAR'.",
+            }
+        )
+    return findings
+
+
+def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+
+    paths = profile.get("paths")
+    if not isinstance(paths, dict):
+        return [
+            {
+                "code": "missing_paths",
+                "field": "paths",
+                "message": "Profile is missing 'paths' settings.",
+                "remediation": (
+                    "Initialize config with 'wood-config init --apply' and "
+                    "re-apply profile overrides."
+                ),
+                "profile": profile_name,
+            }
+        ]
+
+    for key in REQUIRED_PATH_KEYS:
+        value = paths.get(key)
+        if key == "template_search_paths":
+            if (
+                not isinstance(value, list)
+                or not value
+                or any(not _is_non_empty_string(item) for item in value)
+            ):
+                findings.append(
+                    {
+                        "code": "invalid_required_path",
+                        "field": f"paths.{key}",
+                        "message": (
+                            "Required path setting must be a non-empty list of non-empty strings."
+                        ),
+                        "remediation": "Set paths.template_search_paths like ['./templates'].",
+                    }
+                )
+            continue
+
+        if not _is_non_empty_string(value):
+            findings.append(
+                {
+                    "code": "invalid_required_path",
+                    "field": f"paths.{key}",
+                    "message": "Required path setting must be a non-empty string.",
+                    "remediation": f"Set paths.{key} to a non-empty path value.",
+                }
+            )
+
+    findings.extend(
+        _validate_path_aliases(paths.get("project_aliases"), field_name="project_aliases")
+    )
+    findings.extend(
+        _validate_path_aliases(paths.get("artifact_aliases"), field_name="artifact_aliases")
+    )
+
+    integrations = profile.get("integrations")
+    if not isinstance(integrations, dict):
+        findings.append(
+            {
+                "code": "missing_integrations",
+                "field": "integrations",
+                "message": "Profile is missing 'integrations' settings.",
+                "remediation": (
+                    "Initialize config defaults and add integration settings under integrations.*."
+                ),
+            }
+        )
+    else:
+        openproject = integrations.get("openproject")
+        ntfy = integrations.get("ntfy")
+        vaultwarden = integrations.get("vaultwarden")
+
+        openproject = openproject if isinstance(openproject, dict) else {}
+        ntfy = ntfy if isinstance(ntfy, dict) else {}
+        vaultwarden = vaultwarden if isinstance(vaultwarden, dict) else {}
+
+        findings.extend(
+            _validate_reference(
+                openproject.get("token_ref"),
+                field="integrations.openproject.token_ref",
+                required=True,
+            )
+        )
+        findings.extend(
+            _validate_reference(
+                ntfy.get("token_ref"),
+                field="integrations.ntfy.token_ref",
+                required=True,
+            )
+        )
+        findings.extend(
+            _validate_reference(
+                vaultwarden.get("config_ref"),
+                field="integrations.vaultwarden.config_ref",
+                required=True,
+            )
+        )
+
+    for finding in findings:
+        finding["profile"] = profile_name
+
+    return findings
+
+
+def validate_config(document: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
+    selected, values = _resolve_profile(document, profile)
+    errors = validate_profile(values, profile_name=selected)
+    return {
+        "command": "validate",
+        "profile": selected,
+        "valid": not errors,
+        "errors": errors,
+    }
+
+
+def doctor_config(document: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
+    validation = validate_config(document, profile=profile)
+    return {
+        "command": "doctor",
+        "profile": validation["profile"],
+        "status": "ok" if validation["valid"] else "issues-found",
+        "issues": validation["errors"],
+        "summary": {
+            "issue_count": len(validation["errors"]),
+            "contains_secrets": False,
+        },
+    }

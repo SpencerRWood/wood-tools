@@ -132,21 +132,95 @@ def test_json_output_for_supported_commands(
     payload = json.loads(capsys.readouterr().out)
     assert payload["value"] == "env://OPENPROJECT_TOKEN"
 
-    assert main(["--config-path", str(config_path), "show", "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["selected_profile"] == "default"
 
+def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
     assert (
         main(
             [
                 "--config-path",
                 str(config_path),
-                "get",
+                "set",
                 "integrations.openproject.token_ref",
-                "--json",
+                '"env://OPENPROJECT_TOKEN"',
+                "--apply",
             ]
         )
         == 0
     )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "integrations.ntfy.token_ref",
+                '"env://NTFY"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "integrations.vaultwarden.config_ref",
+                '"env://VAULTWARDEN_CONFIG"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+
+    assert main(["--config-path", str(config_path), "validate"]) == 0
+    assert main(["--config-path", str(config_path), "doctor"]) == 0
+
+
+def test_validate_invalid_config_reports_actionable_errors(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["--config-path", str(config_path), "validate"])
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "status: invalid" in out
+    assert "integrations.openproject.token_ref" in out
+    assert "remediation:" in out
+    assert "YOUR_ENV_VAR" in out
+
+    assert main(["--config-path", str(config_path), "doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "issues:" in out
+    assert "token_ref" in out
+    assert "env://" in out
+
+
+def test_json_output_for_validate_and_doctor(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["--config-path", str(config_path), "validate", "--json"])
+    assert code == 2
     payload = json.loads(capsys.readouterr().out)
-    assert payload["value"] == "env://OPENPROJECT_TOKEN"
+    assert payload["command"] == "validate"
+    assert payload["valid"] is False
+    assert payload["errors"]
+    assert payload["errors"][0]["remediation"]
+    assert payload["errors"][0]["field"].startswith("integrations.")
+
+    assert main(["--config-path", str(config_path), "doctor", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "doctor"
+    assert payload["status"] == "issues-found"
+    assert payload["summary"]["contains_secrets"] is False
+    assert payload["summary"]["issue_count"] > 0

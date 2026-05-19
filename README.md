@@ -28,12 +28,12 @@ Install project tooling into the active runtime venv:
 
 ```bash
 export UV_LINK_MODE=copy
-uv sync --group dev --active
+bash scripts/uv_active.sh sync --group dev
 pre-commit install --install-hooks
 ```
 
-Note: `uv sync --group dev` without `--active` will target the project default `.venv`
-and may recreate `.venv` in the repository root.
+Note: Run project `uv` commands through `scripts/uv_active.sh` to guarantee
+they target your external runtime venv and do not recreate a local `./.venv`.
 
 Or set it explicitly when initializing scaffold content:
 
@@ -113,12 +113,12 @@ Mutating commands keep an explicit approval gate via `--apply`.
 ## Run Tests
 
 ```bash
-pytest
+bash scripts/uv_active.sh run pytest
 ```
 
 ## Run Lint and Format Checks
 
 ```bash
-ruff check .
-ruff format --check .
+bash scripts/uv_active.sh run ruff check .
+bash scripts/uv_active.sh run ruff format --check .
 ```
