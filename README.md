@@ -92,7 +92,29 @@ Profile format:
   "active_profile": "default",
   "profiles": {
     "default": {
-      "example.key": "value"
+      "paths": {
+        "project_root": "./projects"
+      },
+      "integrations": {
+        "openproject": {
+          "token_ref": "env://OPENPROJECT_TOKEN",
+          "user_agent": "wood-tools/0.1"
+        },
+        "vaultwarden": {
+          "config_ref": "env://VAULTWARDEN_CONFIG",
+          "session_file": "~/.config/wood-tools/vaultwarden-session.json"
+        }
+      },
+      "diagnostics": {
+        "agent_readiness": {
+          "enabled": true
+        }
+      },
+      "output": {
+        "json_envelope": {
+          "enabled": true
+        }
+      }
     }
   }
 }

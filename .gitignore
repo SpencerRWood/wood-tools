@@ -1,3 +1,6 @@
+tmp/*
+scripts/apply_openproject_208_dependency_graph.py
+
 # Python artifacts
 __pycache__/
 *.py[cod]

@@ -55,6 +55,7 @@ def _default_document() -> dict[str, Any]:
                 "url": None,
                 "project_id": None,
                 "token_ref": None,
+                "user_agent": "wood-tools/0.1",
             },
             "ntfy": {
                 "url": None,
@@ -63,7 +64,18 @@ def _default_document() -> dict[str, Any]:
             "vaultwarden": {
                 "url": None,
                 "config_ref": None,
+                "session_file": None,
             },
+        },
+        "diagnostics": {
+            "agent_readiness": {
+                "enabled": True,
+            }
+        },
+        "output": {
+            "json_envelope": {
+                "enabled": True,
+            }
         },
     }
     return {
@@ -303,6 +315,46 @@ def _validate_reference(value: Any, *, field: str, required: bool) -> list[dict[
     return findings
 
 
+def _validate_optional_string(value: Any, *, field: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if _is_non_empty_string(value):
+        return []
+    return [
+        {
+            "code": "invalid_string",
+            "field": field,
+            "message": "Setting must be a non-empty string when provided.",
+            "remediation": f"Set {field} to a non-empty string or null.",
+        }
+    ]
+
+
+def _validate_enabled_toggle(value: Any, *, field: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [
+            {
+                "code": "invalid_object",
+                "field": field,
+                "message": "Setting must be an object with an 'enabled' boolean.",
+                "remediation": f'Set {field} like {{"enabled": true}}.',
+            }
+        ]
+    enabled = value.get("enabled")
+    if isinstance(enabled, bool):
+        return []
+    return [
+        {
+            "code": "invalid_enabled",
+            "field": f"{field}.enabled",
+            "message": "Setting must include an 'enabled' boolean.",
+            "remediation": f"Set {field}.enabled to true or false.",
+        }
+    ]
+
+
 def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
 
@@ -398,6 +450,56 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
                 vaultwarden.get("config_ref"),
                 field="integrations.vaultwarden.config_ref",
                 required=True,
+            )
+        )
+        findings.extend(
+            _validate_optional_string(
+                openproject.get("user_agent"),
+                field="integrations.openproject.user_agent",
+            )
+        )
+        findings.extend(
+            _validate_optional_string(
+                vaultwarden.get("session_file"),
+                field="integrations.vaultwarden.session_file",
+            )
+        )
+
+    diagnostics = profile.get("diagnostics")
+    if diagnostics is not None:
+        if not isinstance(diagnostics, dict):
+            findings.append(
+                {
+                    "code": "invalid_object",
+                    "field": "diagnostics",
+                    "message": "Profile diagnostics settings must be an object.",
+                    "remediation": "Set diagnostics to an object with diagnostics.* settings.",
+                }
+            )
+            diagnostics = {}
+        findings.extend(
+            _validate_enabled_toggle(
+                diagnostics.get("agent_readiness"),
+                field="diagnostics.agent_readiness",
+            )
+        )
+
+    output = profile.get("output")
+    if output is not None:
+        if not isinstance(output, dict):
+            findings.append(
+                {
+                    "code": "invalid_object",
+                    "field": "output",
+                    "message": "Profile output settings must be an object.",
+                    "remediation": "Set output to an object with output.* settings.",
+                }
+            )
+            output = {}
+        findings.extend(
+            _validate_enabled_toggle(
+                output.get("json_envelope"),
+                field="output.json_envelope",
             )
         )
 
