@@ -311,6 +311,7 @@ Behavior notes:
 
 - Mutating operations require `--apply`.
 - Sensitive values must be stored as references only, using keys ending in `_ref`.
+- JSON mode returns a shared envelope with `command`, `status`, `mutation`, `requires_approval`, `summary`, `data`, `warnings`, `errors`, and `next_actions`.
 
 #### `wood-config validate`
 
@@ -367,7 +368,7 @@ wood-config doctor --check agent-readiness --profile dev --json
 Behavior notes:
 
 - Reports issue metadata and remediation without printing secret values.
-- Returns a stable top-level envelope including `command`, `profile`, `status`, `issues`, `checks`, and `summary`.
+- `--json` returns the shared command envelope; command-specific fields live under `data`.
 - When `--check` is omitted, all current doctor checks run.
 
 ## Typical Local Workflow

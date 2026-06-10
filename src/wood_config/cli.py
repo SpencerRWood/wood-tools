@@ -18,6 +18,7 @@ from .core import (
     show_config,
     validate_config,
 )
+from .output import blocked_output, error_output, success_output, warning_output
 
 
 def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
@@ -72,6 +73,111 @@ def _parse_value(raw_value: str) -> Any:
         return json.loads(raw_value)
     except json.JSONDecodeError:
         return raw_value
+
+
+def _command_mutation(command: str) -> str:
+    if command in {"init", "set"}:
+        return "mutating"
+    return "read-only"
+
+
+def _summarize_json_payload(
+    command: str,
+    payload: dict[str, Any],
+    *,
+    apply: bool | None = None,
+) -> dict[str, Any]:
+    if command == "init":
+        if apply:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary=f"Config initialized at {payload['path']}.",
+                data=payload,
+            )
+        return blocked_output(
+            command=command,
+            summary=f"Config initialization requires approval to write {payload['path']}.",
+            data=payload,
+            next_actions=["Re-run with --apply to create the config file."],
+        )
+
+    if command == "show":
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary=f"Loaded config for profile {payload['selected_profile']}.",
+            data=payload,
+        )
+
+    if command == "get":
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary=f"Read config key {payload['key']}.",
+            data=payload,
+        )
+
+    if command == "set":
+        profile = payload["profile"]
+        if apply:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary=f"Updated config key {payload['key']} for profile {profile}.",
+                data=payload,
+            )
+        return blocked_output(
+            command=command,
+            summary=f"Config update for key {payload['key']} is waiting for approval.",
+            data=payload,
+            next_actions=["Re-run with --apply to persist the config change."],
+        )
+
+    if command == "validate":
+        errors = payload["errors"]
+        next_actions = [issue["remediation"] for issue in errors if issue.get("remediation")]
+        if payload["valid"]:
+            return success_output(
+                command=command,
+                mutation="read-only",
+                summary=f"Config profile {payload['profile']} is valid.",
+                data=payload,
+            )
+        return warning_output(
+            command=command,
+            mutation="read-only",
+            summary=f"Config profile {payload['profile']} has validation issues.",
+            data=payload,
+            errors=errors,
+            next_actions=next_actions,
+        )
+
+    if command == "doctor":
+        issues = payload["issues"]
+        next_actions = [issue["remediation"] for issue in issues if issue.get("remediation")]
+        if payload["status"] == "ok":
+            return success_output(
+                command=command,
+                mutation="read-only",
+                summary=f"Diagnostics passed for profile {payload['profile']}.",
+                data=payload,
+            )
+        return warning_output(
+            command=command,
+            mutation="read-only",
+            summary=f"Diagnostics found issues for profile {payload['profile']}.",
+            data=payload,
+            warnings=issues,
+            next_actions=next_actions,
+        )
+
+    return success_output(
+        command=command,
+        mutation=_command_mutation(command),
+        summary=f"Completed {command}.",
+        data=payload,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -131,13 +237,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "init":
             payload = init_config(paths, apply=args.apply)
-            return _emit(payload, json_output=args.json)
+            return _emit(
+                _summarize_json_payload(args.command, payload, apply=args.apply)
+                if args.json
+                else payload,
+                json_output=args.json,
+            )
 
         document = load_config(paths)
 
         if args.command == "show":
             payload = show_config(document, profile=args.profile)
-            return _emit(payload, json_output=args.json)
+            return _emit(
+                _summarize_json_payload(args.command, payload) if args.json else payload,
+                json_output=args.json,
+            )
 
         if args.command == "get":
             value = get_value(document, args.key, profile=args.profile)
@@ -146,7 +260,10 @@ def main(argv: list[str] | None = None) -> int:
                 "profile": args.profile or document["active_profile"],
                 "value": value,
             }
-            return _emit(payload, json_output=args.json)
+            return _emit(
+                _summarize_json_payload(args.command, payload) if args.json else payload,
+                json_output=args.json,
+            )
 
         if args.command == "set":
             parsed_value = _parse_value(args.value)
@@ -171,20 +288,45 @@ def main(argv: list[str] | None = None) -> int:
                 "value": parsed_value,
                 "profile": args.profile or updated["active_profile"],
             }
-            return _emit(payload, json_output=args.json)
+            return _emit(
+                _summarize_json_payload(args.command, payload, apply=args.apply)
+                if args.json
+                else payload,
+                json_output=args.json,
+            )
 
         if args.command == "validate":
             payload = validate_config(document, profile=args.profile)
-            return _emit_validation(payload, json_output=args.json)
+            if args.json:
+                _emit(_summarize_json_payload(args.command, payload), json_output=True)
+                return 0 if payload["valid"] else 2
+            return _emit_validation(payload, json_output=False)
 
         if args.command == "doctor":
             payload = doctor_config(document, profile=args.profile, checks=args.checks)
-            return _emit_doctor(payload, json_output=args.json)
+            return (
+                _emit(
+                    _summarize_json_payload(args.command, payload) if args.json else payload,
+                    json_output=args.json,
+                )
+                if args.json
+                else _emit_doctor(payload, json_output=False)
+            )
 
         parser.error("Unknown command")
         return 2
 
     except ConfigError as exc:
+        if getattr(args, "json", False):
+            payload = error_output(
+                command=args.command,
+                mutation=_command_mutation(args.command),
+                summary=str(exc),
+                errors=[{"message": str(exc)}],
+                next_actions=["Review the command input and try again."],
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 2
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
