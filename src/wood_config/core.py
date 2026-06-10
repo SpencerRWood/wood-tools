@@ -65,7 +65,14 @@ def _default_document() -> dict[str, Any]:
                 "url": None,
                 "config_ref": None,
                 "session_file": None,
+                "cli": {
+                    "executable": "bw",
+                },
             },
+        },
+        "wood_agents": {
+            "boundary_ref": None,
+            "adapters_ref": None,
         },
         "diagnostics": {
             "agent_readiness": {
@@ -330,6 +337,19 @@ def _validate_optional_string(value: Any, *, field: str) -> list[dict[str, str]]
     ]
 
 
+def _validate_required_string(value: Any, *, field: str) -> list[dict[str, str]]:
+    if _is_non_empty_string(value):
+        return []
+    return [
+        {
+            "code": "missing_required_string",
+            "field": field,
+            "message": "Setting must be a non-empty string.",
+            "remediation": f"Set {field} to a non-empty string value.",
+        }
+    ]
+
+
 def _validate_enabled_toggle(value: Any, *, field: str) -> list[dict[str, str]]:
     if value is None:
         return []
@@ -430,12 +450,26 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
         openproject = openproject if isinstance(openproject, dict) else {}
         ntfy = ntfy if isinstance(ntfy, dict) else {}
         vaultwarden = vaultwarden if isinstance(vaultwarden, dict) else {}
+        vaultwarden_cli = vaultwarden.get("cli")
+        vaultwarden_cli = vaultwarden_cli if isinstance(vaultwarden_cli, dict) else {}
 
         findings.extend(
             _validate_reference(
                 openproject.get("token_ref"),
                 field="integrations.openproject.token_ref",
                 required=True,
+            )
+        )
+        findings.extend(
+            _validate_required_string(
+                openproject.get("url"),
+                field="integrations.openproject.url",
+            )
+        )
+        findings.extend(
+            _validate_required_string(
+                openproject.get("project_id"),
+                field="integrations.openproject.project_id",
             )
         )
         findings.extend(
@@ -462,6 +496,39 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
             _validate_optional_string(
                 vaultwarden.get("session_file"),
                 field="integrations.vaultwarden.session_file",
+            )
+        )
+        findings.extend(
+            _validate_optional_string(
+                vaultwarden_cli.get("executable"),
+                field="integrations.vaultwarden.cli.executable",
+            )
+        )
+
+    wood_agents = profile.get("wood_agents")
+    if wood_agents is not None:
+        if not isinstance(wood_agents, dict):
+            findings.append(
+                {
+                    "code": "invalid_object",
+                    "field": "wood_agents",
+                    "message": "Profile wood_agents settings must be an object.",
+                    "remediation": (
+                        "Set wood_agents to an object with wood_agents.* reference settings."
+                    ),
+                }
+            )
+            wood_agents = {}
+        findings.extend(
+            _validate_optional_string(
+                wood_agents.get("boundary_ref"),
+                field="wood_agents.boundary_ref",
+            )
+        )
+        findings.extend(
+            _validate_optional_string(
+                wood_agents.get("adapters_ref"),
+                field="wood_agents.adapters_ref",
             )
         )
 

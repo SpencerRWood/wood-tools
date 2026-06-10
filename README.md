@@ -97,13 +97,22 @@ Profile format:
       },
       "integrations": {
         "openproject": {
+          "url": "https://openproject.example.test",
+          "project_id": "wood",
           "token_ref": "env://OPENPROJECT_TOKEN",
           "user_agent": "wood-tools/0.1"
         },
         "vaultwarden": {
           "config_ref": "env://VAULTWARDEN_CONFIG",
-          "session_file": "~/.config/wood-tools/vaultwarden-session.json"
+          "session_file": "~/.config/wood-tools/vaultwarden-session.json",
+          "cli": {
+            "executable": "bw"
+          }
         }
+      },
+      "wood_agents": {
+        "boundary_ref": "docs://wood-agents/boundary",
+        "adapters_ref": "pkg://wood-agents/adapters"
       },
       "diagnostics": {
         "agent_readiness": {

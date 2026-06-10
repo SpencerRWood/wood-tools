@@ -53,6 +53,7 @@ def test_init_set_get_show_success_path(
     assert "selected_profile: dev" in out
     assert "project_root': './projects'" in out
     assert "user_agent': 'wood-tools/0.1'" in out
+    assert "'executable': 'bw'" in out
 
     assert (
         main(
@@ -86,6 +87,39 @@ def test_init_set_get_show_success_path(
     )
     out = capsys.readouterr().out
     assert "value: ~/.config/wood-tools/vaultwarden-session.json" in out
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "wood_agents.boundary_ref",
+                '"docs://wood-agents/boundary"',
+                "--profile",
+                "dev",
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "get",
+                "wood_agents.boundary_ref",
+                "--profile",
+                "dev",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "value: docs://wood-agents/boundary" in out
 
 
 def test_get_missing_key_returns_error(
@@ -153,10 +187,15 @@ def test_json_output_for_supported_commands(
         == "wood-tools/0.1"
     )
     assert (
+        payload["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"]["executable"]
+        == "bw"
+    )
+    assert (
         payload["config"]["profiles"]["default"]["diagnostics"]["agent_readiness"]["enabled"]
         is True
     )
     assert payload["config"]["profiles"]["default"]["output"]["json_envelope"]["enabled"] is True
+    assert payload["config"]["profiles"]["default"]["wood_agents"]["boundary_ref"] is None
 
     assert (
         main(
@@ -178,6 +217,7 @@ def test_json_output_for_supported_commands(
     assert main(["--config-path", str(config_path), "show", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["values"]["output"]["json_envelope"]["enabled"] is True
+    assert payload["values"]["integrations"]["vaultwarden"]["cli"]["executable"] == "bw"
 
     assert (
         main(
@@ -195,10 +235,54 @@ def test_json_output_for_supported_commands(
     assert payload["key"] == "integrations.openproject.user_agent"
     assert payload["value"] == "wood-tools/0.1"
 
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "wood_agents.adapters_ref",
+                '"pkg://wood-agents/adapters"',
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["key"] == "wood_agents.adapters_ref"
+    assert payload["value"] == "pkg://wood-agents/adapters"
+
 
 def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
     config_path = tmp_path / "config.json"
     assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "integrations.openproject.url",
+                '"https://openproject.example.test"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "integrations.openproject.project_id",
+                '"wood"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
     assert (
         main(
             [
@@ -231,6 +315,33 @@ def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
                 "--config-path",
                 str(config_path),
                 "set",
+                "wood_agents.boundary_ref",
+                '"docs://wood-agents/boundary"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "wood_agents.adapters_ref",
+                '"pkg://wood-agents/adapters"',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
                 "integrations.vaultwarden.config_ref",
                 '"env://VAULTWARDEN_CONFIG"',
                 "--apply",
@@ -255,6 +366,8 @@ def test_validate_invalid_config_reports_actionable_errors(
     out = capsys.readouterr().out
     assert "status: invalid" in out
     assert "integrations.openproject.token_ref" in out
+    assert "integrations.openproject.url" in out
+    assert "integrations.openproject.project_id" in out
     assert "remediation:" in out
     assert "YOUR_ENV_VAR" in out
 
@@ -314,6 +427,32 @@ def test_validate_reports_invalid_follow_up_fields(
                 "--config-path",
                 str(config_path),
                 "set",
+                "integrations.vaultwarden.cli.executable",
+                '""',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "wood_agents.boundary_ref",
+                '""',
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
                 "diagnostics.agent_readiness",
                 '{"enabled":"yes"}',
                 "--apply",
@@ -328,4 +467,8 @@ def test_validate_reports_invalid_follow_up_fields(
     payload = json.loads(capsys.readouterr().out)
     fields = {issue["field"] for issue in payload["errors"]}
     assert "integrations.openproject.user_agent" in fields
+    assert "integrations.openproject.url" in fields
+    assert "integrations.openproject.project_id" in fields
+    assert "integrations.vaultwarden.cli.executable" in fields
+    assert "wood_agents.boundary_ref" in fields
     assert "diagnostics.agent_readiness.enabled" in fields
