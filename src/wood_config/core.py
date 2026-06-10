@@ -587,15 +587,67 @@ def validate_config(document: dict[str, Any], profile: str | None = None) -> dic
     }
 
 
-def doctor_config(document: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
+DOCTOR_CHECK_FIELDS: dict[str, tuple[str, ...]] = {
+    "vaultwarden": ("integrations.vaultwarden.",),
+    "openproject": ("integrations.openproject.",),
+    "ntfy": ("integrations.ntfy.",),
+    "scheduler": ("paths.scheduler_root",),
+    "agent-readiness": ("diagnostics.agent_readiness.", "wood_agents."),
+}
+
+DEFAULT_DOCTOR_CHECKS = tuple(DOCTOR_CHECK_FIELDS)
+
+
+def _filter_findings_for_check(
+    findings: list[dict[str, str]],
+    *,
+    check_name: str,
+) -> list[dict[str, str]]:
+    prefixes = DOCTOR_CHECK_FIELDS[check_name]
+    return [
+        finding
+        for finding in findings
+        if any(
+            finding["field"] == prefix or finding["field"].startswith(prefix) for prefix in prefixes
+        )
+    ]
+
+
+def doctor_config(
+    document: dict[str, Any],
+    profile: str | None = None,
+    *,
+    checks: list[str] | None = None,
+) -> dict[str, Any]:
     validation = validate_config(document, profile=profile)
+    selected_checks = list(checks or DEFAULT_DOCTOR_CHECKS)
+    issues: list[dict[str, str]] = []
+    check_results: list[dict[str, Any]] = []
+
+    for check_name in selected_checks:
+        check_issues = _filter_findings_for_check(validation["errors"], check_name=check_name)
+        issues.extend(check_issues)
+        check_results.append(
+            {
+                "name": check_name,
+                "status": "ok" if not check_issues else "issues-found",
+                "issues": check_issues,
+                "summary": {
+                    "issue_count": len(check_issues),
+                    "contains_secrets": False,
+                },
+            }
+        )
+
     return {
         "command": "doctor",
         "profile": validation["profile"],
-        "status": "ok" if validation["valid"] else "issues-found",
-        "issues": validation["errors"],
+        "status": "ok" if not issues else "issues-found",
+        "checks": check_results,
+        "issues": issues,
         "summary": {
-            "issue_count": len(validation["errors"]),
+            "selected_checks": selected_checks,
+            "issue_count": len(issues),
             "contains_secrets": False,
         },
     }
