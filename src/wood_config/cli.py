@@ -59,6 +59,7 @@ def _emit_doctor(payload: dict[str, Any], *, json_output: bool) -> int:
 
     print(f"profile: {payload['profile']}")
     print(f"status: {payload['status']}")
+    print(f"checks: {', '.join(check['name'] for check in payload['checks'])}")
     print(f"issues: {payload['summary']['issue_count']}")
     for issue in payload["issues"]:
         print(f"- [{issue['code']}] {issue['field']}: {issue['message']}")
@@ -110,6 +111,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="Run config diagnostics")
     doctor_parser.add_argument("--profile", help="Profile to diagnose")
+    doctor_parser.add_argument(
+        "--check",
+        dest="checks",
+        action="append",
+        choices=("vaultwarden", "openproject", "ntfy", "scheduler", "agent-readiness"),
+        help="Run only the named doctor check (repeatable)",
+    )
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     return parser
@@ -170,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit_validation(payload, json_output=args.json)
 
         if args.command == "doctor":
-            payload = doctor_config(document, profile=args.profile)
+            payload = doctor_config(document, profile=args.profile, checks=args.checks)
             return _emit_doctor(payload, json_output=args.json)
 
         parser.error("Unknown command")

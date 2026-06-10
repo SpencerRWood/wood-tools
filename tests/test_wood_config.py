@@ -398,6 +398,14 @@ def test_json_output_for_validate_and_doctor(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "doctor"
     assert payload["status"] == "issues-found"
+    assert payload["summary"]["selected_checks"] == [
+        "vaultwarden",
+        "openproject",
+        "ntfy",
+        "scheduler",
+        "agent-readiness",
+    ]
+    assert [check["name"] for check in payload["checks"]] == payload["summary"]["selected_checks"]
     assert payload["summary"]["contains_secrets"] is False
     assert payload["summary"]["issue_count"] > 0
 
@@ -472,3 +480,108 @@ def test_validate_reports_invalid_follow_up_fields(
     assert "integrations.vaultwarden.cli.executable" in fields
     assert "wood_agents.boundary_ref" in fields
     assert "diagnostics.agent_readiness.enabled" in fields
+
+
+def test_doctor_check_filters_to_requested_area(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "doctor",
+                "--check",
+                "scheduler",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["selected_checks"] == ["scheduler"]
+    assert payload["summary"]["issue_count"] == 0
+    assert payload["status"] == "ok"
+    assert len(payload["checks"]) == 1
+    assert payload["checks"][0]["name"] == "scheduler"
+    assert payload["checks"][0]["summary"]["issue_count"] == 0
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "doctor",
+                "--check",
+                "openproject",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["selected_checks"] == ["openproject"]
+    assert payload["status"] == "issues-found"
+    assert len(payload["checks"]) == 1
+    assert payload["checks"][0]["name"] == "openproject"
+    assert payload["checks"][0]["summary"]["issue_count"] == len(payload["issues"])
+    assert payload["issues"]
+    assert all(
+        issue["field"].startswith("integrations.openproject.") for issue in payload["issues"]
+    )
+
+
+def test_doctor_success_path_with_selected_checks_and_redacted_json(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+
+    success_commands = [
+        ["set", "integrations.openproject.url", '"https://openproject.example.test"', "--apply"],
+        ["set", "integrations.openproject.project_id", '"wood"', "--apply"],
+        ["set", "integrations.openproject.token_ref", '"env://OPENPROJECT_TOKEN"', "--apply"],
+        ["set", "integrations.ntfy.token_ref", '"env://NTFY_TOKEN"', "--apply"],
+        ["set", "integrations.vaultwarden.config_ref", '"env://VAULTWARDEN_CONFIG"', "--apply"],
+        ["set", "wood_agents.boundary_ref", '"docs://wood-agents/boundary"', "--apply"],
+        ["set", "wood_agents.adapters_ref", '"pkg://wood-agents/adapters"', "--apply"],
+    ]
+    for command in success_commands:
+        assert main(["--config-path", str(config_path), *command]) == 0
+        capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "doctor",
+                "--check",
+                "vaultwarden",
+                "--check",
+                "openproject",
+                "--check",
+                "ntfy",
+                "--check",
+                "scheduler",
+                "--check",
+                "agent-readiness",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["summary"]["issue_count"] == 0
+    assert payload["summary"]["contains_secrets"] is False
+    assert payload["issues"] == []
+    assert [check["status"] for check in payload["checks"]] == ["ok", "ok", "ok", "ok", "ok"]
+    serialized = json.dumps(payload)
+    assert "OPENPROJECT_TOKEN" not in serialized
+    assert "NTFY_TOKEN" not in serialized
+    assert "VAULTWARDEN_CONFIG" not in serialized
