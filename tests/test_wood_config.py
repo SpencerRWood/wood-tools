@@ -177,25 +177,39 @@ def test_json_output_for_supported_commands(
 
     assert main(["--config-path", str(config_path), "init", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["changed"] is True
-    assert payload["config"]["profiles"]["default"]["paths"]["project_root"] == "./projects"
+    assert payload["command"] == "init"
+    assert payload["status"] == "success"
+    assert payload["mutation"] == "mutating"
+    assert payload["requires_approval"] is False
+    assert payload["data"]["changed"] is True
+    assert payload["data"]["config"]["profiles"]["default"]["paths"]["project_root"] == "./projects"
     assert (
-        payload["config"]["profiles"]["default"]["integrations"]["openproject"]["token_ref"] is None
+        payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"]["token_ref"]
+        is None
     )
     assert (
-        payload["config"]["profiles"]["default"]["integrations"]["openproject"]["user_agent"]
+        payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"][
+            "user_agent"
+        ]
         == "wood-tools/0.1"
     )
     assert (
-        payload["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"]["executable"]
+        payload["data"]["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"][
+            "executable"
+        ]
         == "bw"
     )
     assert (
-        payload["config"]["profiles"]["default"]["diagnostics"]["agent_readiness"]["enabled"]
+        payload["data"]["config"]["profiles"]["default"]["diagnostics"]["agent_readiness"][
+            "enabled"
+        ]
         is True
     )
-    assert payload["config"]["profiles"]["default"]["output"]["json_envelope"]["enabled"] is True
-    assert payload["config"]["profiles"]["default"]["wood_agents"]["boundary_ref"] is None
+    assert (
+        payload["data"]["config"]["profiles"]["default"]["output"]["json_envelope"]["enabled"]
+        is True
+    )
+    assert payload["data"]["config"]["profiles"]["default"]["wood_agents"]["boundary_ref"] is None
 
     assert (
         main(
@@ -212,12 +226,16 @@ def test_json_output_for_supported_commands(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["value"] == "env://OPENPROJECT_TOKEN"
+    assert payload["command"] == "set"
+    assert payload["status"] == "success"
+    assert payload["data"]["value"] == "env://OPENPROJECT_TOKEN"
 
     assert main(["--config-path", str(config_path), "show", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["values"]["output"]["json_envelope"]["enabled"] is True
-    assert payload["values"]["integrations"]["vaultwarden"]["cli"]["executable"] == "bw"
+    assert payload["command"] == "show"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["values"]["output"]["json_envelope"]["enabled"] is True
+    assert payload["data"]["values"]["integrations"]["vaultwarden"]["cli"]["executable"] == "bw"
 
     assert (
         main(
@@ -232,8 +250,9 @@ def test_json_output_for_supported_commands(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["key"] == "integrations.openproject.user_agent"
-    assert payload["value"] == "wood-tools/0.1"
+    assert payload["command"] == "get"
+    assert payload["data"]["key"] == "integrations.openproject.user_agent"
+    assert payload["data"]["value"] == "wood-tools/0.1"
 
     assert (
         main(
@@ -250,8 +269,9 @@ def test_json_output_for_supported_commands(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["key"] == "wood_agents.adapters_ref"
-    assert payload["value"] == "pkg://wood-agents/adapters"
+    assert payload["command"] == "set"
+    assert payload["data"]["key"] == "wood_agents.adapters_ref"
+    assert payload["data"]["value"] == "pkg://wood-agents/adapters"
 
 
 def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
@@ -389,25 +409,32 @@ def test_json_output_for_validate_and_doctor(
     assert code == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "validate"
-    assert payload["valid"] is False
+    assert payload["status"] == "warning"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["valid"] is False
     assert payload["errors"]
     assert payload["errors"][0]["remediation"]
     assert payload["errors"][0]["field"].startswith("integrations.")
+    assert payload["next_actions"]
 
     assert main(["--config-path", str(config_path), "doctor", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "doctor"
-    assert payload["status"] == "issues-found"
-    assert payload["summary"]["selected_checks"] == [
+    assert payload["status"] == "warning"
+    assert payload["data"]["status"] == "issues-found"
+    assert payload["data"]["summary"]["selected_checks"] == [
         "vaultwarden",
         "openproject",
         "ntfy",
         "scheduler",
         "agent-readiness",
     ]
-    assert [check["name"] for check in payload["checks"]] == payload["summary"]["selected_checks"]
-    assert payload["summary"]["contains_secrets"] is False
-    assert payload["summary"]["issue_count"] > 0
+    assert [check["name"] for check in payload["data"]["checks"]] == payload["data"]["summary"][
+        "selected_checks"
+    ]
+    assert payload["data"]["summary"]["contains_secrets"] is False
+    assert payload["data"]["summary"]["issue_count"] > 0
+    assert payload["warnings"]
 
 
 def test_validate_reports_invalid_follow_up_fields(
@@ -503,12 +530,13 @@ def test_doctor_check_filters_to_requested_area(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary"]["selected_checks"] == ["scheduler"]
-    assert payload["summary"]["issue_count"] == 0
-    assert payload["status"] == "ok"
-    assert len(payload["checks"]) == 1
-    assert payload["checks"][0]["name"] == "scheduler"
-    assert payload["checks"][0]["summary"]["issue_count"] == 0
+    assert payload["status"] == "success"
+    assert payload["data"]["summary"]["selected_checks"] == ["scheduler"]
+    assert payload["data"]["summary"]["issue_count"] == 0
+    assert payload["data"]["status"] == "ok"
+    assert len(payload["data"]["checks"]) == 1
+    assert payload["data"]["checks"][0]["name"] == "scheduler"
+    assert payload["data"]["checks"][0]["summary"]["issue_count"] == 0
 
     assert (
         main(
@@ -524,14 +552,15 @@ def test_doctor_check_filters_to_requested_area(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary"]["selected_checks"] == ["openproject"]
-    assert payload["status"] == "issues-found"
-    assert len(payload["checks"]) == 1
-    assert payload["checks"][0]["name"] == "openproject"
-    assert payload["checks"][0]["summary"]["issue_count"] == len(payload["issues"])
-    assert payload["issues"]
+    assert payload["status"] == "warning"
+    assert payload["data"]["summary"]["selected_checks"] == ["openproject"]
+    assert payload["data"]["status"] == "issues-found"
+    assert len(payload["data"]["checks"]) == 1
+    assert payload["data"]["checks"][0]["name"] == "openproject"
+    assert payload["data"]["checks"][0]["summary"]["issue_count"] == len(payload["warnings"])
+    assert payload["warnings"]
     assert all(
-        issue["field"].startswith("integrations.openproject.") for issue in payload["issues"]
+        issue["field"].startswith("integrations.openproject.") for issue in payload["warnings"]
     )
 
 
@@ -576,11 +605,18 @@ def test_doctor_success_path_with_selected_checks_and_redacted_json(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "ok"
-    assert payload["summary"]["issue_count"] == 0
-    assert payload["summary"]["contains_secrets"] is False
-    assert payload["issues"] == []
-    assert [check["status"] for check in payload["checks"]] == ["ok", "ok", "ok", "ok", "ok"]
+    assert payload["status"] == "success"
+    assert payload["data"]["status"] == "ok"
+    assert payload["data"]["summary"]["issue_count"] == 0
+    assert payload["data"]["summary"]["contains_secrets"] is False
+    assert payload["warnings"] == []
+    assert [check["status"] for check in payload["data"]["checks"]] == [
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+    ]
     serialized = json.dumps(payload)
     assert "OPENPROJECT_TOKEN" not in serialized
     assert "NTFY_TOKEN" not in serialized
