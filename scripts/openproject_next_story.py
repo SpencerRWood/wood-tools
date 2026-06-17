@@ -7,9 +7,10 @@ Examples:
 
 Selection rules:
 1. Only work packages descended from the supplied root are considered.
-2. Only the earliest milestone containing unfinished Stories is active.
-3. A Story is eligible only when all explicit predecessors are closed.
-4. Eligible Stories are sorted by milestone, parent work-package ID, then Story ID.
+2. The earliest Version containing unfinished Stories is active.
+3. If the earliest open Version has all Stories closed, the script reports release readiness.
+4. A Story is eligible only when all explicit predecessors are closed.
+5. Eligible Stories are sorted by Version, parent work-package ID, then Story ID.
 
 OpenProject may store:
 
@@ -57,6 +58,14 @@ class BlockedStory:
     subject: str
     version: str
     unfinished_predecessors: tuple[tuple[int, str, str], ...]
+
+
+@dataclass(frozen=True)
+class ReleaseReadyVersion:
+    name: str
+    status: str
+    total_story_count: int
+    closed_story_count: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -190,7 +199,7 @@ def parse_milestone_rank(version_name: str) -> tuple[int, str]:
         return (10_000, "")
 
     match = re.search(
-        r"\bM(\d+)\b",
+        r"\b[MV](\d+)\b",
         version_name,
         flags=re.IGNORECASE,
     )
@@ -471,7 +480,7 @@ def build_candidate(
     )
 
     reason = (
-        f"selected from milestone={version or '(none)'}; "
+        f"selected from version={version or '(none)'}; "
         f"status={status}; type={type_name}; "
         f"all predecessors closed; predecessors={predecessor_text}; "
         f"parent_id={parent_id if parent_id is not None else 'none'}; "
@@ -512,39 +521,66 @@ def choose_candidate(
     predecessor_map: dict[int, set[int]],
     work_packages_by_id: dict[int, dict[str, Any]],
     root_work_package_id: int,
-) -> tuple[Candidate, list[BlockedStory], str]:
-    unfinished_stories = [
-        story for story in stories if work_package_status_name(story) not in closed_status_names
-    ]
+    version_status_by_name: dict[str, str],
+) -> tuple[Candidate | None, list[BlockedStory], str, ReleaseReadyVersion | None]:
+    stories_by_version: dict[str, list[dict[str, Any]]] = {}
 
-    if not unfinished_stories:
+    for story in stories:
+        version_name = work_package_version_name(story) or "(none)"
+        stories_by_version.setdefault(version_name, []).append(story)
+
+    active_version_stories: list[dict[str, Any]] | None = None
+    active_version_name = "(none)"
+
+    for version_name in sorted(
+        stories_by_version,
+        key=lambda name: parse_milestone_rank(name if name != "(none)" else ""),
+    ):
+        version_stories = stories_by_version[version_name]
+        unfinished_version_stories = [
+            story
+            for story in version_stories
+            if work_package_status_name(story) not in closed_status_names
+        ]
+
+        if not unfinished_version_stories:
+            version_status = version_status_by_name.get(version_name, "")
+
+            if version_name != "(none)" and version_status.lower() == "open":
+                return (
+                    None,
+                    [],
+                    version_name,
+                    ReleaseReadyVersion(
+                        name=version_name,
+                        status=version_status,
+                        total_story_count=len(version_stories),
+                        closed_story_count=len(version_stories),
+                    ),
+                )
+
+            continue
+
+        active_version_stories = unfinished_version_stories
+        active_version_name = version_name
+        break
+
+    if active_version_stories is None:
         raise RuntimeError(f"All matching Stories beneath WP-{root_work_package_id} are closed.")
-
-    active_milestone_rank = min(
-        parse_milestone_rank(work_package_version_name(story)) for story in unfinished_stories
-    )
-
-    active_milestone_stories = [
-        story
-        for story in unfinished_stories
-        if parse_milestone_rank(work_package_version_name(story)) == active_milestone_rank
-    ]
-
-    active_milestone_name = work_package_version_name(active_milestone_stories[0]) or "(none)"
 
     status_candidates = [
         story
-        for story in active_milestone_stories
+        for story in active_version_stories
         if work_package_status_name(story) == target_status
     ]
 
     if not status_candidates:
         active_statuses = sorted(
-            {work_package_status_name(story) for story in active_milestone_stories}
+            {work_package_status_name(story) for story in active_version_stories}
         )
 
         raise RuntimeError(
-            f"The active milestone is {active_milestone_name}, but it has no "
+            f"The active version is {active_version_name}, but it has no "
             f"Stories with status {target_status!r}. Current unfinished "
             f"statuses: {active_statuses}"
         )
@@ -610,15 +646,11 @@ def choose_candidate(
 
         raise RuntimeError(
             f"No dependency-ready {target_status} Stories exist in active "
-            f"milestone {active_milestone_name}. {blocked_summary}"
+            f"version {active_version_name}. {blocked_summary}"
         )
 
-    selected = sorted(
-        eligible_candidates,
-        key=candidate_sort_key,
-    )[0]
-
-    return selected, blocked_stories, active_milestone_name
+    selected = sorted(eligible_candidates, key=candidate_sort_key)[0]
+    return selected, blocked_stories, active_version_name, None
 
 
 def main() -> int:
@@ -665,9 +697,15 @@ def main() -> int:
             token,
             "/api/v3/statuses",
         )
+        versions_document = api_get_json(
+            base_url,
+            token,
+            f"/api/v3/projects/{project_id}/versions",
+        )
 
         types = embedded_elements(types_document)
         statuses = embedded_elements(statuses_document)
+        versions = embedded_elements(versions_document)
 
         chosen_type = find_named_element(types, args.type)
         chosen_status = find_named_element(statuses, args.status)
@@ -710,8 +748,11 @@ def main() -> int:
         )
 
         predecessor_map = build_predecessor_map(relations)
+        version_status_by_name = {
+            str(version.get("name") or ""): str(version.get("status") or "") for version in versions
+        }
 
-        candidate, blocked_stories, active_milestone = choose_candidate(
+        candidate, blocked_stories, active_version, release_ready = choose_candidate(
             base_url=base_url,
             token=token,
             stories=stories,
@@ -720,6 +761,7 @@ def main() -> int:
             predecessor_map=predecessor_map,
             work_packages_by_id=work_packages_by_id,
             root_work_package_id=args.root_work_package_id,
+            version_status_by_name=version_status_by_name,
         )
 
     except RuntimeError as err:
@@ -727,12 +769,39 @@ def main() -> int:
         return 2
 
     if args.json:
+        if release_ready is not None:
+            print(
+                json.dumps(
+                    {
+                        "result": "release_ready",
+                        "root_work_package_id": args.root_work_package_id,
+                        "root_subject": work_package_subject(root_wp),
+                        "active_version": active_version,
+                        "active_milestone": active_version,
+                        "release_ready_version": {
+                            "name": release_ready.name,
+                            "status": release_ready.status,
+                            "total_story_count": release_ready.total_story_count,
+                            "closed_story_count": release_ready.closed_story_count,
+                        },
+                        "next_action": (
+                            f"Prepare the release for {release_ready.name}, then close "
+                            "the OpenProject Version when the release ships."
+                        ),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+
         print(
             json.dumps(
                 {
+                    "result": "next_story",
                     "root_work_package_id": args.root_work_package_id,
                     "root_subject": work_package_subject(root_wp),
-                    "active_milestone": active_milestone,
+                    "active_version": active_version,
+                    "active_milestone": active_version,
                     "openproject_id": candidate.story_id,
                     "subject": candidate.subject,
                     "status": candidate.status,
@@ -774,12 +843,31 @@ def main() -> int:
         )
         return 0
 
+    if release_ready is not None:
+        print("Release Ready:")
+        print(
+            f"- Root Work Package: WP-{args.root_work_package_id} — "
+            f"{work_package_subject(root_wp) or '(unnamed)'}"
+        )
+        print(f"- Active Version: {active_version}")
+        print(f"- Version Status: {release_ready.status}")
+        print(
+            f"- Completed Stories: {release_ready.closed_story_count}/"
+            f"{release_ready.total_story_count}"
+        )
+        print("\nNext action:")
+        print(
+            f"Prepare the release for {release_ready.name}, then close the "
+            "OpenProject Version when the release ships."
+        )
+        return 0
+
     print("Next Story:")
     print(
         f"- Root Work Package: WP-{args.root_work_package_id} — "
         f"{work_package_subject(root_wp) or '(unnamed)'}"
     )
-    print(f"- Active Milestone: {active_milestone}")
+    print(f"- Active Version: {active_version}")
     print(f"- OpenProject ID: {candidate.story_id}")
     print(f"- Subject: {candidate.subject}")
     print(f"- Status: {candidate.status}")
@@ -802,7 +890,7 @@ def main() -> int:
     print(f"- Selection Reason: {candidate.reason}")
 
     if blocked_stories:
-        print("\nOther candidates blocked in this milestone:")
+        print("\nOther candidates blocked in this version:")
 
         for blocked in blocked_stories:
             blockers = ", ".join(

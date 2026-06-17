@@ -329,6 +329,8 @@ AGENTS_TEMPLATE = """# AGENTS.md
   fixtures, or output files.
 - Do not mutate OpenProject, Vaultwarden, ntfy, GitHub, or other external
   systems unless explicitly instructed.
+- Update `README.md` whenever user-facing behavior, CLI commands, setup steps,
+  examples, or documented workflows change.
 - Run relevant tests and lint checks before claiming completion.
 - If requirements are ambiguous, stop and ask for clarification.
 
@@ -375,9 +377,10 @@ For each assigned Story:
 2. Confirm OpenProject ID, branch name, goal, acceptance criteria, dependencies, and non-goals.
 3. Identify minimal files to change.
 4. Implement only the requested Story.
-5. Run relevant checks.
-6. Review the diff.
-7. Provide the structured completion report.
+5. Update `README.md` when the change affects documented behavior or usage.
+6. Run relevant checks.
+7. Review the diff.
+8. Provide the structured completion report.
 
 ## Structured Output Requirement
 
@@ -414,7 +417,8 @@ At the end of each implementation session, provide this report:
 ### Recommended Commit Message
 
 - Provide one concise commit message aligned to Story scope.
-- Use `type(scope): short summary for op-<openproject-work-package-id>`.
+- Use `short summary for op-<openproject-work-package-id>`.
+- Conventional prefixes such as `feat(...)` are optional, not required.
 
 ### Next Suggested Action
 
