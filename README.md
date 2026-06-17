@@ -5,6 +5,7 @@ Deterministic Python CLI tooling for project delivery workflows.
 ## What This Repo Includes
 
 - `wood-config` for local config initialization, profile management, validation, and diagnostics
+- `wood-project` for workspace `project.json` initialization, display, and validation
 - `scripts/init_project.py` for scaffolding a Wood-tools-style project
 - `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
 - `scripts/openproject_next_story.py` for read-only next-story selection from OpenProject
@@ -231,6 +232,60 @@ Global option:
     }
   }
 }
+```
+
+### `wood-project`
+
+Workspace metadata manager for canonical `project.json` files.
+
+Default paths:
+
+- `project.json` at the selected project root
+- `.wood/` metadata directory at the selected project root
+- `.wood/artifacts/<project-slug>` as the default project-specific artifact directory
+
+Global options:
+
+- `--project-root <path>` override the project root, default current working directory
+- `--project-file <path>` override the `project.json` path for read-only commands
+
+Project file format:
+
+```json
+{
+  "schema_version": 1,
+  "project_id": "2ff7b7be-6c19-49fd-bc6c-5f3064fe7bf7",
+  "project_slug": "wood-tools",
+  "project_root": "/workspace/wood-tools",
+  "artifact_root": "/workspace/wood-tools/.wood/artifacts",
+  "artifact_dir": "/workspace/wood-tools/.wood/artifacts/wood-tools",
+  "metadata_dir": "/workspace/wood-tools/.wood"
+}
+```
+
+Commands:
+
+- `wood-project init` preview the resolved project metadata
+- `wood-project init --apply` write `project.json` and create required directories
+- `wood-project show` read and print the current `project.json`
+- `wood-project validate` verify the current `project.json` schema and path relationships
+
+Options for `init`:
+
+- `--project-id <value>` provide an explicit project ID instead of generating a UUID
+- `--project-slug <value>` provide an explicit slug instead of deriving one from the root folder
+- `--artifact-root <path>` provide a custom shared artifact root
+- `--json` emit JSON envelope output
+
+Examples:
+
+```bash
+wood-project init
+wood-project init --apply
+wood-project init --project-id proj-123 --project-slug demo-app --apply
+wood-project init --artifact-root /tmp/wood-artifacts --apply
+wood-project show --json
+wood-project validate --json
 ```
 
 #### `wood-config init`

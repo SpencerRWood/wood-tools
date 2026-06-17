@@ -48,3 +48,4 @@ line-ending = "auto"
 
 [project.scripts]
 wood-config = "wood_config.cli:main"
+wood-project = "wood_project.cli:main"
