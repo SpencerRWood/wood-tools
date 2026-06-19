@@ -263,12 +263,16 @@ Project file format:
 }
 ```
 
+Optional fields:
+
+- `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute and is validated when present.
+
 Commands:
 
 - `wood-project init` preview the resolved project metadata
 - `wood-project init --apply` write `project.json` and create required directories
 - `wood-project show` read and print the current `project.json`
-- `wood-project validate` verify the current `project.json` schema and path relationships
+- `wood-project validate` verify the current `project.json` schema, required directories, path relationships, and any linked repository paths
 
 Options for `init`:
 
