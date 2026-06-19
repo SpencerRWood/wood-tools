@@ -13,6 +13,7 @@ from .core import (
     get_value,
     init_config,
     load_config,
+    resolve_path_aliases,
     save_config,
     set_value,
     show_config,
@@ -255,11 +256,20 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "get":
             value = get_value(document, args.key, profile=args.profile)
+            profile_name = args.profile or document["active_profile"]
+            profile_values = document["profiles"][profile_name]
+            alias_resolution = resolve_path_aliases(profile_values)
             payload = {
                 "key": args.key,
-                "profile": args.profile or document["active_profile"],
+                "profile": profile_name,
                 "value": value,
+                "alias_resolution": alias_resolution,
             }
+            key_parts = args.key.split(".")
+            if len(key_parts) >= 3 and key_parts[:2] == ["paths", "project_aliases"]:
+                payload["resolved_value"] = alias_resolution["project_aliases"].get(key_parts[2])
+            if len(key_parts) >= 3 and key_parts[:2] == ["paths", "artifact_aliases"]:
+                payload["resolved_value"] = alias_resolution["artifact_aliases"].get(key_parts[2])
             return _emit(
                 _summarize_json_payload(args.command, payload) if args.json else payload,
                 json_output=args.json,

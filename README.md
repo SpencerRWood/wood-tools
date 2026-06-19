@@ -185,10 +185,22 @@ Global option:
         "project_root": "./projects",
         "artifact_root": "./artifacts",
         "project_aliases": {
-          "demo": "./projects/demo"
+          "demo": {
+            "path": "//nas/projects/demo",
+            "targets": [
+              "/Volumes/Projects/demo",
+              "/mnt/projects/demo"
+            ]
+          }
         },
         "artifact_aliases": {
-          "demo": "./artifacts/demo"
+          "demo": {
+            "path": "//nas/artifacts/demo",
+            "targets": [
+              "/Volumes/Artifacts/demo",
+              "/mnt/artifacts/demo"
+            ]
+          }
         },
         "scheduler_root": "./scheduler",
         "template_search_paths": [
@@ -233,6 +245,13 @@ Global option:
   }
 }
 ```
+
+Alias notes:
+
+- `paths.project_aliases` and `paths.artifact_aliases` map stable shared paths to machine-specific candidate targets.
+- The object form uses `path` for the canonical NAS-backed location and `targets` for candidate local mount paths checked in order.
+- Legacy string aliases such as `"demo": "./projects/demo"` are still accepted and resolve as a single direct target.
+- `show`, `get`, `validate`, and `doctor` include alias resolution metadata so you can see which target matched on the current machine.
 
 ### `wood-project`
 
@@ -352,6 +371,7 @@ Examples:
 ```bash
 wood-config get paths.project_root
 wood-config get integrations.openproject.user_agent --json
+wood-config get paths.project_aliases.demo --json
 wood-config get integrations.vaultwarden.session_file --profile dev
 ```
 
@@ -370,7 +390,7 @@ Examples:
 
 ```bash
 wood-config set paths.project_root '"./projects"' --apply
-wood-config set paths.project_aliases '{"demo":"./projects/demo"}' --profile dev --apply
+wood-config set paths.project_aliases '{"demo":{"path":"//nas/projects/demo","targets":["/Volumes/Projects/demo","/mnt/projects/demo"]}}' --profile dev --apply
 wood-config set integrations.openproject.token_ref '"env://OPENPROJECT_TOKEN"' --apply
 wood-config set wood_agents.boundary_ref '"docs://wood-agents/boundary"' --profile dev --apply
 wood-config set env.name dev --profile dev --activate-profile --apply
