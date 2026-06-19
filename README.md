@@ -265,12 +265,14 @@ Project file format:
 
 Optional fields:
 
-- `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute and is validated when present.
+- `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute, may include an optional `role`, and is validated when present.
 
 Commands:
 
 - `wood-project init` preview the resolved project metadata
 - `wood-project init --apply` write `project.json` and create required directories
+- `wood-project link repo <path>` preview linking an implementation repository to the project
+- `wood-project link repo <path> --apply` persist a linked repository entry in `project.json`
 - `wood-project show` read and print the current `project.json`
 - `wood-project validate` verify the current `project.json` schema, required directories, path relationships, and any linked repository paths
 
@@ -281,6 +283,14 @@ Options for `init`:
 - `--artifact-root <path>` provide a custom shared artifact root
 - `--json` emit JSON envelope output
 
+Options for `link repo`:
+
+- `<path>` repository directory to link
+- `--name <value>` override the stored repository name, default the repository directory name
+- `--role <value>` store an optional repository role such as `app`, `library`, or `infra`
+- `--apply` write the updated `project.json`
+- `--json` emit JSON envelope output
+
 Examples:
 
 ```bash
@@ -288,6 +298,7 @@ wood-project init
 wood-project init --apply
 wood-project init --project-id proj-123 --project-slug demo-app --apply
 wood-project init --artifact-root /tmp/wood-artifacts --apply
+wood-project link repo ../shared-lib --role library --apply
 wood-project show --json
 wood-project validate --json
 ```
