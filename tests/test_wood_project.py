@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import wood_project.core as project_core
 from wood_project.cli import main
 
 
@@ -175,6 +176,11 @@ def test_validate_json_success_reports_valid_project(
     assert payload["data"]["checked_paths"]["metadata_dir"] == str(
         (project_root / ".wood").resolve()
     )
+    assert payload["data"]["mount_checks"]["project_root"] == {
+        "path": str(project_root.resolve()),
+        "readable": True,
+        "writable": True,
+    }
     assert payload["data"]["linked_repositories"] == []
     assert payload["data"]["project"]["project_slug"] == "valid-app"
 
@@ -256,7 +262,11 @@ def test_validate_checks_linked_repositories_when_present(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["data"]["linked_repositories"] == [
-        {"name": "shared-lib", "path": str(linked_repo.resolve())}
+        {
+            "name": "shared-lib",
+            "path": str(linked_repo.resolve()),
+            "access": {"readable": True, "writable": True},
+        }
     ]
 
 
@@ -376,6 +386,7 @@ def test_link_repo_apply_persists_repository_metadata_and_validate_reports_it(
             "name": "shared-lib",
             "path": str(linked_repo.resolve()),
             "role": "library",
+            "access": {"readable": True, "writable": True},
         }
     ]
 
@@ -451,3 +462,95 @@ def test_init_reports_invalid_slug_in_json_error_output(
     assert (
         "project_slug must use lowercase letters, numbers, and hyphens only." in payload["summary"]
     )
+
+
+def test_validate_reports_unavailable_mount_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "mount-check-app"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--apply"]) == 0
+    capsys.readouterr()
+
+    project_file = project_root / "project.json"
+    document = json.loads(project_file.read_text(encoding="utf-8"))
+    missing_mount_root = tmp_path / "mnt" / "nas-share"
+    document["artifact_root"] = str((missing_mount_root / "artifacts").resolve())
+    document["artifact_dir"] = str((missing_mount_root / "artifacts" / "mount-check-app").resolve())
+    project_file.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+
+    code = main(["validate", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "validate"
+    assert payload["status"] == "error"
+    assert "artifact_root is unavailable:" in payload["summary"]
+    assert "nearest existing parent:" in payload["summary"]
+
+
+def test_validate_fails_when_required_path_is_not_readable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "read-access-app"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--apply"]) == 0
+    capsys.readouterr()
+
+    artifact_dir = (project_root / ".wood" / "artifacts" / "read-access-app").resolve()
+    original_access = project_core.os.access
+
+    def fake_access(path: object, mode: int) -> bool:
+        if Path(path) == artifact_dir and mode == (project_core.os.R_OK | project_core.os.X_OK):
+            return False
+        return original_access(path, mode)
+
+    monkeypatch.setattr(project_core.os, "access", fake_access)
+
+    code = main(["validate", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "validate"
+    assert payload["status"] == "error"
+    assert payload["summary"] == f"artifact_dir is not readable: {artifact_dir}"
+
+
+def test_init_apply_fails_when_artifact_mount_parent_is_not_writable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project_root = tmp_path / "write-access-app"
+    project_root.mkdir()
+    artifact_root = tmp_path / "shared" / "artifacts"
+    blocked_parent = (tmp_path / "shared").resolve()
+    blocked_parent.mkdir()
+    original_access = project_core.os.access
+
+    def fake_access(path: object, mode: int) -> bool:
+        if Path(path) == blocked_parent and mode == (project_core.os.W_OK | project_core.os.X_OK):
+            return False
+        return original_access(path, mode)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(project_core.os, "access", fake_access)
+        code = main(
+            [
+                "--project-root",
+                str(project_root),
+                "init",
+                "--artifact-root",
+                str(artifact_root),
+                "--apply",
+                "--json",
+            ]
+        )
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "init"
+    assert payload["status"] == "error"
+    assert payload["summary"] == f"artifact_root is not writable: {blocked_parent}"
