@@ -11,6 +11,8 @@ def test_init_set_get_show_success_path(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / "config.json"
+    project_target = tmp_path / "mounts" / "demo-project"
+    project_target.mkdir(parents=True)
 
     assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
     assert config_path.exists()
@@ -22,7 +24,14 @@ def test_init_set_get_show_success_path(
                 str(config_path),
                 "set",
                 "paths.project_aliases",
-                '{"demo":"./projects/demo"}',
+                json.dumps(
+                    {
+                        "demo": {
+                            "path": "//nas/projects/demo",
+                            "targets": ["/missing/demo-project", str(project_target)],
+                        }
+                    }
+                ),
                 "--profile",
                 "dev",
                 "--activate-profile",
@@ -46,12 +55,15 @@ def test_init_set_get_show_success_path(
         == 0
     )
     out = capsys.readouterr().out
-    assert "value: ./projects/demo" in out
+    assert "resolved_value" in out
+    assert str(project_target) in out
 
     assert main(["--config-path", str(config_path), "show", "--profile", "dev"]) == 0
     out = capsys.readouterr().out
     assert "selected_profile: dev" in out
     assert "project_root': './projects'" in out
+    assert "alias_resolution" in out
+    assert str(project_target) in out
     assert "user_agent': 'wood-tools/0.1'" in out
     assert "'executable': 'bw'" in out
 
@@ -148,6 +160,28 @@ def test_set_invalid_key_returns_error(
     assert "Key must match pattern" in err
 
 
+def test_set_invalid_alias_target_returns_error(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+
+    code = main(
+        [
+            "--config-path",
+            str(config_path),
+            "set",
+            "paths.project_aliases.demo",
+            '{"path":"//nas/projects/demo","targets":["", "/mnt/demo"]}',
+            "--apply",
+        ]
+    )
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "Each alias target must be a non-empty string path." in err
+
+
 def test_set_secret_value_without_reference_key_returns_error(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -174,6 +208,8 @@ def test_json_output_for_supported_commands(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / "config.json"
+    artifact_target = tmp_path / "artifacts" / "demo"
+    artifact_target.mkdir(parents=True)
 
     assert main(["--config-path", str(config_path), "init", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -210,6 +246,7 @@ def test_json_output_for_supported_commands(
         is True
     )
     assert payload["data"]["config"]["profiles"]["default"]["wood_agents"]["boundary_ref"] is None
+    assert payload["data"]["config"]["profiles"]["default"]["paths"]["project_aliases"] == {}
 
     assert (
         main(
@@ -272,6 +309,46 @@ def test_json_output_for_supported_commands(
     assert payload["command"] == "set"
     assert payload["data"]["key"] == "wood_agents.adapters_ref"
     assert payload["data"]["value"] == "pkg://wood-agents/adapters"
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "paths.artifact_aliases.demo",
+                json.dumps(
+                    {
+                        "path": "//nas/artifacts/demo",
+                        "targets": ["/missing/demo-artifacts", str(artifact_target)],
+                    }
+                ),
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "set"
+    assert payload["data"]["key"] == "paths.artifact_aliases.demo"
+
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "get",
+                "paths.artifact_aliases.demo",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "get"
+    assert payload["data"]["resolved_value"]["resolved_path"] == str(artifact_target)
+    assert payload["data"]["resolved_value"]["legacy_format"] is False
 
 
 def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
@@ -398,11 +475,61 @@ def test_validate_invalid_config_reports_actionable_errors(
     assert "env://" in out
 
 
-def test_json_output_for_validate_and_doctor(
+def test_validate_reports_invalid_alias_targets(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / "config.json"
     assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    capsys.readouterr()
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    document["profiles"]["default"]["paths"]["project_aliases"] = {
+        "demo": {
+            "path": "//nas/projects/demo",
+            "targets": ["/mnt/demo"],
+        },
+        "bad": {
+            "path": "//nas/projects/bad",
+            "targets": [],
+        },
+    }
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    code = main(["--config-path", str(config_path), "validate", "--json"])
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    fields = {issue["field"] for issue in payload["errors"]}
+    assert "paths.project_aliases.bad.targets" in fields
+    assert (
+        payload["data"]["alias_resolution"]["project_aliases"]["demo"]["resolved_path"]
+        == "/mnt/demo"
+    )
+
+
+def test_json_output_for_validate_and_doctor(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    project_target = tmp_path / "mounts" / "demo-project"
+    project_target.mkdir(parents=True)
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+    assert (
+        main(
+            [
+                "--config-path",
+                str(config_path),
+                "set",
+                "paths.project_aliases.demo",
+                json.dumps(
+                    {
+                        "path": "//nas/projects/demo",
+                        "targets": [str(project_target), "/missing/demo-project"],
+                    }
+                ),
+                "--apply",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
 
     code = main(["--config-path", str(config_path), "validate", "--json"])
@@ -416,6 +543,9 @@ def test_json_output_for_validate_and_doctor(
     assert payload["errors"][0]["remediation"]
     assert payload["errors"][0]["field"].startswith("integrations.")
     assert payload["next_actions"]
+    assert payload["data"]["alias_resolution"]["project_aliases"]["demo"]["resolved_path"] == str(
+        project_target
+    )
 
     assert main(["--config-path", str(config_path), "doctor", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -434,6 +564,7 @@ def test_json_output_for_validate_and_doctor(
     ]
     assert payload["data"]["summary"]["contains_secrets"] is False
     assert payload["data"]["summary"]["issue_count"] > 0
+    assert payload["data"]["alias_diagnostics"][0]["resolved_path"] == str(project_target)
     assert payload["warnings"]
 
 

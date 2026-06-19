@@ -18,6 +18,7 @@ REQUIRED_PATH_KEYS = (
     "scheduler_root",
     "template_search_paths",
 )
+ALIAS_PATH_FIELDS = ("project_aliases", "artifact_aliases")
 REFERENCE_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://.+$")
 
 
@@ -224,6 +225,7 @@ def show_config(document: dict[str, Any], profile: str | None = None) -> dict[st
         "active_profile": get_active_profile(document),
         "selected_profile": selected,
         "values": values,
+        "alias_resolution": resolve_path_aliases(values),
     }
 
 
@@ -252,6 +254,7 @@ def set_value(
         selected_profile = get_active_profile(document)
 
     _set_nested(document["profiles"][selected_profile], key, value)
+    _validate_alias_mutation(document["profiles"][selected_profile], key=key)
     if activate_profile:
         document["active_profile"] = selected_profile
     return document
@@ -259,6 +262,151 @@ def set_value(
 
 def _is_non_empty_string(value: Any) -> bool:
     return isinstance(value, str) and value.strip() != ""
+
+
+def _select_alias_target(path_value: str, targets: list[str]) -> tuple[str, str, bool]:
+    for candidate in targets:
+        if Path(candidate).expanduser().exists():
+            return candidate, "target", True
+    if Path(path_value).expanduser().exists():
+        return path_value, "path", True
+    if targets:
+        return targets[0], "target-fallback", False
+    return path_value, "path-fallback", False
+
+
+def _resolve_alias_map(aliases: Any, *, field_name: str) -> dict[str, Any]:
+    resolved: dict[str, Any] = {}
+    if not isinstance(aliases, dict):
+        return resolved
+
+    for alias, target in aliases.items():
+        if not isinstance(alias, str) or alias.strip() == "":
+            continue
+        if _is_non_empty_string(target):
+            resolved_path, resolution_source, available = _select_alias_target(target, [target])
+            resolved[alias] = {
+                "path": target,
+                "targets": [target],
+                "resolved_path": resolved_path,
+                "resolution_source": resolution_source,
+                "available": available,
+                "field": f"paths.{field_name}.{alias}",
+                "legacy_format": True,
+            }
+            continue
+        if not isinstance(target, dict):
+            continue
+
+        path_value = target.get("path")
+        targets = target.get("targets")
+        if not _is_non_empty_string(path_value):
+            continue
+        if not isinstance(targets, list) or any(not _is_non_empty_string(item) for item in targets):
+            continue
+
+        normalized_targets = [str(item) for item in targets]
+        resolved_path, resolution_source, available = _select_alias_target(
+            str(path_value), normalized_targets
+        )
+        resolved[alias] = {
+            "path": str(path_value),
+            "targets": normalized_targets,
+            "resolved_path": resolved_path,
+            "resolution_source": resolution_source,
+            "available": available,
+            "field": f"paths.{field_name}.{alias}",
+            "legacy_format": False,
+        }
+
+    return resolved
+
+
+def resolve_path_aliases(profile: dict[str, Any]) -> dict[str, Any]:
+    paths = profile.get("paths")
+    if not isinstance(paths, dict):
+        return {field_name: {} for field_name in ALIAS_PATH_FIELDS}
+
+    return {
+        field_name: _resolve_alias_map(paths.get(field_name), field_name=field_name)
+        for field_name in ALIAS_PATH_FIELDS
+    }
+
+
+def _validate_alias_entry(
+    alias: Any,
+    target: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    field_root = f"paths.{field_name}"
+
+    if not isinstance(alias, str) or alias.strip() == "":
+        findings.append(
+            {
+                "code": "invalid_alias_name",
+                "field": field_root,
+                "message": "Alias names must be non-empty strings.",
+                "remediation": "Rename empty/non-string aliases to a non-empty string key.",
+            }
+        )
+        return findings
+
+    field = f"{field_root}.{alias}"
+    if _is_non_empty_string(target):
+        return findings
+
+    if not isinstance(target, dict):
+        findings.append(
+            {
+                "code": "invalid_alias_target",
+                "field": field,
+                "message": "Alias entries must be a non-empty path string or an object.",
+                "remediation": (
+                    f"Set {field} to a path string or an object like "
+                    '{"path":"//nas/demo","targets":["/Volumes/demo","/mnt/demo"]}.'
+                ),
+            }
+        )
+        return findings
+
+    path_value = target.get("path")
+    if not _is_non_empty_string(path_value):
+        findings.append(
+            {
+                "code": "invalid_alias_path",
+                "field": f"{field}.path",
+                "message": "Alias path must be a non-empty string.",
+                "remediation": f"Set {field}.path to the canonical shared path string.",
+            }
+        )
+
+    targets = target.get("targets")
+    if not isinstance(targets, list) or not targets:
+        findings.append(
+            {
+                "code": "invalid_alias_targets",
+                "field": f"{field}.targets",
+                "message": "Alias targets must be a non-empty list of candidate local paths.",
+                "remediation": f'Set {field}.targets to a list like ["/Volumes/demo","/mnt/demo"].',
+            }
+        )
+        return findings
+
+    for index, candidate in enumerate(targets):
+        if _is_non_empty_string(candidate):
+            continue
+        findings.append(
+            {
+                "code": "invalid_alias_target_path",
+                "field": f"{field}.targets.{index}",
+                "message": "Each alias target must be a non-empty string path.",
+                "remediation": f"Replace {field}.targets.{index} with a non-empty path string.",
+            }
+        )
+
+    return findings
 
 
 def _validate_path_aliases(aliases: Any, *, field_name: str) -> list[dict[str, str]]:
@@ -275,25 +423,46 @@ def _validate_path_aliases(aliases: Any, *, field_name: str) -> list[dict[str, s
         return findings
 
     for alias, target in aliases.items():
-        if not isinstance(alias, str) or alias.strip() == "":
-            findings.append(
-                {
-                    "code": "invalid_alias_name",
-                    "field": f"paths.{field_name}",
-                    "message": "Alias names must be non-empty strings.",
-                    "remediation": "Rename empty/non-string aliases to a non-empty string key.",
-                }
-            )
-        if not _is_non_empty_string(target):
-            findings.append(
-                {
-                    "code": "invalid_alias_target",
-                    "field": f"paths.{field_name}.{alias}",
-                    "message": "Alias targets must be non-empty string paths.",
-                    "remediation": f"Set paths.{field_name}.{alias} to a non-empty path string.",
-                }
-            )
+        findings.extend(_validate_alias_entry(alias, target, field_name=field_name))
     return findings
+
+
+def _validate_alias_mutation(profile_values: dict[str, Any], *, key: str) -> None:
+    paths = profile_values.get("paths")
+    if not isinstance(paths, dict):
+        return
+
+    findings: list[dict[str, str]]
+    if key == "paths.project_aliases":
+        findings = _validate_path_aliases(
+            paths.get("project_aliases"),
+            field_name="project_aliases",
+        )
+    elif key.startswith("paths.project_aliases."):
+        alias_name = key.removeprefix("paths.project_aliases.").split(".", 1)[0]
+        aliases = paths.get("project_aliases", {})
+        findings = _validate_alias_entry(
+            alias_name,
+            aliases.get(alias_name) if isinstance(aliases, dict) else None,
+            field_name="project_aliases",
+        )
+    elif key == "paths.artifact_aliases":
+        findings = _validate_path_aliases(
+            paths.get("artifact_aliases"), field_name="artifact_aliases"
+        )
+    elif key.startswith("paths.artifact_aliases."):
+        alias_name = key.removeprefix("paths.artifact_aliases.").split(".", 1)[0]
+        aliases = paths.get("artifact_aliases", {})
+        findings = _validate_alias_entry(
+            alias_name,
+            aliases.get(alias_name) if isinstance(aliases, dict) else None,
+            field_name="artifact_aliases",
+        )
+    else:
+        return
+
+    if findings:
+        raise ConfigError(findings[0]["message"])
 
 
 def _validate_reference(value: Any, *, field: str, required: bool) -> list[dict[str, str]]:
@@ -579,11 +748,13 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
 def validate_config(document: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
     selected, values = _resolve_profile(document, profile)
     errors = validate_profile(values, profile_name=selected)
+    alias_resolution = resolve_path_aliases(values)
     return {
         "command": "validate",
         "profile": selected,
         "valid": not errors,
         "errors": errors,
+        "alias_resolution": alias_resolution,
     }
 
 
@@ -623,6 +794,7 @@ def doctor_config(
     selected_checks = list(checks or DEFAULT_DOCTOR_CHECKS)
     issues: list[dict[str, str]] = []
     check_results: list[dict[str, Any]] = []
+    alias_resolution = validation["alias_resolution"]
 
     for check_name in selected_checks:
         check_issues = _filter_findings_for_check(validation["errors"], check_name=check_name)
@@ -639,12 +811,36 @@ def doctor_config(
             }
         )
 
+    alias_diagnostics: list[dict[str, Any]] = []
+    for field_name, aliases in alias_resolution.items():
+        for alias_name, details in aliases.items():
+            alias_details = {"name": alias_name, "kind": field_name, **details}
+            alias_diagnostics.append(alias_details)
+            if details["available"]:
+                continue
+            issues.append(
+                {
+                    "code": "unresolved_alias_target",
+                    "field": details["field"],
+                    "message": (
+                        f"Alias '{alias_name}' did not match an existing local target; "
+                        f"using {details['resolution_source']}."
+                    ),
+                    "remediation": (
+                        f"Update {details['field']}.targets so one path exists on this machine."
+                    ),
+                    "profile": validation["profile"],
+                }
+            )
+
     return {
         "command": "doctor",
         "profile": validation["profile"],
         "status": "ok" if not issues else "issues-found",
         "checks": check_results,
         "issues": issues,
+        "alias_resolution": alias_resolution,
+        "alias_diagnostics": alias_diagnostics,
         "summary": {
             "selected_checks": selected_checks,
             "issue_count": len(issues),
