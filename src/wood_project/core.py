@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,6 +145,12 @@ def validate_project_document(document: dict[str, Any]) -> None:
 
 def _validate_existing_directory(field: str, path: Path) -> None:
     if not path.exists():
+        nearest_parent = _nearest_existing_parent(path)
+        if nearest_parent is not None and nearest_parent != path.parent:
+            raise ProjectError(
+                f"{field} is unavailable: {path} (nearest existing parent: {nearest_parent}; "
+                "the expected mount may not be available)"
+            )
         raise ProjectError(f"{field} does not exist: {path}")
     if not path.is_dir():
         raise ProjectError(f"{field} must be a directory: {path}")
@@ -157,6 +164,43 @@ def _ensure_unique_paths(entries: list[tuple[str, Path]]) -> None:
         if other is not None:
             raise ProjectError(f"{field} conflicts with {other}: both resolve to {resolved}")
         seen[resolved] = field
+
+
+def _nearest_existing_parent(path: Path) -> Path | None:
+    current = path
+    while True:
+        if current.exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def _check_directory_access(field: str, path: Path, *, require_write: bool) -> dict[str, Any]:
+    readable = os.access(path, os.R_OK | os.X_OK)
+    writable = os.access(path, os.W_OK | os.X_OK)
+    if not readable:
+        raise ProjectError(f"{field} is not readable: {path}")
+    if require_write and not writable:
+        raise ProjectError(f"{field} is not writable: {path}")
+    return {
+        "path": str(path),
+        "readable": readable,
+        "writable": writable,
+    }
+
+
+def _check_mutation_parent(field: str, path: Path) -> None:
+    parent = path if path.exists() else _nearest_existing_parent(path)
+    if parent is None:
+        raise ProjectError(
+            f"{field} is unavailable: {path} (no existing parent found; the expected mount may "
+            "not be available)"
+        )
+    if not parent.is_dir():
+        raise ProjectError(f"{field} parent must be a directory: {parent}")
+    _check_directory_access(field, parent, require_write=True)
 
 
 def _load_linked_repositories(document: dict[str, Any]) -> list[LinkedRepository]:
@@ -243,6 +287,15 @@ def validate_project_state(
     _validate_existing_directory("artifact_root", artifact_root)
     _validate_existing_directory("artifact_dir", artifact_dir)
 
+    mount_checks = {
+        "project_root": _check_directory_access("project_root", project_root, require_write=False),
+        "metadata_dir": _check_directory_access("metadata_dir", metadata_dir, require_write=False),
+        "artifact_root": _check_directory_access(
+            "artifact_root", artifact_root, require_write=False
+        ),
+        "artifact_dir": _check_directory_access("artifact_dir", artifact_dir, require_write=False),
+    }
+
     if metadata_dir.name != METADATA_DIR_NAME:
         raise ProjectError("metadata_dir must use the '.wood' directory name.")
     if metadata_dir.parent != project_root:
@@ -264,10 +317,19 @@ def validate_project_state(
             f"linked_repositories['{repository.name}']",
             repository.path,
         )
+        access = _check_directory_access(
+            f"linked_repositories['{repository.name}']",
+            repository.path,
+            require_write=False,
+        )
         linked_entries.append((f"linked_repositories['{repository.name}']", repository.path))
         entry = {"name": repository.name, "path": str(repository.path)}
         if repository.role is not None:
             entry["role"] = repository.role
+        entry["access"] = {
+            "readable": access["readable"],
+            "writable": access["writable"],
+        }
         linked_payload.append(entry)
 
     _ensure_unique_paths(
@@ -289,6 +351,7 @@ def validate_project_state(
             "artifact_root": str(artifact_root),
             "artifact_dir": str(artifact_dir),
         },
+        "mount_checks": mount_checks,
         "linked_repositories": linked_payload,
     }
 
@@ -298,6 +361,11 @@ def save_project_document(project_file: Path, document: dict[str, Any]) -> None:
     metadata_dir = Path(document["metadata_dir"])
     artifact_root = Path(document["artifact_root"])
     artifact_dir = Path(document["artifact_dir"])
+
+    _check_mutation_parent("project_root", project_file.parent)
+    _check_mutation_parent("metadata_dir", metadata_dir)
+    _check_mutation_parent("artifact_root", artifact_root)
+    _check_mutation_parent("artifact_dir", artifact_dir)
 
     metadata_dir.mkdir(parents=True, exist_ok=True)
     artifact_root.mkdir(parents=True, exist_ok=True)

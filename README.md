@@ -266,6 +266,8 @@ Project file format:
 Optional fields:
 
 - `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute, may include an optional `role`, and is validated when present.
+- `wood-project validate` performs non-mutating availability checks for configured project, metadata, artifact, and linked repository directories. JSON output includes per-path access details.
+- Mutating `wood-project` commands preflight the required parent directories and fail early with clear errors when a NAS mount is unavailable or not writable.
 
 Commands:
 
@@ -274,7 +276,7 @@ Commands:
 - `wood-project link repo <path>` preview linking an implementation repository to the project
 - `wood-project link repo <path> --apply` persist a linked repository entry in `project.json`
 - `wood-project show` read and print the current `project.json`
-- `wood-project validate` verify the current `project.json` schema, required directories, path relationships, and any linked repository paths
+- `wood-project validate` verify the current `project.json` schema, required directories, path relationships, linked repository paths, and mounted path accessibility
 
 Options for `init`:
 
