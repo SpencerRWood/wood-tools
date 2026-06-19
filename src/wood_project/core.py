@@ -27,6 +27,12 @@ class ProjectPaths:
     artifact_dir: Path
 
 
+@dataclass(frozen=True)
+class LinkedRepository:
+    name: str
+    path: Path
+
+
 def slugify_project_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
     if not normalized:
@@ -135,6 +141,138 @@ def validate_project_document(document: dict[str, Any]) -> None:
         raise ProjectError("artifact_dir must end with project_slug.")
 
 
+def _validate_existing_directory(field: str, path: Path) -> None:
+    if not path.exists():
+        raise ProjectError(f"{field} does not exist: {path}")
+    if not path.is_dir():
+        raise ProjectError(f"{field} must be a directory: {path}")
+
+
+def _ensure_unique_paths(entries: list[tuple[str, Path]]) -> None:
+    seen: dict[Path, str] = {}
+    for field, path in entries:
+        resolved = path.resolve()
+        other = seen.get(resolved)
+        if other is not None:
+            raise ProjectError(f"{field} conflicts with {other}: both resolve to {resolved}")
+        seen[resolved] = field
+
+
+def _load_linked_repositories(document: dict[str, Any]) -> list[LinkedRepository]:
+    raw = document.get("linked_repositories")
+    if raw is None:
+        return []
+
+    repositories: list[LinkedRepository] = []
+    if isinstance(raw, dict):
+        items = raw.items()
+        for name, value in items:
+            if not isinstance(name, str) or not name.strip():
+                raise ProjectError("linked_repositories keys must be non-empty strings.")
+            if isinstance(value, str):
+                path_value = value
+            elif isinstance(value, dict):
+                path_value = value.get("path")
+            else:
+                path_value = None
+            if not isinstance(path_value, str) or not path_value.strip():
+                raise ProjectError(
+                    f"linked_repositories['{name}'] must define a non-empty absolute path."
+                )
+            path = Path(path_value)
+            if not path.is_absolute():
+                raise ProjectError(f"linked_repositories['{name}'] path must be an absolute path.")
+            repositories.append(LinkedRepository(name=name, path=path))
+        return repositories
+
+    if isinstance(raw, list):
+        seen_names: set[str] = set()
+        for index, entry in enumerate(raw):
+            if not isinstance(entry, dict):
+                raise ProjectError("linked_repositories entries must be objects.")
+            name = entry.get("name")
+            path_value = entry.get("path")
+            if not isinstance(name, str) or not name.strip():
+                raise ProjectError(f"linked_repositories[{index}] must define a non-empty name.")
+            if name in seen_names:
+                raise ProjectError(f"linked_repositories contains duplicate name '{name}'.")
+            seen_names.add(name)
+            if not isinstance(path_value, str) or not path_value.strip():
+                raise ProjectError(
+                    f"linked_repositories[{index}] must define a non-empty absolute path."
+                )
+            path = Path(path_value)
+            if not path.is_absolute():
+                raise ProjectError(f"linked_repositories[{index}] path must be an absolute path.")
+            repositories.append(LinkedRepository(name=name, path=path))
+        return repositories
+
+    raise ProjectError("linked_repositories must be an object or list of objects.")
+
+
+def validate_project_state(
+    document: dict[str, Any],
+) -> dict[str, Any]:
+    validate_project_document(document)
+
+    project_root = Path(document["project_root"])
+    metadata_dir = Path(document["metadata_dir"])
+    artifact_root = Path(document["artifact_root"])
+    artifact_dir = Path(document["artifact_dir"])
+    linked_repositories = _load_linked_repositories(document)
+
+    _validate_existing_directory("project_root", project_root)
+    _validate_existing_directory("metadata_dir", metadata_dir)
+    _validate_existing_directory("artifact_root", artifact_root)
+    _validate_existing_directory("artifact_dir", artifact_dir)
+
+    if metadata_dir.name != METADATA_DIR_NAME:
+        raise ProjectError("metadata_dir must use the '.wood' directory name.")
+    if metadata_dir.parent != project_root:
+        raise ProjectError("metadata_dir must be a direct child of project_root.")
+
+    _ensure_unique_paths(
+        [
+            ("project_root", project_root),
+            ("metadata_dir", metadata_dir),
+            ("artifact_root", artifact_root),
+            ("artifact_dir", artifact_dir),
+        ]
+    )
+
+    linked_payload: list[dict[str, str]] = []
+    linked_entries: list[tuple[str, Path]] = []
+    for repository in linked_repositories:
+        _validate_existing_directory(
+            f"linked_repositories['{repository.name}']",
+            repository.path,
+        )
+        linked_entries.append((f"linked_repositories['{repository.name}']", repository.path))
+        linked_payload.append({"name": repository.name, "path": str(repository.path)})
+
+    _ensure_unique_paths(
+        [
+            ("project_root", project_root),
+            ("metadata_dir", metadata_dir),
+            ("artifact_root", artifact_root),
+            ("artifact_dir", artifact_dir),
+            *linked_entries,
+        ]
+    )
+
+    return {
+        "valid": True,
+        "project": document,
+        "checked_paths": {
+            "project_root": str(project_root),
+            "metadata_dir": str(metadata_dir),
+            "artifact_root": str(artifact_root),
+            "artifact_dir": str(artifact_dir),
+        },
+        "linked_repositories": linked_payload,
+    }
+
+
 def save_project_document(project_file: Path, document: dict[str, Any]) -> None:
     validate_project_document(document)
     metadata_dir = Path(document["metadata_dir"])
@@ -206,4 +344,6 @@ def validate_project(
     root = resolve_project_root(project_root)
     file_path = project_file or root / PROJECT_FILE_NAME
     document = load_project_document(file_path)
-    return {"valid": True, "path": str(file_path), "project": document}
+    payload = validate_project_state(document)
+    payload["path"] = str(file_path)
+    return payload
