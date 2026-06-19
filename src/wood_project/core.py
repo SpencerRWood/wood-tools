@@ -31,6 +31,7 @@ class ProjectPaths:
 class LinkedRepository:
     name: str
     path: Path
+    role: str | None = None
 
 
 def slugify_project_name(value: str) -> str:
@@ -171,18 +172,27 @@ def _load_linked_repositories(document: dict[str, Any]) -> list[LinkedRepository
                 raise ProjectError("linked_repositories keys must be non-empty strings.")
             if isinstance(value, str):
                 path_value = value
+                role = None
             elif isinstance(value, dict):
                 path_value = value.get("path")
+                role = value.get("role")
             else:
                 path_value = None
+                role = None
             if not isinstance(path_value, str) or not path_value.strip():
                 raise ProjectError(
                     f"linked_repositories['{name}'] must define a non-empty absolute path."
                 )
+            if role is not None and (not isinstance(role, str) or not role.strip()):
+                raise ProjectError(
+                    f"linked_repositories['{name}'] role must be a non-empty string when set."
+                )
             path = Path(path_value)
             if not path.is_absolute():
                 raise ProjectError(f"linked_repositories['{name}'] path must be an absolute path.")
-            repositories.append(LinkedRepository(name=name, path=path))
+            repositories.append(
+                LinkedRepository(name=name, path=path, role=role.strip() if role else None)
+            )
         return repositories
 
     if isinstance(raw, list):
@@ -192,6 +202,7 @@ def _load_linked_repositories(document: dict[str, Any]) -> list[LinkedRepository
                 raise ProjectError("linked_repositories entries must be objects.")
             name = entry.get("name")
             path_value = entry.get("path")
+            role = entry.get("role")
             if not isinstance(name, str) or not name.strip():
                 raise ProjectError(f"linked_repositories[{index}] must define a non-empty name.")
             if name in seen_names:
@@ -201,10 +212,16 @@ def _load_linked_repositories(document: dict[str, Any]) -> list[LinkedRepository
                 raise ProjectError(
                     f"linked_repositories[{index}] must define a non-empty absolute path."
                 )
+            if role is not None and (not isinstance(role, str) or not role.strip()):
+                raise ProjectError(
+                    f"linked_repositories[{index}] role must be a non-empty string when set."
+                )
             path = Path(path_value)
             if not path.is_absolute():
                 raise ProjectError(f"linked_repositories[{index}] path must be an absolute path.")
-            repositories.append(LinkedRepository(name=name, path=path))
+            repositories.append(
+                LinkedRepository(name=name, path=path, role=role.strip() if role else None)
+            )
         return repositories
 
     raise ProjectError("linked_repositories must be an object or list of objects.")
@@ -248,7 +265,10 @@ def validate_project_state(
             repository.path,
         )
         linked_entries.append((f"linked_repositories['{repository.name}']", repository.path))
-        linked_payload.append({"name": repository.name, "path": str(repository.path)})
+        entry = {"name": repository.name, "path": str(repository.path)}
+        if repository.role is not None:
+            entry["role"] = repository.role
+        linked_payload.append(entry)
 
     _ensure_unique_paths(
         [
@@ -347,3 +367,75 @@ def validate_project(
     payload = validate_project_state(document)
     payload["path"] = str(file_path)
     return payload
+
+
+def _resolve_repository_path(repo_path: Path) -> Path:
+    resolved = repo_path.expanduser().resolve()
+    if not resolved.exists():
+        raise ProjectError(f"Repository path does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ProjectError(f"Repository path must be a directory: {resolved}")
+    return resolved
+
+
+def _canonicalize_linked_repositories(
+    repositories: list[LinkedRepository],
+) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for repository in repositories:
+        entry = {"name": repository.name, "path": str(repository.path)}
+        if repository.role is not None:
+            entry["role"] = repository.role
+        payload.append(entry)
+    return payload
+
+
+def link_repository(
+    *,
+    repo_path: Path,
+    repo_name: str | None,
+    repo_role: str | None,
+    project_file: Path | None = None,
+    project_root: Path | None = None,
+    apply: bool,
+) -> dict[str, Any]:
+    root = resolve_project_root(project_root)
+    file_path = project_file or root / PROJECT_FILE_NAME
+    document = load_project_document(file_path)
+
+    resolved_repo_path = _resolve_repository_path(repo_path)
+    resolved_name = (repo_name or resolved_repo_path.name).strip()
+    if not resolved_name:
+        raise ProjectError("Repository name cannot be empty.")
+
+    resolved_role = repo_role.strip() if repo_role is not None else None
+    if repo_role is not None and not resolved_role:
+        raise ProjectError("Repository role cannot be empty when provided.")
+
+    linked_repositories = _load_linked_repositories(document)
+    linked_repositories.append(
+        LinkedRepository(name=resolved_name, path=resolved_repo_path, role=resolved_role)
+    )
+
+    updated_document = dict(document)
+    updated_document["linked_repositories"] = _canonicalize_linked_repositories(linked_repositories)
+    validate_project_state(updated_document)
+
+    changed = False
+    if apply:
+        save_project_document(file_path, updated_document)
+        changed = True
+
+    repository_payload = {
+        "name": resolved_name,
+        "path": str(resolved_repo_path),
+    }
+    if resolved_role is not None:
+        repository_payload["role"] = resolved_role
+
+    return {
+        "changed": changed,
+        "path": str(file_path),
+        "project": updated_document,
+        "repository": repository_payload,
+    }

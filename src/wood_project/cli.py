@@ -8,7 +8,13 @@ from typing import Any
 
 from wood_config.output import blocked_output, error_output, success_output
 
-from .core import ProjectError, init_project, show_project, validate_project
+from .core import ProjectError, init_project, link_repository, show_project, validate_project
+
+
+def _command_name(args: argparse.Namespace) -> str:
+    if args.command == "link" and getattr(args, "link_command", None) == "repo":
+        return "link-repo"
+    return args.command
 
 
 def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
@@ -52,6 +58,24 @@ def _summarize_json_payload(
             data=payload,
         )
 
+    if command == "link-repo":
+        if apply:
+            return success_output(
+                command="link-repo",
+                mutation="mutating",
+                summary=f"Linked repository {payload['repository']['name']} at {payload['path']}.",
+                data=payload,
+            )
+        return blocked_output(
+            command="link-repo",
+            summary=(
+                f"Linking repository {payload['repository']['name']} requires approval to write "
+                f"{payload['path']}."
+            ),
+            data=payload,
+            next_actions=["Re-run with --apply to update project.json."],
+        )
+
     return success_output(
         command="validate",
         mutation="read-only",
@@ -91,6 +115,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="Validate project metadata")
     validate_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    link_parser = subparsers.add_parser("link", help="Link project resources")
+    link_subparsers = link_parser.add_subparsers(dest="link_command", required=True)
+
+    link_repo_parser = link_subparsers.add_parser("repo", help="Link an implementation repository")
+    link_repo_parser.add_argument("repo_path", type=Path, help="Path to the repository to link")
+    link_repo_parser.add_argument(
+        "--name",
+        help="Optional repository name (defaults to the repository directory name)",
+    )
+    link_repo_parser.add_argument(
+        "--role",
+        help="Optional repository role stored with the link metadata",
+    )
+    link_repo_parser.add_argument("--apply", action="store_true", help="Write project.json")
+    link_repo_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     return parser
 
@@ -138,13 +178,32 @@ def main(argv: list[str] | None = None) -> int:
                 json_output=args.json,
             )
 
+        if args.command == "link" and args.link_command == "repo":
+            payload = link_repository(
+                repo_path=args.repo_path,
+                repo_name=args.name,
+                repo_role=args.role,
+                project_file=args.project_file,
+                project_root=args.project_root,
+                apply=args.apply,
+            )
+            return _emit(
+                (
+                    _summarize_json_payload("link-repo", payload, apply=args.apply)
+                    if args.json
+                    else payload
+                ),
+                json_output=args.json,
+            )
+
         parser.error("Unknown command")
         return 2
     except ProjectError as exc:
+        command_name = _command_name(args)
         if getattr(args, "json", False):
             payload = error_output(
-                command=args.command,
-                mutation="mutating" if args.command == "init" else "read-only",
+                command=command_name,
+                mutation="mutating" if command_name in {"init", "link-repo"} else "read-only",
                 summary=str(exc),
                 errors=[{"message": str(exc)}],
                 next_actions=["Review the project metadata inputs and try again."],

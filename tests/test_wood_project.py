@@ -322,6 +322,110 @@ def test_show_json_reports_generated_slug_and_custom_artifact_root(
     )
 
 
+def test_link_repo_apply_persists_repository_metadata_and_validate_reports_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "repo-linked-app"
+    project_root.mkdir()
+    linked_repo = tmp_path / "shared-lib"
+    linked_repo.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--apply"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "link",
+                "repo",
+                str(linked_repo),
+                "--role",
+                "library",
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "link-repo"
+    assert payload["status"] == "success"
+    assert payload["data"]["changed"] is True
+    assert payload["data"]["repository"] == {
+        "name": "shared-lib",
+        "path": str(linked_repo.resolve()),
+        "role": "library",
+    }
+
+    project_file = project_root / "project.json"
+    document = json.loads(project_file.read_text(encoding="utf-8"))
+    assert document["linked_repositories"] == [
+        {
+            "name": "shared-lib",
+            "path": str(linked_repo.resolve()),
+            "role": "library",
+        }
+    ]
+
+    assert main(["validate", "--json"]) == 0
+    validate_payload = json.loads(capsys.readouterr().out)
+    assert validate_payload["data"]["linked_repositories"] == [
+        {
+            "name": "shared-lib",
+            "path": str(linked_repo.resolve()),
+            "role": "library",
+        }
+    ]
+
+
+def test_link_repo_without_apply_is_approval_gated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "link-preview-app"
+    project_root.mkdir()
+    linked_repo = tmp_path / "preview-repo"
+    linked_repo.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--apply"]) == 0
+    capsys.readouterr()
+
+    assert main(["link", "repo", str(linked_repo), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "link-repo"
+    assert payload["status"] == "blocked"
+    assert payload["requires_approval"] is True
+    assert payload["data"]["changed"] is False
+
+    project_file = project_root / "project.json"
+    document = json.loads(project_file.read_text(encoding="utf-8"))
+    assert "linked_repositories" not in document
+
+
+def test_link_repo_rejects_missing_repository_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "missing-link-app"
+    project_root.mkdir()
+    missing_repo = tmp_path / "missing-repo"
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["link", "repo", str(missing_repo), "--apply", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "link-repo"
+    assert payload["status"] == "error"
+    assert payload["mutation"] == "mutating"
+    assert payload["summary"] == f"Repository path does not exist: {missing_repo.resolve()}"
+
+
 def test_init_reports_invalid_slug_in_json_error_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
