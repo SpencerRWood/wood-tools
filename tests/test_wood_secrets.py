@@ -79,13 +79,45 @@ class StubProvider(SecretProvider):
         return self._value
 
 
+def make_config_document(
+    *,
+    openproject_ref: str | None = None,
+    ntfy_ref: str | None = None,
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "active_profile": "default",
+        "profiles": {
+            "default": {
+                "integrations": {
+                    "openproject": {
+                        "token_ref": openproject_ref,
+                    },
+                    "ntfy": {
+                        "token_ref": ntfy_ref,
+                    },
+                    "vaultwarden": {
+                        "session_file": None,
+                        "cli": {"executable": "bw"},
+                    },
+                }
+            }
+        },
+    }
+
+
 @pytest.fixture
 def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
     def _install(
         *,
         provider: SecretProvider | None = None,
         environ: dict[str, str] | None = None,
+        config_document: dict[str, object] | None = None,
     ) -> None:
+        monkeypatch.setattr(
+            "wood_secrets.core.load_config",
+            lambda _: config_document if config_document is not None else make_config_document(),
+        )
         env_provider = EnvironmentSecretProvider(environ=environ or {})
         providers = {
             "env": env_provider,
@@ -146,6 +178,72 @@ def test_status_json_lists_provider_status(
     assert payload["data"]["status"]["scheme"] == "vaultwarden"
 
 
+def test_providers_json_lists_registered_provider_statuses(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver()
+
+    code = main(["providers", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "providers"
+    assert payload["data"]["ok"] is True
+    assert {provider["scheme"] for provider in payload["data"]["providers"]} == {
+        "env",
+        "vaultwarden",
+    }
+
+
+def test_check_json_reports_configured_openproject_and_ntfy_without_printing_secret(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver(
+        environ={
+            "OPENPROJECT_TOKEN": "openproject-secret",
+            "NTFY_TOKEN": "ntfy-secret",
+        },
+        config_document=make_config_document(
+            openproject_ref="env://OPENPROJECT_TOKEN",
+            ntfy_ref="env://NTFY_TOKEN",
+        ),
+    )
+
+    code = main(["check", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    assert payload["status"] == "success"
+    assert payload["data"]["ok"] is True
+    assert {check["integration"] for check in payload["data"]["checks"]} == {"openproject", "ntfy"}
+    assert all(check["redacted_value"] == "[REDACTED]" for check in payload["data"]["checks"])
+    assert "openproject-secret" not in rendered
+    assert "ntfy-secret" not in rendered
+
+
+def test_check_json_reports_missing_reference_configuration(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver(
+        config_document=make_config_document(
+            openproject_ref="env://OPENPROJECT_TOKEN",
+            ntfy_ref=None,
+        ),
+    )
+
+    code = main(["check", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "warning"
+    ntfy_check = next(
+        check for check in payload["data"]["checks"] if check["integration"] == "ntfy"
+    )
+    assert ntfy_check["configured"] is False
+    assert ntfy_check["ok"] is False
+
+
 def test_resolve_invalid_reference_returns_error(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -174,7 +272,15 @@ def test_doctor_reports_locked_provider(
                 detail="Vaultwarden CLI reported status 'locked'.",
             ),
             error=MissingSecretError("locked"),
-        )
+        ),
+        environ={
+            "OPENPROJECT_TOKEN": "openproject-secret",
+            "NTFY_TOKEN": "ntfy-secret",
+        },
+        config_document=make_config_document(
+            openproject_ref="env://OPENPROJECT_TOKEN",
+            ntfy_ref="env://NTFY_TOKEN",
+        ),
     )
 
     code = main(["doctor", "--json"])
@@ -182,7 +288,28 @@ def test_doctor_reports_locked_provider(
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "warning"
-    assert payload["data"]["issues"][0]["code"] == "provider_locked"
+    assert any(issue["code"] == "provider_locked" for issue in payload["data"]["issues"])
+
+
+def test_doctor_reports_integration_secret_issue_without_printing_secret(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver(
+        environ={"OPENPROJECT_TOKEN": "openproject-secret"},
+        config_document=make_config_document(
+            openproject_ref="env://OPENPROJECT_TOKEN",
+            ntfy_ref="env://NTFY_TOKEN",
+        ),
+    )
+
+    code = main(["doctor", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    assert payload["status"] == "warning"
+    assert any(issue["code"] == "integration_secret_unready" for issue in payload["data"]["issues"])
+    assert "openproject-secret" not in rendered
 
 
 def test_unlock_json_reports_redacted_session_metadata(

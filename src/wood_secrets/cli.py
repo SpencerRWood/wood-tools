@@ -37,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    check_parser = subparsers.add_parser(
+        "check",
+        help="Check configured integration secret references or one explicit reference",
+    )
+    check_parser.add_argument("--ref", help="Secret reference to validate and resolve redacted")
+    check_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    providers_parser = subparsers.add_parser("providers", help="List registered secret providers")
+    providers_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     status_parser = subparsers.add_parser("status", help="Check one provider status")
     status_parser.add_argument(
         "--provider",
@@ -101,6 +111,41 @@ def main(argv: list[str] | None = None) -> int:
     resolver = SecretResolver()
 
     try:
+        if args.command == "check":
+            payload = resolver.check(args.ref)
+            if args.json:
+                envelope_builder = success_output if payload["ok"] else warning_output
+                summary = (
+                    "Secret reference checks completed."
+                    if payload["ok"]
+                    else "One or more secret references are not ready."
+                )
+                envelope = envelope_builder(
+                    command="check",
+                    mutation="read-only",
+                    summary=summary,
+                    data=payload,
+                    warnings=(
+                        payload.get("checks") if not payload["ok"] and args.ref is None else None
+                    ),
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
+        if args.command == "providers":
+            payload = resolver.providers()
+            if args.json:
+                envelope_builder = success_output if payload["ok"] else warning_output
+                envelope = envelope_builder(
+                    command="providers",
+                    mutation="read-only",
+                    summary="Secret provider listing completed.",
+                    data=payload,
+                    warnings=payload["providers"] if not payload["ok"] else None,
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
         if args.command == "status":
             payload = resolver.status(args.provider)
             if args.json:
