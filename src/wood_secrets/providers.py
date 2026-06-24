@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
 import re
-import shutil
-import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -145,11 +142,21 @@ class SecretProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def unlock(self) -> ProviderStatus:
+    def unlock(
+        self,
+        *,
+        interactive: bool = False,
+        gui: bool = False,
+        write_session: bool = False,
+    ) -> ProviderStatus:
         raise NotImplementedError
 
     @abstractmethod
     def lock(self) -> ProviderStatus:
+        raise NotImplementedError
+
+    @abstractmethod
+    def session_status(self) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
@@ -175,11 +182,29 @@ class EnvironmentSecretProvider(SecretProvider):
             detail="Reads secret values directly from process environment variables.",
         )
 
-    def unlock(self) -> ProviderStatus:
+    def unlock(
+        self,
+        *,
+        interactive: bool = False,
+        gui: bool = False,
+        write_session: bool = False,
+    ) -> ProviderStatus:
         return self.status()
 
     def lock(self) -> ProviderStatus:
         return self.status()
+
+    def session_status(self) -> dict[str, Any]:
+        return {
+            "provider": self.name,
+            "path": None,
+            "exists": False,
+            "protected": False,
+            "source": "environment",
+            "usable": True,
+            "state": "not-applicable",
+            "detail": "Environment provider does not use a runtime session file.",
+        }
 
     def resolve(self, reference: str) -> str:
         if parse_reference_scheme(reference) != self.scheme:
@@ -195,135 +220,3 @@ class EnvironmentSecretProvider(SecretProvider):
         if not value:
             raise MissingSecretError(f"Environment variable {variable} is not set.")
         return value
-
-
-class VaultwardenSecretProvider(SecretProvider):
-    scheme = "vaultwarden"
-    name = "vaultwarden"
-
-    def __init__(
-        self,
-        *,
-        executable: str = "bw",
-        runner: Any | None = None,
-        which: Any | None = None,
-    ) -> None:
-        self.executable = executable
-        self._runner = runner or self._run_command
-        self._which = which or shutil.which
-
-    def _run_command(self, args: list[str]) -> str:
-        try:
-            proc = subprocess.run(
-                [self.executable, *args],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise ProviderUnavailableError(
-                f"Vaultwarden CLI '{self.executable}' was not found on PATH."
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.strip()
-            raise SecretProviderError(
-                f"Vaultwarden CLI command failed: {self.executable} {' '.join(args)} ({stderr})"
-            ) from exc
-        return proc.stdout
-
-    def _run_json(self, args: list[str]) -> Any:
-        output = self._runner(args)
-        try:
-            return json.loads(output)
-        except json.JSONDecodeError as exc:
-            raise SecretProviderError(
-                f"Vaultwarden CLI returned invalid JSON for: {self.executable} {' '.join(args)}"
-            ) from exc
-
-    def status(self) -> ProviderStatus:
-        if self._which(self.executable) is None:
-            return ProviderStatus(
-                name=self.name,
-                scheme=self.scheme,
-                available=False,
-                unlocked=False,
-                configured=False,
-                state="unavailable",
-                detail=f"Vaultwarden CLI '{self.executable}' is not available on PATH.",
-            )
-
-        payload = self._run_json(["status"])
-        cli_status = str(payload.get("status") or "unknown").lower()
-        unlocked = cli_status == "unlocked"
-        if cli_status == "unlocked":
-            state = "ready"
-            detail = "Vaultwarden CLI is unlocked and can resolve references."
-        elif cli_status in {"locked", "unauthenticated"}:
-            state = "locked"
-            detail = f"Vaultwarden CLI reported status '{cli_status}'."
-        else:
-            state = "degraded"
-            detail = f"Vaultwarden CLI reported unexpected status '{cli_status}'."
-
-        return ProviderStatus(
-            name=self.name,
-            scheme=self.scheme,
-            available=True,
-            unlocked=unlocked,
-            configured=True,
-            state=state,
-            detail=detail,
-        )
-
-    def unlock(self) -> ProviderStatus:
-        if self._which(self.executable) is None:
-            raise ProviderUnavailableError(
-                f"Vaultwarden CLI '{self.executable}' was not found on PATH."
-            )
-        self._runner(["unlock", "--check"])
-        return self.status()
-
-    def lock(self) -> ProviderStatus:
-        if self._which(self.executable) is None:
-            raise ProviderUnavailableError(
-                f"Vaultwarden CLI '{self.executable}' was not found on PATH."
-            )
-        self._runner(["lock"])
-        return self.status()
-
-    def resolve(self, reference: str) -> str:
-        status = self.status()
-        if not status.available:
-            raise ProviderUnavailableError(status.detail)
-        if not status.unlocked:
-            raise ProviderLockedError(
-                "Vaultwarden is not unlocked. Unlock it before resolving secrets."
-            )
-
-        ref = parse_vaultwarden_reference(reference)
-        items = self._run_json(["list", "items", "--search", ref.search_term])
-        if not isinstance(items, list):
-            raise SecretProviderError("Unexpected Vaultwarden CLI output while resolving secret.")
-
-        item = choose_vaultwarden_item(items, ref)
-        field_candidates = [
-            ref.field_hint,
-            ref.field_hint.replace("-", "_"),
-            normalize_token(ref.field_hint),
-            "api_token",
-            "token",
-            "password",
-        ]
-
-        resolved = extract_custom_field(item, field_candidates)
-        if resolved:
-            return resolved
-
-        login = item.get("login") or {}
-        password = login.get("password")
-        if isinstance(password, str) and password:
-            return password
-
-        raise MissingSecretError(
-            "Vaultwarden item did not contain a matching custom field or login.password."
-        )

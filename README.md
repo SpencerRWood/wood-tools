@@ -256,15 +256,18 @@ Alias notes:
 
 ### `wood-secrets`
 
-Read-only secret reference utility for validating providers and resolving references without
-printing secret values.
+Secret reference utility for validating providers, managing protected Vaultwarden runtime
+sessions, and resolving references without printing secret values.
 
 Supported commands:
 
-- `wood-secrets check`
+- `wood-secrets status --provider vaultwarden`
+- `wood-secrets unlock --provider vaultwarden --interactive --write-session`
+- `wood-secrets unlock --provider vaultwarden --gui --write-session`
+- `wood-secrets lock --provider vaultwarden`
+- `wood-secrets session --provider vaultwarden`
 - `wood-secrets resolve --ref <reference> --redacted`
 - `wood-secrets doctor`
-- `wood-secrets providers`
 
 Supported reference syntax:
 
@@ -283,18 +286,22 @@ Environment fallback behavior:
 Examples:
 
 ```bash
-wood-secrets check
-wood-secrets check --ref vaultwarden://wood/openproject/prod/api-token --json
+wood-secrets status --provider vaultwarden
+wood-secrets unlock --provider vaultwarden --interactive --write-session
+wood-secrets unlock --provider vaultwarden --gui --write-session
+wood-secrets lock --provider vaultwarden
+wood-secrets session --provider vaultwarden --json
 wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
 wood-secrets doctor --json
-wood-secrets providers --json
 ```
 
 Behavior notes:
 
 - Secret values are never printed by the CLI; resolved output is redacted.
 - `vaultwarden://` references require at least two path segments after the scheme.
-- Vaultwarden provider status includes availability and lock state.
+- Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
+- Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.
+- `wood-secrets unlock --gui` is available on macOS where `osascript` is present.
 
 ### `wood-project`
 
