@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import stat
+from pathlib import Path
 
 import pytest
 
@@ -9,10 +11,13 @@ from wood_secrets.core import SecretResolver
 from wood_secrets.providers import (
     EnvironmentSecretProvider,
     MissingSecretError,
+    ProviderLockedError,
     ProviderStatus,
+    ProviderUnavailableError,
     SecretProvider,
     normalize_env_fallback_name,
 )
+from wood_secrets.vaultwarden import VaultwardenSecretProvider, VaultwardenSessionStore
 
 
 class StubProvider(SecretProvider):
@@ -37,15 +42,34 @@ class StubProvider(SecretProvider):
         )
         self._value = value
         self._error = error
+        self._session = {
+            "provider": "vaultwarden",
+            "path": str(Path.home() / ".wood" / "runtime" / "secrets" / "vaultwarden-session.json"),
+            "exists": True,
+            "protected": True,
+            "source": "file",
+            "usable": True,
+            "state": "ready",
+            "detail": "Stub session ready.",
+        }
 
     def status(self) -> ProviderStatus:
         return self._status
 
-    def unlock(self) -> ProviderStatus:
+    def unlock(
+        self,
+        *,
+        interactive: bool = False,
+        gui: bool = False,
+        write_session: bool = False,
+    ) -> ProviderStatus:
         return self._status
 
     def lock(self) -> ProviderStatus:
         return self._status
+
+    def session_status(self) -> dict[str, object]:
+        return self._session
 
     def resolve(self, reference: str) -> str:
         if self._error is not None:
@@ -56,7 +80,7 @@ class StubProvider(SecretProvider):
 
 
 @pytest.fixture
-def install_stub_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
     def _install(
         *,
         provider: SecretProvider | None = None,
@@ -107,21 +131,19 @@ def test_resolve_uses_environment_fallback_without_printing_secret(
     assert "fallback-secret" not in json.dumps(payload)
 
 
-def test_check_json_lists_provider_status(
+def test_status_json_lists_provider_status(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
     install_stub_resolver()
 
-    code = main(["check", "--json"])
+    code = main(["status", "--provider", "vaultwarden", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "check"
+    assert payload["command"] == "status"
     assert payload["data"]["ok"] is True
-    assert {provider["scheme"] for provider in payload["data"]["providers"]} == {
-        "env",
-        "vaultwarden",
-    }
+    assert payload["data"]["provider"] == "vaultwarden"
+    assert payload["data"]["status"]["scheme"] == "vaultwarden"
 
 
 def test_resolve_invalid_reference_returns_error(
@@ -163,15 +185,135 @@ def test_doctor_reports_locked_provider(
     assert payload["data"]["issues"][0]["code"] == "provider_locked"
 
 
-def test_providers_output_is_redacted_by_design(
+def test_unlock_json_reports_redacted_session_metadata(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
     install_stub_resolver()
 
-    code = main(["providers", "--json"])
+    code = main(
+        [
+            "unlock",
+            "--provider",
+            "vaultwarden",
+            "--interactive",
+            "--write-session",
+            "--json",
+        ]
+    )
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     rendered = json.dumps(payload)
+    assert payload["command"] == "unlock"
+    assert payload["data"]["session"]["protected"] is True
+    assert payload["data"]["write_session"] is True
     assert "super-secret-token" not in rendered
-    assert payload["data"]["providers"][0]["supports_env_fallback"] is True
+
+
+def test_session_json_reports_runtime_session_without_secret_value(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver()
+
+    code = main(["session", "--provider", "vaultwarden", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    assert payload["command"] == "session"
+    assert payload["data"]["session"]["state"] == "ready"
+    assert "super-secret-token" not in rendered
+
+
+def test_lock_json_reports_locked_state(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver(
+        provider=StubProvider(
+            status=ProviderStatus(
+                name="vaultwarden",
+                scheme="vaultwarden",
+                available=True,
+                unlocked=False,
+                configured=True,
+                state="locked",
+                detail="Vaultwarden CLI reported status 'locked'.",
+            ),
+        )
+    )
+
+    code = main(["lock", "--provider", "vaultwarden", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "lock"
+    assert payload["data"]["ok"] is True
+    assert payload["data"]["status"]["state"] == "locked"
+
+
+def test_vaultwarden_unlock_writes_protected_runtime_session_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_file = tmp_path / "runtime" / "vaultwarden-session.json"
+    calls: list[tuple[list[str], str | None, str | None]] = []
+
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        calls.append((args, input_text, session_token))
+        if args == ["unlock", "--raw"]:
+            return "session-token\n"
+        if args == ["status"]:
+            return json.dumps({"status": "locked"})
+        if args[:3] == ["list", "items", "--search"]:
+            return "[]"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=session_file, project_root=tmp_path / "project"),
+        environ={},
+    )
+    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+
+    status = provider.unlock(interactive=True, write_session=True)
+
+    assert status.unlocked is True
+    assert session_file.exists()
+    assert stat.S_IMODE(session_file.stat().st_mode) == 0o600
+    assert "session-token" not in provider.session_status()["detail"]
+    payload = json.loads(session_file.read_text(encoding="utf-8"))
+    assert payload["session_token"] == "session-token"
+    assert calls[0] == (["unlock", "--raw"], "master-password", None)
+
+
+def test_vaultwarden_session_file_must_live_outside_project_root(tmp_path: Path) -> None:
+    session_store = VaultwardenSessionStore(
+        path=tmp_path / "project" / ".wood" / "vaultwarden-session.json",
+        project_root=tmp_path / "project",
+    )
+
+    with pytest.raises(ProviderUnavailableError, match="outside the current project root"):
+        session_store.write_token("session-token")
+
+
+def test_vaultwarden_resolve_fails_closed_when_locked_and_reference_missing_session(
+    tmp_path: Path,
+) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "locked"})
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={},
+    )
+
+    with pytest.raises(ProviderLockedError, match="not unlocked"):
+        provider.resolve("vaultwarden://wood/prod/api-token")

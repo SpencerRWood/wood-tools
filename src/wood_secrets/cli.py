@@ -37,9 +37,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    check_parser = subparsers.add_parser("check", help="Check provider readiness or one reference")
-    check_parser.add_argument("--ref", help="Secret reference to validate")
-    check_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    status_parser = subparsers.add_parser("status", help="Check one provider status")
+    status_parser.add_argument(
+        "--provider",
+        default="vaultwarden",
+        choices=("vaultwarden", "env"),
+        help="Provider name to inspect",
+    )
+    status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    unlock_parser = subparsers.add_parser("unlock", help="Unlock one provider")
+    unlock_parser.add_argument(
+        "--provider",
+        default="vaultwarden",
+        choices=("vaultwarden",),
+        help="Provider name to unlock",
+    )
+    unlock_mode = unlock_parser.add_mutually_exclusive_group(required=True)
+    unlock_mode.add_argument("--interactive", action="store_true", help="Prompt in the terminal")
+    unlock_mode.add_argument("--gui", action="store_true", help="Prompt with a GUI dialog")
+    unlock_parser.add_argument(
+        "--write-session",
+        action="store_true",
+        help="Write the unlocked session token to the protected runtime session file",
+    )
+    unlock_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    lock_parser = subparsers.add_parser("lock", help="Lock one provider")
+    lock_parser.add_argument(
+        "--provider",
+        default="vaultwarden",
+        choices=("vaultwarden",),
+        help="Provider name to lock",
+    )
+    lock_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    session_parser = subparsers.add_parser("session", help="Inspect runtime session status")
+    session_parser.add_argument(
+        "--provider",
+        default="vaultwarden",
+        choices=("vaultwarden", "env"),
+        help="Provider name to inspect",
+    )
+    session_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     resolve_parser = subparsers.add_parser("resolve", help="Resolve one secret reference")
     resolve_parser.add_argument("--ref", required=True, help="Secret reference to resolve")
@@ -52,9 +92,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
-
-    providers_parser = subparsers.add_parser("providers", help="List registered providers")
-    providers_parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
 
 
@@ -64,13 +101,54 @@ def main(argv: list[str] | None = None) -> int:
     resolver = SecretResolver()
 
     try:
-        if args.command == "check":
-            payload = resolver.check(reference=args.ref)
+        if args.command == "status":
+            payload = resolver.status(args.provider)
             if args.json:
                 envelope = success_output(
-                    command="check",
+                    command="status",
                     mutation="read-only",
                     summary="Secret provider checks completed.",
+                    data=payload,
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
+        if args.command == "unlock":
+            payload = resolver.unlock(
+                args.provider,
+                interactive=args.interactive,
+                gui=args.gui,
+                write_session=args.write_session,
+            )
+            if args.json:
+                envelope = success_output(
+                    command="unlock",
+                    mutation="mutating",
+                    summary="Unlocked secret provider session.",
+                    data=payload,
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
+        if args.command == "lock":
+            payload = resolver.lock(args.provider)
+            if args.json:
+                envelope = success_output(
+                    command="lock",
+                    mutation="mutating",
+                    summary="Locked secret provider session.",
+                    data=payload,
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
+        if args.command == "session":
+            payload = resolver.session(args.provider)
+            if args.json:
+                envelope = success_output(
+                    command="session",
+                    mutation="read-only",
+                    summary="Secret runtime session status completed.",
                     data=payload,
                 )
                 return _emit(envelope, json_output=True)
@@ -105,27 +183,14 @@ def main(argv: list[str] | None = None) -> int:
                 return _emit(envelope, json_output=True)
             return _emit(payload, json_output=False)
 
-        if args.command == "providers":
-            payload = {
-                "providers": [status.to_dict() for status in resolver.provider_statuses()],
-            }
-            if args.json:
-                envelope = success_output(
-                    command="providers",
-                    mutation="read-only",
-                    summary="Listed registered secret providers.",
-                    data=payload,
-                )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
-
         parser.error("Unknown command")
         return 2
     except SecretProviderError as exc:
+        mutation = "mutating" if args.command in {"unlock", "lock"} else "read-only"
         if getattr(args, "json", False):
             payload = error_output(
                 command=args.command,
-                mutation="read-only",
+                mutation=mutation,
                 summary=str(exc),
                 errors=[{"message": str(exc)}],
                 next_actions=[

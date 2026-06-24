@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from wood_config.core import ConfigError, build_paths, load_config
 
 from .providers import (
     EnvironmentSecretProvider,
@@ -13,11 +16,11 @@ from .providers import (
     ProviderUnavailableError,
     SecretProvider,
     SecretProviderError,
-    VaultwardenSecretProvider,
     normalize_env_fallback_name,
     parse_reference_scheme,
     parse_vaultwarden_reference,
 )
+from .vaultwarden import VaultwardenSecretProvider, VaultwardenSessionStore
 
 
 @dataclass(frozen=True)
@@ -48,9 +51,36 @@ def build_default_registry(
     environ: dict[str, str] | None = None,
 ) -> dict[str, SecretProvider]:
     env = environ if environ is not None else os.environ
+    executable = "bw"
+    session_file: str | None = None
+
+    try:
+        config = load_config(build_paths())
+        active_profile = str(config["active_profile"])
+        profile = config["profiles"].get(active_profile, {})
+        integrations = profile.get("integrations", {}) if isinstance(profile, dict) else {}
+        vaultwarden = integrations.get("vaultwarden", {}) if isinstance(integrations, dict) else {}
+        if isinstance(vaultwarden, dict):
+            cli = vaultwarden.get("cli", {})
+            if isinstance(cli, dict):
+                executable_value = cli.get("executable")
+                if isinstance(executable_value, str) and executable_value.strip():
+                    executable = executable_value
+            session_value = vaultwarden.get("session_file")
+            if isinstance(session_value, str) and session_value.strip():
+                session_file = session_value
+    except (ConfigError, OSError, KeyError, TypeError, ValueError):
+        pass
+
     return {
         "env": EnvironmentSecretProvider(environ=env),
-        "vaultwarden": VaultwardenSecretProvider(),
+        "vaultwarden": VaultwardenSecretProvider(
+            executable=executable,
+            environ=env,
+            session_store=VaultwardenSessionStore(
+                path=None if session_file is None else Path(os.path.expanduser(session_file))
+            ),
+        ),
     }
 
 
@@ -124,6 +154,54 @@ class SecretResolver:
         validated["provider_status"] = provider_status
         validated["ok"] = provider_status["available"]
         return validated
+
+    def status(self, provider_name: str) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        status = provider.status().to_dict()
+        return {
+            "ok": status["available"] and status["unlocked"],
+            "provider": provider_name,
+            "status": status,
+        }
+
+    def unlock(
+        self,
+        provider_name: str,
+        *,
+        interactive: bool = False,
+        gui: bool = False,
+        write_session: bool = False,
+    ) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        status = provider.unlock(
+            interactive=interactive,
+            gui=gui,
+            write_session=write_session,
+        ).to_dict()
+        return {
+            "ok": status["available"] and status["unlocked"],
+            "provider": provider_name,
+            "status": status,
+            "session": provider.session_status(),
+            "write_session": write_session,
+        }
+
+    def lock(self, provider_name: str) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        status = provider.lock().to_dict()
+        return {
+            "ok": status["available"] and not status["unlocked"],
+            "provider": provider_name,
+            "status": status,
+            "session": provider.session_status(),
+        }
+
+    def session(self, provider_name: str) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        return {
+            "provider": provider_name,
+            "session": provider.session_status(),
+        }
 
     def doctor(self) -> dict[str, Any]:
         statuses = [status.to_dict() for status in self.provider_statuses()]
