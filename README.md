@@ -220,7 +220,7 @@ Global option:
           "token_ref": "env://NTFY_TOKEN"
         },
         "vaultwarden": {
-          "url": null,
+          "url": "https://vault.example.test",
           "config_ref": "env://VAULTWARDEN_CONFIG",
           "session_file": "~/.config/wood-tools/vaultwarden-session.json",
           "cli": {
@@ -276,6 +276,8 @@ Supported reference syntax:
 
 - `env://NAME` reads a secret directly from the `NAME` environment variable
 - `vaultwarden://<path>/<field>` resolves a Vaultwarden/Bitwarden secret from the `bw` CLI
+  after `wood-secrets` confirms the active `bw` server matches
+  `integrations.vaultwarden.url` from the active `wood-config` profile
 
 Environment fallback behavior:
 
@@ -305,6 +307,9 @@ Behavior notes:
 
 - Secret values are never printed by the CLI; resolved output is redacted.
 - `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
+- `wood-secrets` reads `integrations.vaultwarden.url` from the active `wood-config` profile.
+- `wood-secrets unlock --provider vaultwarden ...` applies that configured URL with `bw config server <url>` before unlocking.
+- Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
 - Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.

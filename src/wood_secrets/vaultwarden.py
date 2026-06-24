@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from getpass import getpass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .providers import (
     MissingSecretError,
@@ -199,6 +200,7 @@ class VaultwardenSecretProvider(SecretProvider):
         self,
         *,
         executable: str = "bw",
+        server_url: str | None = None,
         runner: Callable[..., str] | None = None,
         which: Callable[[str], str | None] | None = None,
         session_store: VaultwardenSessionStore | None = None,
@@ -207,12 +209,58 @@ class VaultwardenSecretProvider(SecretProvider):
         environ: dict[str, str] | None = None,
     ) -> None:
         self.executable = executable
+        self.server_url = self._normalize_server_url(server_url)
         self._runner = runner or self._run_command
         self._which = which or shutil.which
         self._session_store = session_store or VaultwardenSessionStore()
         self._password_prompt = password_prompt or prompt_for_password_macos
         self._system_name = system_name or platform.system()
         self._environ = environ if environ is not None else os.environ
+
+    @staticmethod
+    def _normalize_server_url(server_url: str | None) -> str | None:
+        if server_url is None:
+            return None
+        value = server_url.strip()
+        if not value:
+            return None
+        parsed = urlsplit(value)
+        normalized = parsed.geturl().rstrip("/")
+        return normalized or None
+
+    def _configured_server(self) -> str:
+        return self._runner(["config", "server"]).strip()
+
+    def _ensure_server_configured(self) -> None:
+        if not self.server_url:
+            return
+        current_server = self._normalize_server_url(self._configured_server())
+        if current_server == self.server_url:
+            return
+        try:
+            self._runner(["config", "server", self.server_url])
+        except SecretProviderError as exc:
+            # Bitwarden CLI requires a logout before changing the configured server.
+            if "Logout required before server config update." not in str(exc):
+                raise
+            self._runner(["logout"])
+            self._environ.pop("BW_SESSION", None)
+            self._session_store.clear()
+            self._runner(["config", "server", self.server_url])
+
+    def _server_mismatch_detail(self) -> str | None:
+        if not self.server_url:
+            return None
+        current_server = self._normalize_server_url(self._configured_server())
+        if current_server == self.server_url:
+            return None
+        current_display = current_server or "<unset>"
+        return (
+            "Vaultwarden CLI server does not match wood-config. "
+            f"Configured {self.server_url}; active CLI server {current_display}. "
+            "Run 'wood-secrets unlock --provider vaultwarden --interactive --write-session' "
+            "to apply the configured server."
+        )
 
     def _run_command(
         self,
@@ -284,6 +332,17 @@ class VaultwardenSecretProvider(SecretProvider):
 
         payload = self._run_json(["status"])
         cli_status = str(payload.get("status") or "unknown").lower()
+        mismatch_detail = self._server_mismatch_detail()
+        if mismatch_detail:
+            return ProviderStatus(
+                name=self.name,
+                scheme=self.scheme,
+                available=True,
+                unlocked=False,
+                configured=False,
+                state="misconfigured",
+                detail=mismatch_detail,
+            )
         token = self._current_session_token()
         session_usable = self._session_usable(token)
 
@@ -338,6 +397,7 @@ class VaultwardenSecretProvider(SecretProvider):
         if gui and self._system_name != "Darwin":
             raise ProviderUnavailableError("GUI unlock is only available on macOS.")
 
+        self._ensure_server_configured()
         password = self._password_prompt() if gui else getpass("Vaultwarden master password: ")
         if not password:
             raise SecretProviderError("Vaultwarden unlock requires a non-empty password.")
@@ -375,6 +435,8 @@ class VaultwardenSecretProvider(SecretProvider):
     def resolve(self, reference: str) -> str:
         status = self.status()
         if not status.available:
+            raise ProviderUnavailableError(status.detail)
+        if not status.configured:
             raise ProviderUnavailableError(status.detail)
         if not status.unlocked:
             raise ProviderLockedError(

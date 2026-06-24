@@ -60,6 +60,7 @@ def build_default_registry(
     env = environ if environ is not None else os.environ
     executable = "bw"
     session_file: str | None = None
+    server_url: str | None = None
 
     try:
         config = load_config(build_paths())
@@ -73,6 +74,9 @@ def build_default_registry(
                 executable_value = cli.get("executable")
                 if isinstance(executable_value, str) and executable_value.strip():
                     executable = executable_value
+            url_value = vaultwarden.get("url")
+            if isinstance(url_value, str) and url_value.strip():
+                server_url = url_value.strip()
             session_value = vaultwarden.get("session_file")
             if isinstance(session_value, str) and session_value.strip():
                 session_file = session_value
@@ -83,6 +87,7 @@ def build_default_registry(
         "env": EnvironmentSecretProvider(environ=env),
         "vaultwarden": VaultwardenSecretProvider(
             executable=executable,
+            server_url=server_url,
             environ=env,
             session_store=VaultwardenSessionStore(
                 path=None if session_file is None else Path(os.path.expanduser(session_file))
@@ -270,7 +275,7 @@ class SecretResolver:
         provider = self.get_provider(provider_name)
         status = provider.status().to_dict()
         return {
-            "ok": status["available"] and status["unlocked"],
+            "ok": status["available"] and status["configured"] and status["unlocked"],
             "provider": provider_name,
             "status": status,
         }
@@ -290,7 +295,7 @@ class SecretResolver:
             write_session=write_session,
         ).to_dict()
         return {
-            "ok": status["available"] and status["unlocked"],
+            "ok": status["available"] and status["configured"] and status["unlocked"],
             "provider": provider_name,
             "status": status,
             "session": provider.session_status(),
@@ -301,7 +306,7 @@ class SecretResolver:
         provider = self.get_provider(provider_name)
         status = provider.lock().to_dict()
         return {
-            "ok": status["available"] and not status["unlocked"],
+            "ok": status["available"] and status["configured"] and not status["unlocked"],
             "provider": provider_name,
             "status": status,
             "session": provider.session_status(),
@@ -333,6 +338,14 @@ class SecretResolver:
                 issues.append(
                     {
                         "code": "provider_unavailable",
+                        "provider": status["name"],
+                        "message": status["detail"],
+                    }
+                )
+            elif not status["configured"]:
+                issues.append(
+                    {
+                        "code": "provider_misconfigured",
                         "provider": status["name"],
                         "message": status["detail"],
                     }

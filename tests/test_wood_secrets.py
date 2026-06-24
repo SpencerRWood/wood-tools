@@ -15,6 +15,7 @@ from wood_secrets.providers import (
     ProviderStatus,
     ProviderUnavailableError,
     SecretProvider,
+    SecretProviderError,
     normalize_env_fallback_name,
 )
 from wood_secrets.vaultwarden import VaultwardenSecretProvider, VaultwardenSessionStore
@@ -83,6 +84,7 @@ def make_config_document(
     *,
     openproject_ref: str | None = None,
     ntfy_ref: str | None = None,
+    vaultwarden_url: str | None = None,
 ) -> dict[str, object]:
     return {
         "version": 1,
@@ -97,6 +99,7 @@ def make_config_document(
                         "token_ref": ntfy_ref,
                     },
                     "vaultwarden": {
+                        "url": vaultwarden_url,
                         "session_file": None,
                         "cli": {"executable": "bw"},
                     },
@@ -291,6 +294,32 @@ def test_doctor_reports_locked_provider(
     assert any(issue["code"] == "provider_locked" for issue in payload["data"]["issues"])
 
 
+def test_doctor_reports_misconfigured_provider(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver(
+        provider=StubProvider(
+            status=ProviderStatus(
+                name="vaultwarden",
+                scheme="vaultwarden",
+                available=True,
+                unlocked=False,
+                configured=False,
+                state="misconfigured",
+                detail="Vaultwarden CLI server does not match wood-config.",
+            ),
+            error=ProviderUnavailableError("server mismatch"),
+        )
+    )
+
+    code = main(["doctor", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "warning"
+    assert any(issue["code"] == "provider_misconfigured" for issue in payload["data"]["issues"])
+
+
 def test_doctor_reports_integration_secret_issue_without_printing_secret(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -415,6 +444,133 @@ def test_vaultwarden_unlock_writes_protected_runtime_session_file(
     assert calls[0] == (["unlock", "--raw"], "master-password", None)
 
 
+def test_vaultwarden_status_reports_configured_server_mismatch(tmp_path: Path) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["config", "server"]:
+            return "https://vault.other.example\n"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        server_url="https://vault.example.test/",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={},
+    )
+
+    status = provider.status()
+
+    assert status.available is True
+    assert status.configured is False
+    assert status.unlocked is False
+    assert status.state == "misconfigured"
+    assert "https://vault.example.test" in status.detail
+    assert "https://vault.other.example" in status.detail
+
+
+def test_vaultwarden_unlock_applies_configured_server_before_unlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], str | None, str | None]] = []
+    current_server = "https://vault.other.example"
+
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        nonlocal current_server
+        calls.append((args, input_text, session_token))
+        if args == ["config", "server"]:
+            return f"{current_server}\n"
+        if args == ["config", "server", "https://vault.example.test"]:
+            current_server = "https://vault.example.test"
+            return "https://vault.example.test\n"
+        if args == ["unlock", "--raw"]:
+            return "session-token\n"
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args[:3] == ["list", "items", "--search"]:
+            return "[]"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        server_url="https://vault.example.test",
+        session_store=VaultwardenSessionStore(
+            path=tmp_path / "runtime" / "vaultwarden-session.json"
+        ),
+        environ={},
+    )
+    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+
+    status = provider.unlock(interactive=True, write_session=False)
+
+    assert status.unlocked is True
+    assert status.configured is True
+    assert calls[0] == (["config", "server"], None, None)
+    assert calls[1] == (["config", "server", "https://vault.example.test"], None, None)
+    assert calls[2] == (["unlock", "--raw"], "master-password", None)
+
+
+def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], str | None, str | None]] = []
+    configured_once = False
+    current_server = "https://vault.other.example"
+
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        nonlocal configured_once
+        nonlocal current_server
+        calls.append((args, input_text, session_token))
+        if args == ["config", "server"]:
+            return f"{current_server}\n"
+        if args == ["config", "server", "https://vault.example.test"]:
+            if not configured_once:
+                configured_once = True
+                raise SecretProviderError(
+                    "Vaultwarden CLI command failed: bw config server https://vault.example.test "
+                    "(Logout required before server config update.)"
+                )
+            current_server = "https://vault.example.test"
+            return "https://vault.example.test\n"
+        if args == ["logout"]:
+            return ""
+        if args == ["unlock", "--raw"]:
+            return "session-token\n"
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args[:3] == ["list", "items", "--search"]:
+            return "[]"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        server_url="https://vault.example.test",
+        session_store=VaultwardenSessionStore(
+            path=tmp_path / "runtime" / "vaultwarden-session.json"
+        ),
+        environ={"BW_SESSION": "stale-session"},
+    )
+    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+
+    status = provider.unlock(interactive=True, write_session=False)
+
+    assert status.unlocked is True
+    assert calls[0] == (["config", "server"], None, None)
+    assert calls[1] == (["config", "server", "https://vault.example.test"], None, None)
+    assert calls[2] == (["logout"], None, None)
+    assert calls[3] == (["config", "server", "https://vault.example.test"], None, None)
+    assert calls[4] == (["unlock", "--raw"], "master-password", None)
+
+
 def test_vaultwarden_session_file_must_live_outside_project_root(tmp_path: Path) -> None:
     session_store = VaultwardenSessionStore(
         path=tmp_path / "project" / ".wood" / "vaultwarden-session.json",
@@ -443,4 +599,26 @@ def test_vaultwarden_resolve_fails_closed_when_locked_and_reference_missing_sess
     )
 
     with pytest.raises(ProviderLockedError, match="not unlocked"):
+        provider.resolve("vaultwarden://wood/prod/api-token")
+
+
+def test_vaultwarden_resolve_fails_closed_when_configured_server_mismatches(tmp_path: Path) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["config", "server"]:
+            return "https://vault.other.example\n"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        server_url="https://vault.example.test",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={},
+    )
+
+    with pytest.raises(ProviderUnavailableError, match="does not match wood-config"):
         provider.resolve("vaultwarden://wood/prod/api-token")
