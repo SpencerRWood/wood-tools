@@ -6,6 +6,7 @@ Deterministic Python CLI tooling for project delivery workflows.
 
 - `wood-config` for local config initialization, profile management, validation, and diagnostics
 - `wood-project` for workspace `project.json` initialization, display, and validation
+- `wood-secrets` for provider health checks and redacted secret reference resolution
 - `scripts/init_project.py` for scaffolding a Wood-tools-style project
 - `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
 - `scripts/openproject_next_story.py` for read-only next-story selection from OpenProject
@@ -252,6 +253,48 @@ Alias notes:
 - The object form uses `path` for the canonical NAS-backed location and `targets` for candidate local mount paths checked in order.
 - Legacy string aliases such as `"demo": "./projects/demo"` are still accepted and resolve as a single direct target.
 - `show`, `get`, `validate`, and `doctor` include alias resolution metadata so you can see which target matched on the current machine.
+
+### `wood-secrets`
+
+Read-only secret reference utility for validating providers and resolving references without
+printing secret values.
+
+Supported commands:
+
+- `wood-secrets check`
+- `wood-secrets resolve --ref <reference> --redacted`
+- `wood-secrets doctor`
+- `wood-secrets providers`
+
+Supported reference syntax:
+
+- `env://NAME` reads a secret directly from the `NAME` environment variable
+- `vaultwarden://<path>/<field>` resolves a Vaultwarden/Bitwarden secret from the `bw` CLI
+
+Environment fallback behavior:
+
+- For any reference, Wood-tools also recognizes an override environment variable named
+  `WOOD_SECRETS_REF_<NORMALIZED_REFERENCE>`.
+- Example:
+  `vaultwarden://wood/openproject/prod/api-token` maps to
+  `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN`.
+- Fallback values are resolved in memory only and are still emitted as `[REDACTED]`.
+
+Examples:
+
+```bash
+wood-secrets check
+wood-secrets check --ref vaultwarden://wood/openproject/prod/api-token --json
+wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
+wood-secrets doctor --json
+wood-secrets providers --json
+```
+
+Behavior notes:
+
+- Secret values are never printed by the CLI; resolved output is redacted.
+- `vaultwarden://` references require at least two path segments after the scheme.
+- Vaultwarden provider status includes availability and lock state.
 
 ### `wood-project`
 
