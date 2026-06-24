@@ -269,6 +269,9 @@ Supported commands:
 - `wood-secrets unlock --provider vaultwarden --gui --write-session`
 - `wood-secrets lock --provider vaultwarden`
 - `wood-secrets session --provider vaultwarden`
+- `wood-secrets list --provider vaultwarden`
+- `wood-secrets exec --env <NAME> --ref <reference> -- <command> ...`
+- `wood-secrets exec NAME=<reference> [OTHER_NAME=<reference> ...] -- <command> ...`
 - `wood-secrets resolve --ref <reference> --redacted`
 - `wood-secrets doctor`
 
@@ -276,6 +279,8 @@ Supported reference syntax:
 
 - `env://NAME` reads a secret directly from the `NAME` environment variable
 - `vaultwarden://<path>/<field>` resolves a Vaultwarden/Bitwarden secret from the `bw` CLI
+- `vaultwarden://<path>/<item>#<field-name>` resolves a specific field from a matched item when
+  the field name differs from the item-name suffix
   after `wood-secrets` confirms the active `bw` server matches
   `integrations.vaultwarden.url` from the active `wood-config` profile
 
@@ -286,6 +291,10 @@ Environment fallback behavior:
 - Example:
   `vaultwarden://wood/openproject/prod/api-token` maps to
   `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN`.
+- Explicit field selectors remain part of the normalized fallback name.
+- Example:
+  `vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN` maps to
+  `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN_OPENPROJECT_API_TOKEN`.
 - Fallback values are resolved in memory only and are still emitted as `[REDACTED]`.
 
 Examples:
@@ -299,7 +308,12 @@ wood-secrets unlock --provider vaultwarden --interactive --write-session
 wood-secrets unlock --provider vaultwarden --gui --write-session
 wood-secrets lock --provider vaultwarden
 wood-secrets session --provider vaultwarden --json
+wood-secrets list --provider vaultwarden --search openproject --json
+wood-secrets exec --env OPENPROJECT_TOKEN --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' OTHER_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
 wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
+wood-secrets resolve --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' --redacted
 wood-secrets doctor --json
 ```
 
@@ -309,8 +323,13 @@ Behavior notes:
 - `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
 - `wood-secrets` reads `integrations.vaultwarden.url` from the active `wood-config` profile.
 - `wood-secrets unlock --provider vaultwarden ...` applies that configured URL with `bw config server <url>` before unlocking.
+- `wood-secrets unlock --provider vaultwarden ...` uses `bw unlock --passwordenv ...` for compatibility with current Bitwarden CLI releases.
+- `wood-secrets list --provider vaultwarden ...` lists only item names, field names, and whether a login password exists; it never prints secret values.
+- `wood-secrets exec --env NAME --ref ... -- command ...` resolves a secret locally, injects it only into the child process environment, and does not print the secret value itself.
+- `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
+- `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
 - Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.
 - `wood-secrets unlock --gui` is available on macOS where `osascript` is present.

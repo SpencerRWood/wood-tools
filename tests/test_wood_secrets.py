@@ -18,7 +18,11 @@ from wood_secrets.providers import (
     SecretProviderError,
     normalize_env_fallback_name,
 )
-from wood_secrets.vaultwarden import VaultwardenSecretProvider, VaultwardenSessionStore
+from wood_secrets.vaultwarden import (
+    UNLOCK_PASSWORD_ENV,
+    VaultwardenSecretProvider,
+    VaultwardenSessionStore,
+)
 
 
 class StubProvider(SecretProvider):
@@ -79,6 +83,22 @@ class StubProvider(SecretProvider):
             raise MissingSecretError(f"Missing stub secret for {reference}")
         return self._value
 
+    def list_entries(self, *, search: str | None = None) -> dict[str, object]:
+        if self._error is not None:
+            raise self._error
+        return {
+            "provider": "vaultwarden",
+            "search": search,
+            "count": 1,
+            "items": [
+                {
+                    "name": "wood / openproject / prod",
+                    "field_names": ["api-token", "username"],
+                    "has_login_password": True,
+                }
+            ],
+        }
+
 
 def make_config_document(
     *,
@@ -114,6 +134,7 @@ def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
     def _install(
         *,
         provider: SecretProvider | None = None,
+        command_runner: object | None = None,
         environ: dict[str, str] | None = None,
         config_document: dict[str, object] | None = None,
     ) -> None:
@@ -128,7 +149,11 @@ def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
         }
         monkeypatch.setattr(
             "wood_secrets.cli.SecretResolver",
-            lambda: SecretResolver(providers=providers, environ=environ or {}),
+            lambda: SecretResolver(
+                providers=providers,
+                command_runner=command_runner,
+                environ=environ or {},
+            ),
         )
 
     return _install
@@ -140,6 +165,26 @@ def test_resolve_redacted_success_path(
     install_stub_resolver()
 
     code = main(["resolve", "--ref", "vaultwarden://wood/prod/api-token", "--redacted"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[REDACTED]" in out
+    assert "super-secret-token" not in out
+
+
+def test_resolve_redacted_success_path_with_explicit_field_selector(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver()
+
+    code = main(
+        [
+            "resolve",
+            "--ref",
+            "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "--redacted",
+        ]
+    )
 
     assert code == 0
     out = capsys.readouterr().out
@@ -258,6 +303,17 @@ def test_resolve_invalid_reference_returns_error(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "error"
     assert "scheme" in payload["summary"]
+
+
+def test_resolve_invalid_explicit_field_reference_returns_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["resolve", "--ref", "vaultwarden://#FIELD_NAME", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert "at least two path segments" in payload["summary"]
 
 
 def test_doctor_reports_locked_provider(
@@ -381,6 +437,106 @@ def test_session_json_reports_runtime_session_without_secret_value(
     assert "super-secret-token" not in rendered
 
 
+def test_list_json_reports_item_and_field_names_without_secret_values(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    install_stub_resolver()
+
+    code = main(["list", "--provider", "vaultwarden", "--search", "openproject", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    assert payload["command"] == "list"
+    assert payload["data"]["provider"] == "vaultwarden"
+    assert payload["data"]["search"] == "openproject"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["items"][0]["field_names"] == ["api-token", "username"]
+    assert "super-secret-token" not in rendered
+
+
+def test_exec_injects_secret_into_child_process_without_printing_secret(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def runner(command: list[str], *, env: dict[str, str]) -> int:
+        calls.append((command, env))
+        return 0
+
+    install_stub_resolver(command_runner=runner)
+
+    code = main(
+        [
+            "exec",
+            "--env",
+            "OPENPROJECT_TOKEN",
+            "--ref",
+            "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "--",
+            "env",
+        ]
+    )
+
+    assert code == 0
+    assert calls[0][0] == ["env"]
+    assert calls[0][1]["OPENPROJECT_TOKEN"] == "super-secret-token"
+    assert "super-secret-token" not in capsys.readouterr().out
+
+
+def test_exec_supports_inline_binding_syntax(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def runner(command: list[str], *, env: dict[str, str]) -> int:
+        calls.append((command, env))
+        return 0
+
+    install_stub_resolver(command_runner=runner)
+
+    code = main(
+        [
+            "exec",
+            "OPENPROJECT_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "--",
+            "env",
+        ]
+    )
+
+    assert code == 0
+    assert calls[0][0] == ["env"]
+    assert calls[0][1]["OPENPROJECT_TOKEN"] == "super-secret-token"
+    assert "super-secret-token" not in capsys.readouterr().out
+
+
+def test_exec_supports_multiple_inline_bindings(
+    install_stub_resolver, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def runner(command: list[str], *, env: dict[str, str]) -> int:
+        calls.append((command, env))
+        return 0
+
+    install_stub_resolver(command_runner=runner)
+
+    code = main(
+        [
+            "exec",
+            "OPENPROJECT_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "SECOND_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "--",
+            "env",
+        ]
+    )
+
+    assert code == 0
+    assert calls[0][1]["OPENPROJECT_TOKEN"] == "super-secret-token"
+    assert calls[0][1]["SECOND_TOKEN"] == "super-secret-token"
+    assert "super-secret-token" not in capsys.readouterr().out
+
+
 def test_lock_json_reports_locked_state(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -412,12 +568,14 @@ def test_vaultwarden_unlock_writes_protected_runtime_session_file(
 ) -> None:
     session_file = tmp_path / "runtime" / "vaultwarden-session.json"
     calls: list[tuple[list[str], str | None, str | None]] = []
+    environ: dict[str, str] = {}
 
     def runner(
         args: list[str], *, input_text: str | None = None, session_token: str | None = None
     ) -> str:
         calls.append((args, input_text, session_token))
-        if args == ["unlock", "--raw"]:
+        if args == ["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]:
+            assert environ[UNLOCK_PASSWORD_ENV] == "master-password"
             return "session-token\n"
         if args == ["status"]:
             return json.dumps({"status": "locked"})
@@ -429,7 +587,7 @@ def test_vaultwarden_unlock_writes_protected_runtime_session_file(
         runner=runner,
         which=lambda _: "/usr/bin/bw",
         session_store=VaultwardenSessionStore(path=session_file, project_root=tmp_path / "project"),
-        environ={},
+        environ=environ,
     )
     monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
 
@@ -439,9 +597,10 @@ def test_vaultwarden_unlock_writes_protected_runtime_session_file(
     assert session_file.exists()
     assert stat.S_IMODE(session_file.stat().st_mode) == 0o600
     assert "session-token" not in provider.session_status()["detail"]
+    assert UNLOCK_PASSWORD_ENV not in environ
     payload = json.loads(session_file.read_text(encoding="utf-8"))
     assert payload["session_token"] == "session-token"
-    assert calls[0] == (["unlock", "--raw"], "master-password", None)
+    assert calls[0] == (["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV], None, None)
 
 
 def test_vaultwarden_status_reports_configured_server_mismatch(tmp_path: Path) -> None:
@@ -477,6 +636,7 @@ def test_vaultwarden_unlock_applies_configured_server_before_unlock(
 ) -> None:
     calls: list[tuple[list[str], str | None, str | None]] = []
     current_server = "https://vault.other.example"
+    environ: dict[str, str] = {}
 
     def runner(
         args: list[str], *, input_text: str | None = None, session_token: str | None = None
@@ -488,7 +648,8 @@ def test_vaultwarden_unlock_applies_configured_server_before_unlock(
         if args == ["config", "server", "https://vault.example.test"]:
             current_server = "https://vault.example.test"
             return "https://vault.example.test\n"
-        if args == ["unlock", "--raw"]:
+        if args == ["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]:
+            assert environ[UNLOCK_PASSWORD_ENV] == "master-password"
             return "session-token\n"
         if args == ["status"]:
             return json.dumps({"status": "unlocked"})
@@ -503,7 +664,7 @@ def test_vaultwarden_unlock_applies_configured_server_before_unlock(
         session_store=VaultwardenSessionStore(
             path=tmp_path / "runtime" / "vaultwarden-session.json"
         ),
-        environ={},
+        environ=environ,
     )
     monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
 
@@ -513,7 +674,8 @@ def test_vaultwarden_unlock_applies_configured_server_before_unlock(
     assert status.configured is True
     assert calls[0] == (["config", "server"], None, None)
     assert calls[1] == (["config", "server", "https://vault.example.test"], None, None)
-    assert calls[2] == (["unlock", "--raw"], "master-password", None)
+    assert calls[2] == (["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV], None, None)
+    assert UNLOCK_PASSWORD_ENV not in environ
 
 
 def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
@@ -522,6 +684,7 @@ def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
     calls: list[tuple[list[str], str | None, str | None]] = []
     configured_once = False
     current_server = "https://vault.other.example"
+    environ = {"BW_SESSION": "stale-session"}
 
     def runner(
         args: list[str], *, input_text: str | None = None, session_token: str | None = None
@@ -542,7 +705,8 @@ def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
             return "https://vault.example.test\n"
         if args == ["logout"]:
             return ""
-        if args == ["unlock", "--raw"]:
+        if args == ["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]:
+            assert environ[UNLOCK_PASSWORD_ENV] == "master-password"
             return "session-token\n"
         if args == ["status"]:
             return json.dumps({"status": "unlocked"})
@@ -557,7 +721,7 @@ def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
         session_store=VaultwardenSessionStore(
             path=tmp_path / "runtime" / "vaultwarden-session.json"
         ),
-        environ={"BW_SESSION": "stale-session"},
+        environ=environ,
     )
     monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
 
@@ -568,7 +732,39 @@ def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
     assert calls[1] == (["config", "server", "https://vault.example.test"], None, None)
     assert calls[2] == (["logout"], None, None)
     assert calls[3] == (["config", "server", "https://vault.example.test"], None, None)
-    assert calls[4] == (["unlock", "--raw"], "master-password", None)
+    assert calls[4] == (["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV], None, None)
+    assert UNLOCK_PASSWORD_ENV not in environ
+
+
+def test_vaultwarden_unlock_restores_existing_password_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environ = {UNLOCK_PASSWORD_ENV: "previous-value"}
+
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]:
+            assert environ[UNLOCK_PASSWORD_ENV] == "master-password"
+            return "session-token\n"
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args[:3] == ["list", "items", "--search"]:
+            return "[]"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ=environ,
+    )
+    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+
+    status = provider.unlock(interactive=True, write_session=False)
+
+    assert status.unlocked is True
+    assert environ[UNLOCK_PASSWORD_ENV] == "previous-value"
 
 
 def test_vaultwarden_session_file_must_live_outside_project_root(tmp_path: Path) -> None:
@@ -579,6 +775,16 @@ def test_vaultwarden_session_file_must_live_outside_project_root(tmp_path: Path)
 
     with pytest.raises(ProviderUnavailableError, match="outside the current project root"):
         session_store.write_token("session-token")
+
+
+def test_vaultwarden_session_file_allows_default_runtime_path_outside_explicit_project_context(
+    tmp_path: Path,
+) -> None:
+    session_store = VaultwardenSessionStore(path=tmp_path / "runtime" / "vaultwarden-session.json")
+
+    session_store.write_token("session-token")
+
+    assert session_store.read_token() == "session-token"
 
 
 def test_vaultwarden_resolve_fails_closed_when_locked_and_reference_missing_session(
@@ -622,3 +828,82 @@ def test_vaultwarden_resolve_fails_closed_when_configured_server_mismatches(tmp_
 
     with pytest.raises(ProviderUnavailableError, match="does not match wood-config"):
         provider.resolve("vaultwarden://wood/prod/api-token")
+
+
+def test_vaultwarden_resolve_supports_explicit_field_selector(tmp_path: Path) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["list", "items", "--search", "__wood_tools_session_probe__"]:
+            return "[]"
+        if args == ["list", "items", "--search", "api-token"]:
+            return json.dumps(
+                [
+                    {
+                        "name": "wood / openproject / prod / api-token",
+                        "fields": [
+                            {"name": "OPENPROJECT_API_TOKEN", "value": "secret-token"},
+                            {"name": "username", "value": "spencer"},
+                        ],
+                        "login": {"password": ""},
+                    }
+                ]
+            )
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={"BW_SESSION": "active-session"},
+    )
+
+    resolved = provider.resolve(
+        "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
+    )
+
+    assert resolved == "secret-token"
+
+
+def test_vaultwarden_list_entries_returns_names_only(tmp_path: Path) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["list", "items", "--search", "__wood_tools_session_probe__"]:
+            return "[]"
+        if args == ["list", "items", "--search", "openproject"]:
+            return json.dumps(
+                [
+                    {
+                        "name": "wood / openproject / prod",
+                        "fields": [
+                            {"name": "api-token", "value": "secret-token"},
+                            {"name": "username", "value": "spencer"},
+                        ],
+                        "login": {"password": "super-secret"},
+                    }
+                ]
+            )
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={"BW_SESSION": "active-session"},
+    )
+
+    payload = provider.list_entries(search="openproject")
+
+    assert payload["count"] == 1
+    assert payload["items"] == [
+        {
+            "name": "wood / openproject / prod",
+            "field_names": ["api-token", "username"],
+            "has_login_password": True,
+        }
+    ]

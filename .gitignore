@@ -39,3 +39,4 @@ Thumbs.db
 # Local/generated project files
 docs/*
 AGENTS.md
+.codex/

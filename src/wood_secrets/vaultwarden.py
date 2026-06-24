@@ -30,6 +30,7 @@ from .providers import (
 SESSION_SCHEMA_VERSION = 1
 DEFAULT_SESSION_FILE = Path.home() / ".wood" / "runtime" / "secrets" / "vaultwarden-session.json"
 SESSION_PROBE_SEARCH = "__wood_tools_session_probe__"
+UNLOCK_PASSWORD_ENV = "WOOD_SECRETS_BW_UNLOCK_PASSWORD"
 
 
 @dataclass(frozen=True)
@@ -59,9 +60,11 @@ class VaultwardenSessionStatus:
 class VaultwardenSessionStore:
     def __init__(self, path: Path | None = None, *, project_root: Path | None = None) -> None:
         self.path = (path or DEFAULT_SESSION_FILE).expanduser()
-        self._project_root = (project_root or Path.cwd()).resolve()
+        self._project_root = project_root.resolve() if project_root is not None else None
 
     def _validate_runtime_path(self) -> None:
+        if self._project_root is None:
+            return
         resolved_path = self.path.resolve(strict=False)
         try:
             resolved_path.relative_to(self._project_root)
@@ -401,10 +404,16 @@ class VaultwardenSecretProvider(SecretProvider):
         password = self._password_prompt() if gui else getpass("Vaultwarden master password: ")
         if not password:
             raise SecretProviderError("Vaultwarden unlock requires a non-empty password.")
+        previous_password = self._environ.get(UNLOCK_PASSWORD_ENV)
+        self._environ[UNLOCK_PASSWORD_ENV] = password
         try:
-            token = self._runner(["unlock", "--raw"], input_text=password).strip()
+            token = self._runner(["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]).strip()
         finally:
             password = ""
+            if previous_password is None:
+                self._environ.pop(UNLOCK_PASSWORD_ENV, None)
+            else:
+                self._environ[UNLOCK_PASSWORD_ENV] = previous_password
         if not token:
             raise SecretProviderError("Vaultwarden unlock did not return a session token.")
         self._environ["BW_SESSION"] = token
@@ -474,3 +483,49 @@ class VaultwardenSecretProvider(SecretProvider):
         raise MissingSecretError(
             "Vaultwarden item did not contain a matching custom field or login.password."
         )
+
+    def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
+        status = self.status()
+        if not status.available:
+            raise ProviderUnavailableError(status.detail)
+        if not status.configured:
+            raise ProviderUnavailableError(status.detail)
+        if not status.unlocked:
+            raise ProviderLockedError(
+                "Vaultwarden is not unlocked. Unlock it before listing secret entries."
+            )
+
+        session_token = self._current_session_token()
+        args = ["list", "items"]
+        if search and search.strip():
+            args.extend(["--search", search.strip()])
+        payload = self._run_json(args, session_token=session_token)
+        if not isinstance(payload, list):
+            raise SecretProviderError("Unexpected Vaultwarden CLI output while listing secrets.")
+
+        items: list[dict[str, Any]] = []
+        for item in payload:
+            fields = item.get("fields") or []
+            field_names = [
+                str(field.get("name") or "").strip()
+                for field in fields
+                if str(field.get("name") or "").strip()
+            ]
+            login = item.get("login") or {}
+            has_login_password = isinstance(login.get("password"), str) and bool(
+                login.get("password")
+            )
+            items.append(
+                {
+                    "name": str(item.get("name") or "<unnamed>").strip() or "<unnamed>",
+                    "field_names": field_names,
+                    "has_login_password": has_login_password,
+                }
+            )
+
+        return {
+            "provider": self.name,
+            "search": search.strip() if search and search.strip() else None,
+            "count": len(items),
+            "items": items,
+        }

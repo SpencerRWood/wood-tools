@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -101,13 +103,23 @@ class SecretResolver:
         self,
         providers: dict[str, SecretProvider] | None = None,
         *,
+        command_runner: Any | None = None,
         environ: dict[str, str] | None = None,
     ) -> None:
         self._environ = environ if environ is not None else os.environ
+        self._command_runner = command_runner or self._run_command
         self._providers = (
             providers if providers is not None else build_default_registry(environ=self._environ)
         )
         self._integration_targets, self._config_error = self._load_integration_targets()
+
+    @staticmethod
+    def _run_command(command: list[str], *, env: dict[str, str]) -> int:
+        try:
+            proc = subprocess.run(command, env=env, check=False)
+        except FileNotFoundError as exc:
+            raise SecretProviderError(f"Command not found: {command[0]}") from exc
+        return proc.returncode
 
     def _load_integration_targets(self) -> tuple[list[IntegrationSecretTarget], str | None]:
         targets = [
@@ -318,6 +330,26 @@ class SecretResolver:
             "provider": provider_name,
             "session": provider.session_status(),
         }
+
+    def list_entries(self, provider_name: str, *, search: str | None = None) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        return provider.list_entries(search=search)
+
+    def exec_with_secrets(self, bindings: dict[str, str], command: list[str]) -> int:
+        if not bindings:
+            raise SecretProviderError("exec requires at least one NAME=reference binding.")
+        if not command:
+            raise SecretProviderError("exec requires a command after '--'.")
+
+        child_env = dict(self._environ)
+        for env_name, reference in bindings.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_name):
+                raise SecretProviderError(
+                    "Environment variable names must match [A-Za-z_][A-Za-z0-9_]*."
+                )
+            resolved = self.resolve(reference)
+            child_env[env_name] = resolved.value
+        return self._command_runner(command, env=child_env)
 
     def doctor(self) -> dict[str, Any]:
         statuses = [status.to_dict() for status in self.provider_statuses()]
