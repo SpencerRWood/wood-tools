@@ -261,6 +261,9 @@ sessions, and resolving references without printing secret values.
 
 Supported commands:
 
+- `wood-secrets check`
+- `wood-secrets check --ref <reference>`
+- `wood-secrets providers`
 - `wood-secrets status --provider vaultwarden`
 - `wood-secrets unlock --provider vaultwarden --interactive --write-session`
 - `wood-secrets unlock --provider vaultwarden --gui --write-session`
@@ -286,6 +289,9 @@ Environment fallback behavior:
 Examples:
 
 ```bash
+wood-secrets check
+wood-secrets check --ref env://OPENPROJECT_TOKEN --json
+wood-secrets providers --json
 wood-secrets status --provider vaultwarden
 wood-secrets unlock --provider vaultwarden --interactive --write-session
 wood-secrets unlock --provider vaultwarden --gui --write-session
@@ -298,6 +304,7 @@ wood-secrets doctor --json
 Behavior notes:
 
 - Secret values are never printed by the CLI; resolved output is redacted.
+- `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
 - `vaultwarden://` references require at least two path segments after the scheme.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
 - Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.
