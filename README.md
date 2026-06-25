@@ -10,6 +10,8 @@ Deterministic Python CLI tooling for project delivery workflows.
 - `scripts/init_project.py` for scaffolding a Wood-tools-style project
 - `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
 - `scripts/openproject_next_story.py` for read-only next-story selection from OpenProject
+- `scripts/openproject_set_status.py` for approved single-status OpenProject updates
+- `scripts/create_story_branch.py` for approved Story Loop branch creation
 - `scripts/uv_active.sh` for running `uv` against the external runtime venv
 
 ## Quick Setup
@@ -132,9 +134,10 @@ Behavior notes:
 
 Reports the next dependency-ready OpenProject Story beneath a supplied root work package.
 
-Required argument:
+Arguments:
 
-- `<root_work_package_id>` integer root work package ID
+- `<root_work_package_id>` optional integer root work package ID
+  If omitted, the script falls back to `OPENPROJECT_INITIATIVE_ID`.
 
 Options:
 
@@ -158,8 +161,66 @@ Behavior notes:
 
 - Read-only: it does not mutate OpenProject.
 - Requires `.env.resolved` values for `OPENPROJECT_URL`, `OPENPROJECT_PROJECT_ID`, and `OPENPROJECT_API_TOKEN`.
+- Uses `OPENPROJECT_INITIATIVE_ID` as the default root work package when no positional ID is passed.
 - Selects only descendant work packages under the supplied root.
 - Normalizes predecessor/follows relationships before determining readiness.
+- `--json` emits structured success and failure payloads for agent workflows.
+
+### `python3 scripts/openproject_set_status.py`
+
+Updates a single OpenProject work package status after explicit approval.
+
+Required arguments:
+
+- `<work_package_id>` integer work package ID
+- `<target_status>` target OpenProject status name
+
+Options:
+
+- `--env-file <path>` resolved environment file path, default `".env.resolved"`
+- `--dry-run` preview the mutation without sending a PATCH request
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/openproject_set_status.py 278 "In Progress" --dry-run --json
+python3 scripts/openproject_set_status.py 278 "In Progress" --json
+```
+
+Behavior notes:
+
+- Mutating: use only after explicit approval.
+- Fetches the work package first and uses `lockVersion` for the PATCH request.
+- Does not print secrets or raw API tokens.
+
+### `python3 scripts/create_story_branch.py`
+
+Creates or checks out a Story Loop branch for a work package after explicit approval.
+
+Required argument:
+
+- `<work_package_id>` integer work package ID
+
+Options:
+
+- `--title <value>` optional story title used to build the branch slug
+- `--dry-run` preview the branch action without switching branches
+- `--allow-dirty` permit checkout with local changes present
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/create_story_branch.py 278 --title "Example story title" --dry-run --json
+python3 scripts/create_story_branch.py 278 --title "Example story title" --json
+```
+
+Behavior notes:
+
+- Uses `feature/op-<wp-id>-<slug>` when a title is available, otherwise `feature/op-<wp-id>`.
+- Refuses to create or switch branches on a dirty worktree unless `--allow-dirty` is passed.
+- Does not commit or push.
 
 ### `wood-config`
 

@@ -1,5 +1,8 @@
 tmp/*
 scripts/apply_openproject_208_dependency_graph.py
+scripts/openproject_next_story.py
+scripts/openproject_set_status.py
+scripts/create_story_branch.py
 
 # Python artifacts
 __pycache__/
