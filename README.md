@@ -9,9 +9,12 @@ Deterministic Python CLI tooling for project delivery workflows.
 - `wood-secrets` for provider health checks and redacted secret reference resolution
 - `scripts/init_project.py` for scaffolding a Wood-tools-style project
 - `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
-- `scripts/openproject_next_story.py` for read-only next-story selection from OpenProject
-- `scripts/openproject_set_status.py` for approved single-status OpenProject updates
-- `scripts/create_story_branch.py` for approved Story Loop branch creation
+- `scripts/story_loop/next_story.py` for read-only next-story selection from OpenProject
+- `scripts/story_loop/set_status.py` for approved single-status OpenProject updates
+- `scripts/story_loop/create_branch.py` for approved Story Loop branch creation
+- `scripts/release_loop/bump_version.py` for safe local version bumps in `pyproject.toml`
+- `scripts/release_loop/create_tag.py` for safe local git tag creation
+- `scripts/release_loop/create_github_release.py` for safe GitHub release creation from an existing tag
 - `scripts/uv_active.sh` for running `uv` against the external runtime venv
 
 ## Quick Setup
@@ -130,7 +133,7 @@ Behavior notes:
 - Keeps resolved secret values out of normal command output.
 - `--prompt-unlock` is macOS-only.
 
-### `python3 scripts/openproject_next_story.py`
+### `python3 scripts/story_loop/next_story.py`
 
 Reports the next dependency-ready OpenProject Story beneath a supplied root work package.
 
@@ -150,11 +153,11 @@ Options:
 Examples:
 
 ```bash
-python3 scripts/openproject_next_story.py 208
-python3 scripts/openproject_next_story.py 208 --json
-python3 scripts/openproject_next_story.py 208 --env-file .env.resolved
-python3 scripts/openproject_next_story.py 208 --status "In Progress"
-python3 scripts/openproject_next_story.py 208 --type Story --page-size 500
+python3 scripts/story_loop/next_story.py 208
+python3 scripts/story_loop/next_story.py 208 --json
+python3 scripts/story_loop/next_story.py 208 --env-file .env.resolved
+python3 scripts/story_loop/next_story.py 208 --status "In Progress"
+python3 scripts/story_loop/next_story.py 208 --type Story --page-size 500
 ```
 
 Behavior notes:
@@ -166,7 +169,7 @@ Behavior notes:
 - Normalizes predecessor/follows relationships before determining readiness.
 - `--json` emits structured success and failure payloads for agent workflows.
 
-### `python3 scripts/openproject_set_status.py`
+### `python3 scripts/story_loop/set_status.py`
 
 Updates a single OpenProject work package status after explicit approval.
 
@@ -184,8 +187,8 @@ Options:
 Examples:
 
 ```bash
-python3 scripts/openproject_set_status.py 278 "In Progress" --dry-run --json
-python3 scripts/openproject_set_status.py 278 "In Progress" --json
+python3 scripts/story_loop/set_status.py 278 "In Progress" --dry-run --json
+python3 scripts/story_loop/set_status.py 278 "In Progress" --json
 ```
 
 Behavior notes:
@@ -194,7 +197,7 @@ Behavior notes:
 - Fetches the work package first and uses `lockVersion` for the PATCH request.
 - Does not print secrets or raw API tokens.
 
-### `python3 scripts/create_story_branch.py`
+### `python3 scripts/story_loop/create_branch.py`
 
 Creates or checks out a Story Loop branch for a work package after explicit approval.
 
@@ -212,8 +215,85 @@ Options:
 Examples:
 
 ```bash
-python3 scripts/create_story_branch.py 278 --title "Example story title" --dry-run --json
-python3 scripts/create_story_branch.py 278 --title "Example story title" --json
+python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --dry-run --json
+python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --json
+
+### `python3 scripts/release_loop/bump_version.py`
+
+Safely increments or sets the static package version in `pyproject.toml`.
+
+Arguments:
+
+- `<bump>` one of `patch`, `minor`, `major`, or an explicit `X.Y.Z` version
+
+Options:
+
+- `--dry-run` preview the version change without writing files
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/bump_version.py patch --dry-run --json
+python3 scripts/release_loop/bump_version.py minor --dry-run --json
+python3 scripts/release_loop/bump_version.py major --dry-run --json
+python3 scripts/release_loop/bump_version.py 0.2.0 --dry-run --json
+```
+
+Behavior notes:
+
+- Updates only `[project].version` in `pyproject.toml`.
+- Rejects dynamic versioning and versions with a leading `v`.
+- Does not modify files in `--dry-run` mode.
+
+### `python3 scripts/release_loop/create_tag.py`
+
+Creates a local `v<version>` git tag after explicit approval.
+
+Options:
+
+- `--version <X.Y.Z>` override the version read from `pyproject.toml`
+- `--dry-run` preview the tag creation without mutating git state
+- `--allow-dirty` permit tag creation with local changes present
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/create_tag.py --dry-run --json
+python3 scripts/release_loop/create_tag.py --version 0.2.0 --dry-run --json
+```
+
+Behavior notes:
+
+- Reads the static package version from `pyproject.toml` by default.
+- Refuses to run outside a git repo.
+- Refuses to create an existing local tag.
+- Never pushes tags.
+
+### `python3 scripts/release_loop/create_github_release.py`
+
+Creates a GitHub release from an existing `v<version>` tag after explicit approval.
+
+Options:
+
+- `--version <X.Y.Z>` override the version read from `pyproject.toml`
+- `--generate-notes` ask GitHub to generate release notes
+- `--dry-run` preview the `gh release create` command without mutating GitHub
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/create_github_release.py --dry-run --json
+python3 scripts/release_loop/create_github_release.py --version 0.2.0 --generate-notes --dry-run --json
+```
+
+Behavior notes:
+
+- Requires the `gh` CLI for non-dry-run release creation.
+- Uses `v<version>` tags and treats GitHub as a release destination, not the version source of truth.
+- Never creates tags, commits, or pushes.
 ```
 
 Behavior notes:
@@ -626,7 +706,7 @@ python3 scripts/resolve_env_refs.py --apply --prompt-unlock
 
 1. Ensure `.env.resolved` exists.
 2. Run:
-   `python3 scripts/openproject_next_story.py 208`
+   `python3 scripts/story_loop/next_story.py 208`
 3. Create or check out the suggested branch.
 4. Give Codex the Story packet for that OpenProject ID.
 

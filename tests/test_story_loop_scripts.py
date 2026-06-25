@@ -5,11 +5,11 @@ import json
 import sys
 from pathlib import Path
 
-MODULE_DIR = Path(__file__).resolve().parents[1] / "scripts"
+MODULE_DIR = Path(__file__).resolve().parents[1] / "scripts" / "story_loop"
 
 
-def load_module(name: str):
-    module_path = MODULE_DIR / f"{name}.py"
+def load_module(name: str, relative_path: str):
+    module_path = MODULE_DIR / relative_path
     spec = importlib.util.spec_from_file_location(name, module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -18,9 +18,9 @@ def load_module(name: str):
     return module
 
 
-NEXT_STORY = load_module("openproject_next_story")
-SET_STATUS = load_module("openproject_set_status")
-CREATE_BRANCH = load_module("create_story_branch")
+NEXT_STORY = load_module("next_story", "next_story.py")
+SET_STATUS = load_module("set_status", "set_status.py")
+CREATE_BRANCH = load_module("create_branch", "create_branch.py")
 
 
 def make_story(

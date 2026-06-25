@@ -4,8 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "openproject_next_story.py"
-SPEC = importlib.util.spec_from_file_location("openproject_next_story", MODULE_PATH)
+MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "story_loop" / "next_story.py"
+SPEC = importlib.util.spec_from_file_location("next_story", MODULE_PATH)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE

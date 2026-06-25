@@ -1,8 +1,5 @@
 tmp/*
 scripts/apply_openproject_208_dependency_graph.py
-scripts/openproject_next_story.py
-scripts/openproject_set_status.py
-scripts/create_story_branch.py
 
 # Python artifacts
 __pycache__/
@@ -43,3 +40,13 @@ Thumbs.db
 docs/*
 AGENTS.md
 .codex/
+
+# Local story-loop helper scripts
+scripts/story_loop/next_story.py
+scripts/story_loop/set_status.py
+scripts/story_loop/create_branch.py
+
+# Local release-loop helper scripts
+scripts/release_loop/bump_version.py
+scripts/release_loop/create_tag.py
+scripts/release_loop/create_github_release.py

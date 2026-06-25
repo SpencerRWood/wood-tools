@@ -81,7 +81,7 @@ python scripts/init_project.py --apply --force
 
 1. Ensure `.env.resolved` exists.
 2. Run:
-   `python scripts/openproject_next_story.py`
+   `python scripts/story_loop/next_story.py`
 3. Create or checkout the suggested branch.
 4. Give Codex the Story packet for that OpenProject ID.
 
@@ -338,7 +338,7 @@ AGENTS_TEMPLATE = """# AGENTS.md
 
 - To find the next implementation Story, run:
 
-  python scripts/openproject_next_story.py
+  python scripts/story_loop/next_story.py
 
 - This command requires `.env.resolved`.
 - If `.env.resolved` is missing, resolve local environment references first:
@@ -965,8 +965,28 @@ def build_scaffold_items(project_name: str) -> tuple[ScaffoldItem, ...]:
             (script_dir / "resolve_env_refs.py").read_text(encoding="utf-8"),
         ),
         ScaffoldItem(
-            "scripts/openproject_next_story.py",
-            (script_dir / "openproject_next_story.py").read_text(encoding="utf-8"),
+            "scripts/story_loop/next_story.py",
+            (script_dir / "story_loop" / "next_story.py").read_text(encoding="utf-8"),
+        ),
+        ScaffoldItem(
+            "scripts/story_loop/set_status.py",
+            (script_dir / "story_loop" / "set_status.py").read_text(encoding="utf-8"),
+        ),
+        ScaffoldItem(
+            "scripts/story_loop/create_branch.py",
+            (script_dir / "story_loop" / "create_branch.py").read_text(encoding="utf-8"),
+        ),
+        ScaffoldItem(
+            "scripts/release_loop/bump_version.py",
+            (script_dir / "release_loop" / "bump_version.py").read_text(encoding="utf-8"),
+        ),
+        ScaffoldItem(
+            "scripts/release_loop/create_tag.py",
+            (script_dir / "release_loop" / "create_tag.py").read_text(encoding="utf-8"),
+        ),
+        ScaffoldItem(
+            "scripts/release_loop/create_github_release.py",
+            (script_dir / "release_loop" / "create_github_release.py").read_text(encoding="utf-8"),
         ),
         ScaffoldItem(
             "scripts/init_wood_tools_project.py", Path(__file__).read_text(encoding="utf-8")
