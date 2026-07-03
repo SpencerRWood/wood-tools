@@ -279,6 +279,7 @@ Options:
 
 - `--version <X.Y.Z>` override the version read from `pyproject.toml`
 - `--generate-notes` ask GitHub to generate release notes
+- `--notes-from-history` generate markdown release notes from all changes since the previous release, or all repo history for the first release
 - `--dry-run` preview the `gh release create` command without mutating GitHub
 - `--json` emit structured JSON output
 
@@ -287,12 +288,17 @@ Examples:
 ```bash
 python3 scripts/release_loop/create_github_release.py --dry-run --json
 python3 scripts/release_loop/create_github_release.py --version 0.2.0 --generate-notes --dry-run --json
+python3 scripts/release_loop/create_github_release.py --version 0.2.0 --notes-from-history --dry-run --json
 ```
 
 Behavior notes:
 
 - Requires the `gh` CLI for non-dry-run release creation.
 - Uses `v<version>` tags and treats GitHub as a release destination, not the version source of truth.
+- `--notes-from-history` uses the most recent prior local `vX.Y.Z` tag as the release boundary when one exists.
+- For a first release with no prior local release tag, `--notes-from-history` includes the full repository history through `HEAD`.
+- History-based notes are grouped into higher-level change areas so the release body reads like a release summary instead of a flat commit dump.
+- In `--json` mode, history-based notes are returned in the release payload so agent workflows can review or refine them before publishing.
 - Never creates tags, commits, or pushes.
 ```
 
