@@ -91,6 +91,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List vault items and field names without exposing secret values",
+    )
+    list_parser.add_argument(
+        "--provider",
+        default="vaultwarden",
+        choices=("vaultwarden",),
+        help="Provider name to inspect",
+    )
+    list_parser.add_argument("--search", help="Optional provider-native search term")
+    list_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    exec_parser = subparsers.add_parser(
+        "exec",
+        help="Run a command with resolved secrets injected as environment variables",
+    )
+    exec_parser.add_argument("--env", help="Environment variable name to set")
+    exec_parser.add_argument("--ref", help="Secret reference to resolve")
+    exec_parser.add_argument(
+        "command_args",
+        nargs=argparse.REMAINDER,
+        help="Optional NAME=reference bindings, then '--', then the command to run",
+    )
+
     resolve_parser = subparsers.add_parser("resolve", help="Resolve one secret reference")
     resolve_parser.add_argument("--ref", required=True, help="Secret reference to resolve")
     resolve_parser.add_argument(
@@ -199,6 +224,18 @@ def main(argv: list[str] | None = None) -> int:
                 return _emit(envelope, json_output=True)
             return _emit(payload, json_output=False)
 
+        if args.command == "list":
+            payload = resolver.list_entries(args.provider, search=args.search)
+            if args.json:
+                envelope = success_output(
+                    command="list",
+                    mutation="read-only",
+                    summary="Listed secret entries without exposing secret values.",
+                    data=payload,
+                )
+                return _emit(envelope, json_output=True)
+            return _emit(payload, json_output=False)
+
         if args.command == "resolve":
             resolved = resolver.resolve(args.ref)
             payload = resolved.to_dict()
@@ -213,6 +250,29 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return _emit(envelope, json_output=True)
             return _emit(payload, json_output=False)
+
+        if args.command == "exec":
+            raw_args = args.command_args
+            separator_index = raw_args.index("--") if "--" in raw_args else None
+            binding_args = raw_args if separator_index is None else raw_args[:separator_index]
+            command = [] if separator_index is None else raw_args[separator_index + 1 :]
+
+            bindings: dict[str, str] = {}
+            if args.env or args.ref:
+                if not args.env or not args.ref:
+                    raise SecretProviderError(
+                        "exec requires both --env and --ref when either is used."
+                    )
+                bindings[args.env] = args.ref
+            for binding in binding_args:
+                name, separator, reference = binding.partition("=")
+                if not separator or not name.strip() or not reference.strip():
+                    raise SecretProviderError(
+                        "Inline exec bindings must use NAME=reference syntax."
+                    )
+                bindings[name.strip()] = reference.strip()
+
+            return resolver.exec_with_secrets(bindings, command)
 
         if args.command == "doctor":
             payload = resolver.doctor()

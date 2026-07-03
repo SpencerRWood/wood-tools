@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,6 +62,7 @@ def build_default_registry(
     env = environ if environ is not None else os.environ
     executable = "bw"
     session_file: str | None = None
+    server_url: str | None = None
 
     try:
         config = load_config(build_paths())
@@ -73,6 +76,9 @@ def build_default_registry(
                 executable_value = cli.get("executable")
                 if isinstance(executable_value, str) and executable_value.strip():
                     executable = executable_value
+            url_value = vaultwarden.get("url")
+            if isinstance(url_value, str) and url_value.strip():
+                server_url = url_value.strip()
             session_value = vaultwarden.get("session_file")
             if isinstance(session_value, str) and session_value.strip():
                 session_file = session_value
@@ -83,6 +89,7 @@ def build_default_registry(
         "env": EnvironmentSecretProvider(environ=env),
         "vaultwarden": VaultwardenSecretProvider(
             executable=executable,
+            server_url=server_url,
             environ=env,
             session_store=VaultwardenSessionStore(
                 path=None if session_file is None else Path(os.path.expanduser(session_file))
@@ -96,13 +103,23 @@ class SecretResolver:
         self,
         providers: dict[str, SecretProvider] | None = None,
         *,
+        command_runner: Any | None = None,
         environ: dict[str, str] | None = None,
     ) -> None:
         self._environ = environ if environ is not None else os.environ
+        self._command_runner = command_runner or self._run_command
         self._providers = (
             providers if providers is not None else build_default_registry(environ=self._environ)
         )
         self._integration_targets, self._config_error = self._load_integration_targets()
+
+    @staticmethod
+    def _run_command(command: list[str], *, env: dict[str, str]) -> int:
+        try:
+            proc = subprocess.run(command, env=env, check=False)
+        except FileNotFoundError as exc:
+            raise SecretProviderError(f"Command not found: {command[0]}") from exc
+        return proc.returncode
 
     def _load_integration_targets(self) -> tuple[list[IntegrationSecretTarget], str | None]:
         targets = [
@@ -270,7 +287,7 @@ class SecretResolver:
         provider = self.get_provider(provider_name)
         status = provider.status().to_dict()
         return {
-            "ok": status["available"] and status["unlocked"],
+            "ok": status["available"] and status["configured"] and status["unlocked"],
             "provider": provider_name,
             "status": status,
         }
@@ -290,7 +307,7 @@ class SecretResolver:
             write_session=write_session,
         ).to_dict()
         return {
-            "ok": status["available"] and status["unlocked"],
+            "ok": status["available"] and status["configured"] and status["unlocked"],
             "provider": provider_name,
             "status": status,
             "session": provider.session_status(),
@@ -301,7 +318,7 @@ class SecretResolver:
         provider = self.get_provider(provider_name)
         status = provider.lock().to_dict()
         return {
-            "ok": status["available"] and not status["unlocked"],
+            "ok": status["available"] and status["configured"] and not status["unlocked"],
             "provider": provider_name,
             "status": status,
             "session": provider.session_status(),
@@ -313,6 +330,26 @@ class SecretResolver:
             "provider": provider_name,
             "session": provider.session_status(),
         }
+
+    def list_entries(self, provider_name: str, *, search: str | None = None) -> dict[str, Any]:
+        provider = self.get_provider(provider_name)
+        return provider.list_entries(search=search)
+
+    def exec_with_secrets(self, bindings: dict[str, str], command: list[str]) -> int:
+        if not bindings:
+            raise SecretProviderError("exec requires at least one NAME=reference binding.")
+        if not command:
+            raise SecretProviderError("exec requires a command after '--'.")
+
+        child_env = dict(self._environ)
+        for env_name, reference in bindings.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_name):
+                raise SecretProviderError(
+                    "Environment variable names must match [A-Za-z_][A-Za-z0-9_]*."
+                )
+            resolved = self.resolve(reference)
+            child_env[env_name] = resolved.value
+        return self._command_runner(command, env=child_env)
 
     def doctor(self) -> dict[str, Any]:
         statuses = [status.to_dict() for status in self.provider_statuses()]
@@ -333,6 +370,14 @@ class SecretResolver:
                 issues.append(
                     {
                         "code": "provider_unavailable",
+                        "provider": status["name"],
+                        "message": status["detail"],
+                    }
+                )
+            elif not status["configured"]:
+                issues.append(
+                    {
+                        "code": "provider_misconfigured",
                         "provider": status["name"],
                         "message": status["detail"],
                     }

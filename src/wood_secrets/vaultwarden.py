@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from getpass import getpass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .providers import (
     MissingSecretError,
@@ -29,6 +30,7 @@ from .providers import (
 SESSION_SCHEMA_VERSION = 1
 DEFAULT_SESSION_FILE = Path.home() / ".wood" / "runtime" / "secrets" / "vaultwarden-session.json"
 SESSION_PROBE_SEARCH = "__wood_tools_session_probe__"
+UNLOCK_PASSWORD_ENV = "WOOD_SECRETS_BW_UNLOCK_PASSWORD"
 
 
 @dataclass(frozen=True)
@@ -58,9 +60,11 @@ class VaultwardenSessionStatus:
 class VaultwardenSessionStore:
     def __init__(self, path: Path | None = None, *, project_root: Path | None = None) -> None:
         self.path = (path or DEFAULT_SESSION_FILE).expanduser()
-        self._project_root = (project_root or Path.cwd()).resolve()
+        self._project_root = project_root.resolve() if project_root is not None else None
 
     def _validate_runtime_path(self) -> None:
+        if self._project_root is None:
+            return
         resolved_path = self.path.resolve(strict=False)
         try:
             resolved_path.relative_to(self._project_root)
@@ -199,6 +203,7 @@ class VaultwardenSecretProvider(SecretProvider):
         self,
         *,
         executable: str = "bw",
+        server_url: str | None = None,
         runner: Callable[..., str] | None = None,
         which: Callable[[str], str | None] | None = None,
         session_store: VaultwardenSessionStore | None = None,
@@ -207,12 +212,58 @@ class VaultwardenSecretProvider(SecretProvider):
         environ: dict[str, str] | None = None,
     ) -> None:
         self.executable = executable
+        self.server_url = self._normalize_server_url(server_url)
         self._runner = runner or self._run_command
         self._which = which or shutil.which
         self._session_store = session_store or VaultwardenSessionStore()
         self._password_prompt = password_prompt or prompt_for_password_macos
         self._system_name = system_name or platform.system()
         self._environ = environ if environ is not None else os.environ
+
+    @staticmethod
+    def _normalize_server_url(server_url: str | None) -> str | None:
+        if server_url is None:
+            return None
+        value = server_url.strip()
+        if not value:
+            return None
+        parsed = urlsplit(value)
+        normalized = parsed.geturl().rstrip("/")
+        return normalized or None
+
+    def _configured_server(self) -> str:
+        return self._runner(["config", "server"]).strip()
+
+    def _ensure_server_configured(self) -> None:
+        if not self.server_url:
+            return
+        current_server = self._normalize_server_url(self._configured_server())
+        if current_server == self.server_url:
+            return
+        try:
+            self._runner(["config", "server", self.server_url])
+        except SecretProviderError as exc:
+            # Bitwarden CLI requires a logout before changing the configured server.
+            if "Logout required before server config update." not in str(exc):
+                raise
+            self._runner(["logout"])
+            self._environ.pop("BW_SESSION", None)
+            self._session_store.clear()
+            self._runner(["config", "server", self.server_url])
+
+    def _server_mismatch_detail(self) -> str | None:
+        if not self.server_url:
+            return None
+        current_server = self._normalize_server_url(self._configured_server())
+        if current_server == self.server_url:
+            return None
+        current_display = current_server or "<unset>"
+        return (
+            "Vaultwarden CLI server does not match wood-config. "
+            f"Configured {self.server_url}; active CLI server {current_display}. "
+            "Run 'wood-secrets unlock --provider vaultwarden --interactive --write-session' "
+            "to apply the configured server."
+        )
 
     def _run_command(
         self,
@@ -284,6 +335,17 @@ class VaultwardenSecretProvider(SecretProvider):
 
         payload = self._run_json(["status"])
         cli_status = str(payload.get("status") or "unknown").lower()
+        mismatch_detail = self._server_mismatch_detail()
+        if mismatch_detail:
+            return ProviderStatus(
+                name=self.name,
+                scheme=self.scheme,
+                available=True,
+                unlocked=False,
+                configured=False,
+                state="misconfigured",
+                detail=mismatch_detail,
+            )
         token = self._current_session_token()
         session_usable = self._session_usable(token)
 
@@ -338,13 +400,20 @@ class VaultwardenSecretProvider(SecretProvider):
         if gui and self._system_name != "Darwin":
             raise ProviderUnavailableError("GUI unlock is only available on macOS.")
 
+        self._ensure_server_configured()
         password = self._password_prompt() if gui else getpass("Vaultwarden master password: ")
         if not password:
             raise SecretProviderError("Vaultwarden unlock requires a non-empty password.")
+        previous_password = self._environ.get(UNLOCK_PASSWORD_ENV)
+        self._environ[UNLOCK_PASSWORD_ENV] = password
         try:
-            token = self._runner(["unlock", "--raw"], input_text=password).strip()
+            token = self._runner(["unlock", "--raw", "--passwordenv", UNLOCK_PASSWORD_ENV]).strip()
         finally:
             password = ""
+            if previous_password is None:
+                self._environ.pop(UNLOCK_PASSWORD_ENV, None)
+            else:
+                self._environ[UNLOCK_PASSWORD_ENV] = previous_password
         if not token:
             raise SecretProviderError("Vaultwarden unlock did not return a session token.")
         self._environ["BW_SESSION"] = token
@@ -375,6 +444,8 @@ class VaultwardenSecretProvider(SecretProvider):
     def resolve(self, reference: str) -> str:
         status = self.status()
         if not status.available:
+            raise ProviderUnavailableError(status.detail)
+        if not status.configured:
             raise ProviderUnavailableError(status.detail)
         if not status.unlocked:
             raise ProviderLockedError(
@@ -412,3 +483,49 @@ class VaultwardenSecretProvider(SecretProvider):
         raise MissingSecretError(
             "Vaultwarden item did not contain a matching custom field or login.password."
         )
+
+    def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
+        status = self.status()
+        if not status.available:
+            raise ProviderUnavailableError(status.detail)
+        if not status.configured:
+            raise ProviderUnavailableError(status.detail)
+        if not status.unlocked:
+            raise ProviderLockedError(
+                "Vaultwarden is not unlocked. Unlock it before listing secret entries."
+            )
+
+        session_token = self._current_session_token()
+        args = ["list", "items"]
+        if search and search.strip():
+            args.extend(["--search", search.strip()])
+        payload = self._run_json(args, session_token=session_token)
+        if not isinstance(payload, list):
+            raise SecretProviderError("Unexpected Vaultwarden CLI output while listing secrets.")
+
+        items: list[dict[str, Any]] = []
+        for item in payload:
+            fields = item.get("fields") or []
+            field_names = [
+                str(field.get("name") or "").strip()
+                for field in fields
+                if str(field.get("name") or "").strip()
+            ]
+            login = item.get("login") or {}
+            has_login_password = isinstance(login.get("password"), str) and bool(
+                login.get("password")
+            )
+            items.append(
+                {
+                    "name": str(item.get("name") or "<unnamed>").strip() or "<unnamed>",
+                    "field_names": field_names,
+                    "has_login_password": has_login_password,
+                }
+            )
+
+        return {
+            "provider": self.name,
+            "search": search.strip() if search and search.strip() else None,
+            "count": len(items),
+            "items": items,
+        }

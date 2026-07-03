@@ -48,6 +48,7 @@ class ProviderStatus:
 class VaultwardenReference:
     raw: str
     parts: tuple[str, ...]
+    field_name: str | None = None
 
     @property
     def search_term(self) -> str:
@@ -55,7 +56,7 @@ class VaultwardenReference:
 
     @property
     def field_hint(self) -> str:
-        return self.parts[-1]
+        return self.field_name or self.parts[-1]
 
 
 def normalize_env_fallback_name(reference: str) -> str:
@@ -74,13 +75,20 @@ def parse_vaultwarden_reference(reference: str) -> VaultwardenReference:
     if parse_reference_scheme(reference) != "vaultwarden":
         raise InvalidSecretReferenceError(f"Unsupported secret reference: {reference}")
 
-    path = reference[len("vaultwarden://") :].strip("/")
+    raw_path = reference[len("vaultwarden://") :]
+    path, separator, field_name = raw_path.partition("#")
+    normalized_field_name = field_name.strip() if separator else None
+    if normalized_field_name == "":
+        raise InvalidSecretReferenceError(
+            "Vaultwarden references with '#' must include a non-empty field name."
+        )
+    path = path.strip("/")
     parts = tuple(part.strip() for part in path.split("/") if part.strip())
     if len(parts) < 2:
         raise InvalidSecretReferenceError(
             "Vaultwarden references must include at least two path segments."
         )
-    return VaultwardenReference(raw=reference, parts=parts)
+    return VaultwardenReference(raw=reference, parts=parts, field_name=normalized_field_name)
 
 
 def candidate_item_names(reference: VaultwardenReference) -> list[str]:
@@ -163,6 +171,10 @@ class SecretProvider(ABC):
     def resolve(self, reference: str) -> str:
         raise NotImplementedError
 
+    @abstractmethod
+    def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class EnvironmentSecretProvider(SecretProvider):
     scheme = "env"
@@ -220,3 +232,8 @@ class EnvironmentSecretProvider(SecretProvider):
         if not value:
             raise MissingSecretError(f"Environment variable {variable} is not set.")
         return value
+
+    def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
+        raise ProviderUnavailableError(
+            "Environment provider does not support listing secret entries."
+        )

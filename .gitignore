@@ -39,3 +39,14 @@ Thumbs.db
 # Local/generated project files
 docs/*
 AGENTS.md
+.codex/
+
+# Local story-loop helper scripts
+scripts/story_loop/next_story.py
+scripts/story_loop/set_status.py
+scripts/story_loop/create_branch.py
+
+# Local release-loop helper scripts
+scripts/release_loop/bump_version.py
+scripts/release_loop/create_tag.py
+scripts/release_loop/create_github_release.py

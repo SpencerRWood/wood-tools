@@ -9,7 +9,12 @@ Deterministic Python CLI tooling for project delivery workflows.
 - `wood-secrets` for provider health checks and redacted secret reference resolution
 - `scripts/init_project.py` for scaffolding a Wood-tools-style project
 - `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
-- `scripts/openproject_next_story.py` for read-only next-story selection from OpenProject
+- `scripts/story_loop/next_story.py` for read-only next-story selection from OpenProject
+- `scripts/story_loop/set_status.py` for approved single-status OpenProject updates
+- `scripts/story_loop/create_branch.py` for approved Story Loop branch creation
+- `scripts/release_loop/bump_version.py` for safe local version bumps in `pyproject.toml`
+- `scripts/release_loop/create_tag.py` for safe local git tag creation
+- `scripts/release_loop/create_github_release.py` for safe GitHub release creation from an existing tag
 - `scripts/uv_active.sh` for running `uv` against the external runtime venv
 
 ## Quick Setup
@@ -128,13 +133,14 @@ Behavior notes:
 - Keeps resolved secret values out of normal command output.
 - `--prompt-unlock` is macOS-only.
 
-### `python3 scripts/openproject_next_story.py`
+### `python3 scripts/story_loop/next_story.py`
 
 Reports the next dependency-ready OpenProject Story beneath a supplied root work package.
 
-Required argument:
+Arguments:
 
-- `<root_work_package_id>` integer root work package ID
+- `<root_work_package_id>` optional integer root work package ID
+  If omitted, the script falls back to `OPENPROJECT_INITIATIVE_ID`.
 
 Options:
 
@@ -147,19 +153,160 @@ Options:
 Examples:
 
 ```bash
-python3 scripts/openproject_next_story.py 208
-python3 scripts/openproject_next_story.py 208 --json
-python3 scripts/openproject_next_story.py 208 --env-file .env.resolved
-python3 scripts/openproject_next_story.py 208 --status "In Progress"
-python3 scripts/openproject_next_story.py 208 --type Story --page-size 500
+python3 scripts/story_loop/next_story.py 208
+python3 scripts/story_loop/next_story.py 208 --json
+python3 scripts/story_loop/next_story.py 208 --env-file .env.resolved
+python3 scripts/story_loop/next_story.py 208 --status "In Progress"
+python3 scripts/story_loop/next_story.py 208 --type Story --page-size 500
 ```
 
 Behavior notes:
 
 - Read-only: it does not mutate OpenProject.
 - Requires `.env.resolved` values for `OPENPROJECT_URL`, `OPENPROJECT_PROJECT_ID`, and `OPENPROJECT_API_TOKEN`.
+- Uses `OPENPROJECT_INITIATIVE_ID` as the default root work package when no positional ID is passed.
 - Selects only descendant work packages under the supplied root.
 - Normalizes predecessor/follows relationships before determining readiness.
+- `--json` emits structured success and failure payloads for agent workflows.
+
+### `python3 scripts/story_loop/set_status.py`
+
+Updates a single OpenProject work package status after explicit approval.
+
+Required arguments:
+
+- `<work_package_id>` integer work package ID
+- `<target_status>` target OpenProject status name
+
+Options:
+
+- `--env-file <path>` resolved environment file path, default `".env.resolved"`
+- `--dry-run` preview the mutation without sending a PATCH request
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/story_loop/set_status.py 278 "In Progress" --dry-run --json
+python3 scripts/story_loop/set_status.py 278 "In Progress" --json
+```
+
+Behavior notes:
+
+- Mutating: use only after explicit approval.
+- Fetches the work package first and uses `lockVersion` for the PATCH request.
+- Does not print secrets or raw API tokens.
+
+### `python3 scripts/story_loop/create_branch.py`
+
+Creates or checks out a Story Loop branch for a work package after explicit approval.
+
+Required argument:
+
+- `<work_package_id>` integer work package ID
+
+Options:
+
+- `--title <value>` optional story title used to build the branch slug
+- `--dry-run` preview the branch action without switching branches
+- `--allow-dirty` permit checkout with local changes present
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --dry-run --json
+python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --json
+
+### `python3 scripts/release_loop/bump_version.py`
+
+Safely increments or sets the static package version in `pyproject.toml`.
+
+Arguments:
+
+- `<bump>` one of `patch`, `minor`, `major`, or an explicit `X.Y.Z` version
+
+Options:
+
+- `--dry-run` preview the version change without writing files
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/bump_version.py patch --dry-run --json
+python3 scripts/release_loop/bump_version.py minor --dry-run --json
+python3 scripts/release_loop/bump_version.py major --dry-run --json
+python3 scripts/release_loop/bump_version.py 0.2.0 --dry-run --json
+```
+
+Behavior notes:
+
+- Updates only `[project].version` in `pyproject.toml`.
+- Rejects dynamic versioning and versions with a leading `v`.
+- Does not modify files in `--dry-run` mode.
+
+### `python3 scripts/release_loop/create_tag.py`
+
+Creates a local `v<version>` git tag after explicit approval.
+
+Options:
+
+- `--version <X.Y.Z>` override the version read from `pyproject.toml`
+- `--dry-run` preview the tag creation without mutating git state
+- `--allow-dirty` permit tag creation with local changes present
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/create_tag.py --dry-run --json
+python3 scripts/release_loop/create_tag.py --version 0.2.0 --dry-run --json
+```
+
+Behavior notes:
+
+- Reads the static package version from `pyproject.toml` by default.
+- Refuses to run outside a git repo.
+- Refuses to create an existing local tag.
+- Never pushes tags.
+
+### `python3 scripts/release_loop/create_github_release.py`
+
+Creates a GitHub release from an existing `v<version>` tag after explicit approval.
+
+Options:
+
+- `--version <X.Y.Z>` override the version read from `pyproject.toml`
+- `--generate-notes` ask GitHub to generate release notes
+- `--notes-from-history` generate markdown release notes from all changes since the previous release, or all repo history for the first release
+- `--dry-run` preview the `gh release create` command without mutating GitHub
+- `--json` emit structured JSON output
+
+Examples:
+
+```bash
+python3 scripts/release_loop/create_github_release.py --dry-run --json
+python3 scripts/release_loop/create_github_release.py --version 0.2.0 --generate-notes --dry-run --json
+python3 scripts/release_loop/create_github_release.py --version 0.2.0 --notes-from-history --dry-run --json
+```
+
+Behavior notes:
+
+- Requires the `gh` CLI for non-dry-run release creation.
+- Uses `v<version>` tags and treats GitHub as a release destination, not the version source of truth.
+- `--notes-from-history` uses the most recent prior local `vX.Y.Z` tag as the release boundary when one exists.
+- For a first release with no prior local release tag, `--notes-from-history` includes the full repository history through `HEAD`.
+- History-based notes are grouped into higher-level change areas so the release body reads like a release summary instead of a flat commit dump.
+- In `--json` mode, history-based notes are returned in the release payload so agent workflows can review or refine them before publishing.
+- Never creates tags, commits, or pushes.
+```
+
+Behavior notes:
+
+- Uses `feature/op-<wp-id>-<slug>` when a title is available, otherwise `feature/op-<wp-id>`.
+- Refuses to create or switch branches on a dirty worktree unless `--allow-dirty` is passed.
+- Does not commit or push.
 
 ### `wood-config`
 
@@ -220,7 +367,7 @@ Global option:
           "token_ref": "env://NTFY_TOKEN"
         },
         "vaultwarden": {
-          "url": null,
+          "url": "https://vault.example.test",
           "config_ref": "env://VAULTWARDEN_CONFIG",
           "session_file": "~/.config/wood-tools/vaultwarden-session.json",
           "cli": {
@@ -269,6 +416,9 @@ Supported commands:
 - `wood-secrets unlock --provider vaultwarden --gui --write-session`
 - `wood-secrets lock --provider vaultwarden`
 - `wood-secrets session --provider vaultwarden`
+- `wood-secrets list --provider vaultwarden`
+- `wood-secrets exec --env <NAME> --ref <reference> -- <command> ...`
+- `wood-secrets exec NAME=<reference> [OTHER_NAME=<reference> ...] -- <command> ...`
 - `wood-secrets resolve --ref <reference> --redacted`
 - `wood-secrets doctor`
 
@@ -276,6 +426,10 @@ Supported reference syntax:
 
 - `env://NAME` reads a secret directly from the `NAME` environment variable
 - `vaultwarden://<path>/<field>` resolves a Vaultwarden/Bitwarden secret from the `bw` CLI
+- `vaultwarden://<path>/<item>#<field-name>` resolves a specific field from a matched item when
+  the field name differs from the item-name suffix
+  after `wood-secrets` confirms the active `bw` server matches
+  `integrations.vaultwarden.url` from the active `wood-config` profile
 
 Environment fallback behavior:
 
@@ -284,6 +438,10 @@ Environment fallback behavior:
 - Example:
   `vaultwarden://wood/openproject/prod/api-token` maps to
   `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN`.
+- Explicit field selectors remain part of the normalized fallback name.
+- Example:
+  `vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN` maps to
+  `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN_OPENPROJECT_API_TOKEN`.
 - Fallback values are resolved in memory only and are still emitted as `[REDACTED]`.
 
 Examples:
@@ -297,7 +455,12 @@ wood-secrets unlock --provider vaultwarden --interactive --write-session
 wood-secrets unlock --provider vaultwarden --gui --write-session
 wood-secrets lock --provider vaultwarden
 wood-secrets session --provider vaultwarden --json
+wood-secrets list --provider vaultwarden --search openproject --json
+wood-secrets exec --env OPENPROJECT_TOKEN --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' OTHER_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
 wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
+wood-secrets resolve --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' --redacted
 wood-secrets doctor --json
 ```
 
@@ -305,7 +468,15 @@ Behavior notes:
 
 - Secret values are never printed by the CLI; resolved output is redacted.
 - `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
+- `wood-secrets` reads `integrations.vaultwarden.url` from the active `wood-config` profile.
+- `wood-secrets unlock --provider vaultwarden ...` applies that configured URL with `bw config server <url>` before unlocking.
+- `wood-secrets unlock --provider vaultwarden ...` uses `bw unlock --passwordenv ...` for compatibility with current Bitwarden CLI releases.
+- `wood-secrets list --provider vaultwarden ...` lists only item names, field names, and whether a login password exists; it never prints secret values.
+- `wood-secrets exec --env NAME --ref ... -- command ...` resolves a secret locally, injects it only into the child process environment, and does not print the secret value itself.
+- `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
+- Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
+- `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
 - Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.
 - `wood-secrets unlock --gui` is available on macOS where `osascript` is present.
@@ -541,7 +712,7 @@ python3 scripts/resolve_env_refs.py --apply --prompt-unlock
 
 1. Ensure `.env.resolved` exists.
 2. Run:
-   `python3 scripts/openproject_next_story.py 208`
+   `python3 scripts/story_loop/next_story.py 208`
 3. Create or check out the suggested branch.
 4. Give Codex the Story packet for that OpenProject ID.
 
