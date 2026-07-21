@@ -248,6 +248,10 @@ Commands:
 - `wood-project init --apply` write `project.json` and create required directories
 - `wood-project link repo <path>` preview linking an implementation repository to the project
 - `wood-project link repo <path> --apply` persist a linked repository entry in `project.json`
+- `wood-project resource install <path>` preview installing a versioned global resource
+- `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
+- `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
+- `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
 - `wood-project show` read and print the current `project.json`
 - `wood-project validate` verify the current `project.json` schema, required directories, path relationships, linked repository paths, and mounted path accessibility
 
@@ -267,6 +271,44 @@ Options for `link repo`:
 - `--apply` write the updated `project.json`
 - `--json` emit JSON envelope output
 
+Resource manifest format:
+
+`wood-project resource install` expects a source directory containing `wood-resource.json`. The
+resource payload digest is computed over every file except `wood-resource.json`, using relative
+paths and file bytes.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "script",
+  "name": "demo-helper",
+  "version": "1.0.0",
+  "digest": "sha256:<64 lowercase hex characters>",
+  "compatibility": {
+    "wood_tools": ">=0.1.1"
+  },
+  "helper_contract": {
+    "deterministic": true,
+    "input": "JSON object on stdin",
+    "output": "JSON object on stdout",
+    "errors": "Non-zero exit with JSON error envelope"
+  }
+}
+```
+
+Supported resource kinds:
+
+- `template` installs to `packs/templates/<name>/<version>`
+- `reference` installs to `packs/references/<name>/<version>`
+- `agent` installs to `packs/agents/<name>/<version>`
+- `tool` installs to `tools/<name>/<version>`
+- `script` installs to `scripts/<name>/<version>`
+
+Helper resources (`tool` and `script`) must include `helper_contract` so projects and agent packs
+can call the stable `wood-project resource path ...` interface instead of depending on absolute
+`~/.wood/tools/` or `~/.wood/scripts/` paths. Reinstalling the same identity, version, and digest is
+safe and returns the existing metadata; conflicting installed files fail before activation.
+
 Examples:
 
 ```bash
@@ -275,6 +317,10 @@ wood-project init --apply
 wood-project init --project-id proj-123 --project-slug demo-app --apply
 wood-project init --wood-home /tmp/wood-home --apply
 wood-project link repo ../shared-lib --role library --apply
+wood-project resource install ./packs/demo-helper
+wood-project resource install ./packs/demo-helper --apply --json
+wood-project resource inspect script demo-helper --version 1.0.0 --json
+wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
 wood-project show --json
 wood-project validate --json
 ```

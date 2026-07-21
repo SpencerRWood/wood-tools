@@ -19,6 +19,39 @@ WOOD_HOME_DIRS = {
 }
 
 
+def _write_resource_manifest(
+    source_dir: Path,
+    *,
+    kind: str = "script",
+    name: str = "demo-helper",
+    version: str = "1.0.0",
+    digest: str | None = None,
+    helper_contract: dict[str, object] | None = None,
+) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "kind": kind,
+        "name": name,
+        "version": version,
+        "digest": digest or project_core.compute_resource_digest(source_dir),
+        "compatibility": {"wood_tools": ">=0.1.1"},
+    }
+    if helper_contract is None and kind in {"tool", "script"}:
+        helper_contract = {
+            "deterministic": True,
+            "input": "JSON object on stdin",
+            "output": "JSON object on stdout",
+            "errors": "Non-zero exit with JSON error envelope",
+        }
+    if helper_contract is not None:
+        manifest["helper_contract"] = helper_contract
+    (source_dir / "wood-resource.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def test_init_show_validate_success_path_creates_global_wood_home(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -491,6 +524,207 @@ def test_link_repo_rejects_missing_repository_path(
     assert payload["status"] == "error"
     assert payload["mutation"] == "mutating"
     assert payload["summary"] == f"Repository path does not exist: {missing_repo.resolve()}"
+
+
+def test_resource_install_preview_apply_reinstall_inspect_and_path_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "resource-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "source-helper"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "run.py").write_text("print('ok')\n", encoding="utf-8")
+    manifest = _write_resource_manifest(source_dir)
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    assert main(["resource", "install", str(source_dir), "--json"]) == 0
+    preview_payload = json.loads(capsys.readouterr().out)
+    assert preview_payload["command"] == "resource-install"
+    assert preview_payload["status"] == "blocked"
+    assert preview_payload["requires_approval"] is True
+    assert preview_payload["data"]["changed"] is False
+    assert not (wood_home / "scripts" / "demo-helper" / "1.0.0").exists()
+
+    assert main(["resource", "install", str(source_dir), "--apply", "--json"]) == 0
+    install_payload = json.loads(capsys.readouterr().out)
+    assert install_payload["command"] == "resource-install"
+    assert install_payload["status"] == "success"
+    assert install_payload["data"]["changed"] is True
+    install_dir = wood_home / "scripts" / "demo-helper" / "1.0.0"
+    assert (install_dir / "run.py").read_text(encoding="utf-8") == "print('ok')\n"
+    assert install_payload["data"]["resource"] == {
+        "kind": "script",
+        "name": "demo-helper",
+        "version": "1.0.0",
+        "digest": manifest["digest"],
+        "compatibility": {"wood_tools": ">=0.1.1"},
+        "installed_location": str(install_dir.resolve()),
+        "helper_contract": {
+            "deterministic": True,
+            "input": "JSON object on stdin",
+            "output": "JSON object on stdout",
+            "errors": "Non-zero exit with JSON error envelope",
+        },
+    }
+
+    assert main(["resource", "install", str(source_dir), "--apply", "--json"]) == 0
+    reinstall_payload = json.loads(capsys.readouterr().out)
+    assert reinstall_payload["data"]["changed"] is False
+
+    assert (
+        main(
+            [
+                "resource",
+                "inspect",
+                "script",
+                "demo-helper",
+                "--version",
+                "1.0.0",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    inspect_payload = json.loads(capsys.readouterr().out)
+    assert inspect_payload["command"] == "resource-inspect"
+    assert inspect_payload["data"]["resource"]["digest"] == manifest["digest"]
+
+    assert (
+        main(
+            [
+                "resource",
+                "path",
+                "script",
+                "demo-helper",
+                "--version",
+                "1.0.0",
+                "--relative-path",
+                "run.py",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    path_payload = json.loads(capsys.readouterr().out)
+    assert path_payload["command"] == "resource-path"
+    assert path_payload["data"]["path"] == str((install_dir / "run.py").resolve())
+
+
+def test_resource_install_rejects_digest_mismatch_before_activation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "digest-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "bad-resource"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "run.py").write_text("print('changed')\n", encoding="utf-8")
+    _write_resource_manifest(source_dir, digest=f"sha256:{'0' * 64}")
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["resource", "install", str(source_dir), "--apply", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "resource-install"
+    assert payload["status"] == "error"
+    assert "Resource digest mismatch" in payload["summary"]
+    assert not (wood_home / "scripts" / "demo-helper" / "1.0.0").exists()
+
+
+def test_resource_install_rejects_helper_without_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "contract-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "source-tool"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "helper.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    _write_resource_manifest(source_dir, kind="tool", helper_contract={})
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["resource", "install", str(source_dir), "--apply", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "resource-install"
+    assert payload["status"] == "error"
+    assert payload["summary"] == "helper_contract.deterministic must be true."
+
+
+def test_resource_install_protects_existing_conflicting_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "conflict-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "source-reference"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    conflict_dir = wood_home / "packs" / "references" / "demo-helper" / "1.0.0"
+    conflict_dir.mkdir(parents=True)
+    (conflict_dir / "notes.md").write_text("existing\n", encoding="utf-8")
+
+    (source_dir / "notes.md").write_text("new\n", encoding="utf-8")
+    _write_resource_manifest(source_dir, kind="reference")
+
+    code = main(["resource", "install", str(source_dir), "--apply", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "resource-install"
+    assert payload["status"] == "error"
+    assert "Installed resource metadata not found" in payload["summary"]
+    assert (conflict_dir / "notes.md").read_text(encoding="utf-8") == "existing\n"
+
+
+def test_agent_resource_installs_as_distinct_pack_metadata(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "agent-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "wood-agents-pack"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "AGENTS.md").write_text("# Agent pack\n", encoding="utf-8")
+    manifest = _write_resource_manifest(source_dir, kind="agent", name="wood-agents")
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    assert main(["resource", "install", str(source_dir), "--apply", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    install_dir = wood_home / "packs" / "agents" / "wood-agents" / "1.0.0"
+    assert payload["data"]["resource"] == {
+        "kind": "agent",
+        "name": "wood-agents",
+        "version": "1.0.0",
+        "digest": manifest["digest"],
+        "compatibility": {"wood_tools": ">=0.1.1"},
+        "installed_location": str(install_dir.resolve()),
+    }
+    assert (install_dir / ".wood-resource-install.json").exists()
 
 
 def test_init_reports_invalid_slug_in_json_error_output(
