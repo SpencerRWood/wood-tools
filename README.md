@@ -7,15 +7,6 @@ Deterministic Python CLI tooling for project delivery workflows.
 - `wood-config` for local config initialization, profile management, validation, and diagnostics
 - `wood-project` for workspace `project.json` initialization, display, and validation
 - `wood-secrets` for provider health checks and redacted secret reference resolution
-- `scripts/init_project.py` for scaffolding a Wood-tools-style project
-- `scripts/resolve_env_refs.py` for resolving reference-only `.env` values into `.env.resolved`
-- `scripts/story_loop/next_story.py` for read-only next-story selection from OpenProject
-- `scripts/story_loop/set_status.py` for approved single-status OpenProject updates
-- `scripts/story_loop/create_branch.py` for approved Story Loop branch creation
-- `scripts/release_loop/bump_version.py` for safe local version bumps in `pyproject.toml`
-- `scripts/release_loop/create_tag.py` for safe local git tag creation
-- `scripts/release_loop/create_github_release.py` for safe GitHub release creation from an existing tag
-- `scripts/uv_active.sh` for running `uv` against the external runtime venv
 
 ## Quick Setup
 
@@ -45,268 +36,11 @@ Install project tooling into the active runtime venv:
 
 ```bash
 export UV_LINK_MODE=copy
-bash scripts/uv_active.sh sync --group dev
+uv sync --active --group dev
 pre-commit install --install-hooks
 ```
 
 ## CLI Reference
-
-### `bash scripts/uv_active.sh`
-
-Wrapper for `uv run --active ...` and `uv sync --active ...` so the project uses the external runtime venv instead of creating `./.venv`.
-
-Supported subcommands:
-
-- `run`
-- `sync`
-
-Examples:
-
-```bash
-bash scripts/uv_active.sh run pytest
-bash scripts/uv_active.sh run ruff check .
-bash scripts/uv_active.sh run ruff format --check .
-bash scripts/uv_active.sh sync --group dev
-```
-
-If the runtime venv does not exist, the wrapper exits with code `2` and prints the `python3 -m venv ...` command to create it.
-
-### `python3 scripts/init_project.py`
-
-Scaffolds a Wood-tools-style repository from the current repo root.
-
-Modes:
-
-- `--dry-run` preview planned changes
-- `--apply` write scaffold changes
-
-Options:
-
-- `--force` overwrite managed files when used with `--apply`
-- `--project-name <name>` override the default project name derived from the current directory
-
-Examples:
-
-```bash
-python3 scripts/init_project.py --dry-run
-python3 scripts/init_project.py --apply
-python3 scripts/init_project.py --apply --force
-python3 scripts/init_project.py --dry-run --project-name wood-tools
-```
-
-Behavior notes:
-
-- Must run from the repository root.
-- Writes only when `--apply` is present.
-- Prints created, skipped, and overwritten file counts at the end.
-
-### `python3 scripts/resolve_env_refs.py`
-
-Resolves Vaultwarden-backed `*_REF` values from `.env` into `.env.resolved`.
-
-Modes:
-
-- `--dry-run` preview the resolved file
-- `--apply` write the output file
-
-Options:
-
-- `--input <path>` input file path, default `".env"`
-- `--output <path>` output file path, default `".env.resolved"`
-- `--force` overwrite an existing output file when used with `--apply`
-- `--prompt-unlock` prompt for the Vaultwarden/Bitwarden master password on macOS if `BW_SESSION` is not already set
-
-Examples:
-
-```bash
-export BW_SESSION="$(bw unlock --raw)"
-python3 scripts/resolve_env_refs.py --dry-run
-python3 scripts/resolve_env_refs.py --apply
-python3 scripts/resolve_env_refs.py --apply --force
-python3 scripts/resolve_env_refs.py --apply --input .env.local --output .env.resolved.local
-python3 scripts/resolve_env_refs.py --apply --prompt-unlock
-```
-
-Behavior notes:
-
-- Never commit `.env.resolved`.
-- Keeps resolved secret values out of normal command output.
-- `--prompt-unlock` is macOS-only.
-
-### `python3 scripts/story_loop/next_story.py`
-
-Reports the next dependency-ready OpenProject Story beneath a supplied root work package.
-
-Arguments:
-
-- `<root_work_package_id>` optional integer root work package ID
-  If omitted, the script falls back to `OPENPROJECT_INITIATIVE_ID`.
-
-Options:
-
-- `--env-file <path>` resolved environment file path, default `".env.resolved"`
-- `--json` emit JSON output
-- `--status <name>` candidate status name, default `"New"`
-- `--type <name>` candidate work package type name, default `"Story"`
-- `--page-size <n>` OpenProject collection page size, default `1000`
-
-Examples:
-
-```bash
-python3 scripts/story_loop/next_story.py 208
-python3 scripts/story_loop/next_story.py 208 --json
-python3 scripts/story_loop/next_story.py 208 --env-file .env.resolved
-python3 scripts/story_loop/next_story.py 208 --status "In Progress"
-python3 scripts/story_loop/next_story.py 208 --type Story --page-size 500
-```
-
-Behavior notes:
-
-- Read-only: it does not mutate OpenProject.
-- Requires `.env.resolved` values for `OPENPROJECT_URL`, `OPENPROJECT_PROJECT_ID`, and `OPENPROJECT_API_TOKEN`.
-- Uses `OPENPROJECT_INITIATIVE_ID` as the default root work package when no positional ID is passed.
-- Selects only descendant work packages under the supplied root.
-- Normalizes predecessor/follows relationships before determining readiness.
-- `--json` emits structured success and failure payloads for agent workflows.
-
-### `python3 scripts/story_loop/set_status.py`
-
-Updates a single OpenProject work package status after explicit approval.
-
-Required arguments:
-
-- `<work_package_id>` integer work package ID
-- `<target_status>` target OpenProject status name
-
-Options:
-
-- `--env-file <path>` resolved environment file path, default `".env.resolved"`
-- `--dry-run` preview the mutation without sending a PATCH request
-- `--json` emit structured JSON output
-
-Examples:
-
-```bash
-python3 scripts/story_loop/set_status.py 278 "In Progress" --dry-run --json
-python3 scripts/story_loop/set_status.py 278 "In Progress" --json
-```
-
-Behavior notes:
-
-- Mutating: use only after explicit approval.
-- Fetches the work package first and uses `lockVersion` for the PATCH request.
-- Does not print secrets or raw API tokens.
-
-### `python3 scripts/story_loop/create_branch.py`
-
-Creates or checks out a Story Loop branch for a work package after explicit approval.
-
-Required argument:
-
-- `<work_package_id>` integer work package ID
-
-Options:
-
-- `--title <value>` optional story title used to build the branch slug
-- `--dry-run` preview the branch action without switching branches
-- `--allow-dirty` permit checkout with local changes present
-- `--json` emit structured JSON output
-
-Examples:
-
-```bash
-python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --dry-run --json
-python3 scripts/story_loop/create_branch.py 278 --title "Example story title" --json
-
-### `python3 scripts/release_loop/bump_version.py`
-
-Safely increments or sets the static package version in `pyproject.toml`.
-
-Arguments:
-
-- `<bump>` one of `patch`, `minor`, `major`, or an explicit `X.Y.Z` version
-
-Options:
-
-- `--dry-run` preview the version change without writing files
-- `--json` emit structured JSON output
-
-Examples:
-
-```bash
-python3 scripts/release_loop/bump_version.py patch --dry-run --json
-python3 scripts/release_loop/bump_version.py minor --dry-run --json
-python3 scripts/release_loop/bump_version.py major --dry-run --json
-python3 scripts/release_loop/bump_version.py 0.2.0 --dry-run --json
-```
-
-Behavior notes:
-
-- Updates only `[project].version` in `pyproject.toml`.
-- Rejects dynamic versioning and versions with a leading `v`.
-- Does not modify files in `--dry-run` mode.
-
-### `python3 scripts/release_loop/create_tag.py`
-
-Creates a local `v<version>` git tag after explicit approval.
-
-Options:
-
-- `--version <X.Y.Z>` override the version read from `pyproject.toml`
-- `--dry-run` preview the tag creation without mutating git state
-- `--allow-dirty` permit tag creation with local changes present
-- `--json` emit structured JSON output
-
-Examples:
-
-```bash
-python3 scripts/release_loop/create_tag.py --dry-run --json
-python3 scripts/release_loop/create_tag.py --version 0.2.0 --dry-run --json
-```
-
-Behavior notes:
-
-- Reads the static package version from `pyproject.toml` by default.
-- Refuses to run outside a git repo.
-- Refuses to create an existing local tag.
-- Never pushes tags.
-
-### `python3 scripts/release_loop/create_github_release.py`
-
-Creates a GitHub release from an existing `v<version>` tag after explicit approval.
-
-Options:
-
-- `--version <X.Y.Z>` override the version read from `pyproject.toml`
-- `--generate-notes` ask GitHub to generate release notes
-- `--notes-from-history` generate markdown release notes from all changes since the previous release, or all repo history for the first release
-- `--dry-run` preview the `gh release create` command without mutating GitHub
-- `--json` emit structured JSON output
-
-Examples:
-
-```bash
-python3 scripts/release_loop/create_github_release.py --dry-run --json
-python3 scripts/release_loop/create_github_release.py --version 0.2.0 --generate-notes --dry-run --json
-python3 scripts/release_loop/create_github_release.py --version 0.2.0 --notes-from-history --dry-run --json
-```
-
-Behavior notes:
-
-- Requires the `gh` CLI for non-dry-run release creation.
-- Uses `v<version>` tags and treats GitHub as a release destination, not the version source of truth.
-- `--notes-from-history` uses the most recent prior local `vX.Y.Z` tag as the release boundary when one exists.
-- For a first release with no prior local release tag, `--notes-from-history` includes the full repository history through `HEAD`.
-- History-based notes are grouped into higher-level change areas so the release body reads like a release summary instead of a flat commit dump.
-- In `--json` mode, history-based notes are returned in the release payload so agent workflows can review or refine them before publishing.
-- Never creates tags, commits, or pushes.
-```
-
-Behavior notes:
-
-- Uses `feature/op-<wp-id>-<slug>` when a title is available, otherwise `feature/op-<wp-id>`.
-- Refuses to create or switch branches on a dirty worktree unless `--allow-dirty` is passed.
-- Does not commit or push.
 
 ### `wood-config`
 
@@ -331,22 +65,12 @@ Global option:
     "default": {
       "paths": {
         "project_root": "./projects",
-        "artifact_root": "./artifacts",
         "project_aliases": {
           "demo": {
             "path": "//nas/projects/demo",
             "targets": [
               "/Volumes/Projects/demo",
               "/mnt/projects/demo"
-            ]
-          }
-        },
-        "artifact_aliases": {
-          "demo": {
-            "path": "//nas/artifacts/demo",
-            "targets": [
-              "/Volumes/Artifacts/demo",
-              "/mnt/artifacts/demo"
             ]
           }
         },
@@ -396,10 +120,11 @@ Global option:
 
 Alias notes:
 
-- `paths.project_aliases` and `paths.artifact_aliases` map stable shared paths to machine-specific candidate targets.
+- `paths.project_aliases` maps stable shared paths to machine-specific candidate targets.
 - The object form uses `path` for the canonical NAS-backed location and `targets` for candidate local mount paths checked in order.
 - Legacy string aliases such as `"demo": "./projects/demo"` are still accepted and resolve as a single direct target.
 - `show`, `get`, `validate`, and `doctor` include alias resolution metadata so you can see which target matched on the current machine.
+- Legacy `paths.artifact_root` and `paths.artifact_aliases` settings are obsolete. Use project aliases plus the user-global Wood home managed by `wood-project init`.
 
 ### `wood-secrets`
 
@@ -488,8 +213,8 @@ Workspace metadata manager for canonical `project.json` files.
 Default paths:
 
 - `project.json` at the selected project root
-- `.wood/` metadata directory at the selected project root
-- `.wood/artifacts/<project-slug>` as the default project-specific artifact directory
+- Wood home at `WOOD_HOME` when set, otherwise `~/.wood`
+- `config.toml`, `packs/templates`, `packs/references`, `packs/agents`, `tools`, `scripts`, `cache`, and `state` under the resolved Wood home
 
 Global options:
 
@@ -504,17 +229,18 @@ Project file format:
   "project_id": "2ff7b7be-6c19-49fd-bc6c-5f3064fe7bf7",
   "project_slug": "wood-tools",
   "project_root": "/workspace/wood-tools",
-  "artifact_root": "/workspace/wood-tools/.wood/artifacts",
-  "artifact_dir": "/workspace/wood-tools/.wood/artifacts/wood-tools",
-  "metadata_dir": "/workspace/wood-tools/.wood"
+  "wood_home": "/home/user/.wood",
+  "wood_config_file": "/home/user/.wood/config.toml"
 }
 ```
 
 Optional fields:
 
 - `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute, may include an optional `role`, and is validated when present.
-- `wood-project validate` performs non-mutating availability checks for configured project, metadata, artifact, and linked repository directories. JSON output includes per-path access details.
-- Mutating `wood-project` commands preflight the required parent directories and fail early with clear errors when a NAS mount is unavailable or not writable.
+- `wood-project validate` performs non-mutating availability checks for the configured project root, Wood home resources, and linked repository directories. JSON output includes per-path access details.
+- Mutating `wood-project` commands preflight the required parent directories and fail early with clear errors when the Wood home is unavailable or not writable.
+- Legacy `artifact_root`, `artifact_dir`, and `metadata_dir` project fields are obsolete and produce explicit remediation guidance.
+- No `wood-project` command creates or requires a project-local `.wood/` directory.
 
 Commands:
 
@@ -529,7 +255,8 @@ Options for `init`:
 
 - `--project-id <value>` provide an explicit project ID instead of generating a UUID
 - `--project-slug <value>` provide an explicit slug instead of deriving one from the root folder
-- `--artifact-root <path>` provide a custom shared artifact root
+- `--wood-home <path>` override the user-global Wood home, defaulting to `WOOD_HOME` or `~/.wood`
+- `--artifact-root <path>` is obsolete and returns guidance to use `--wood-home` or `WOOD_HOME`
 - `--json` emit JSON envelope output
 
 Options for `link repo`:
@@ -546,7 +273,7 @@ Examples:
 wood-project init
 wood-project init --apply
 wood-project init --project-id proj-123 --project-slug demo-app --apply
-wood-project init --artifact-root /tmp/wood-artifacts --apply
+wood-project init --wood-home /tmp/wood-home --apply
 wood-project link repo ../shared-lib --role library --apply
 wood-project show --json
 wood-project validate --json
@@ -691,48 +418,18 @@ Behavior notes:
 - `--json` returns the shared command envelope; command-specific fields live under `data`.
 - When `--check` is omitted, all current doctor checks run.
 
-## Typical Local Workflow
-
-### Resolve Local Environment References
-
-1. Put reference-only values in `.env`.
-2. Unlock Vaultwarden/Bitwarden CLI:
-   `export BW_SESSION="$(bw unlock --raw)"`
-3. Resolve refs:
-   `python3 scripts/resolve_env_refs.py --apply`
-4. Confirm `.env.resolved` exists and is ignored by Git.
-
-Optional on macOS:
-
-```bash
-python3 scripts/resolve_env_refs.py --apply --prompt-unlock
-```
-
-### Find the Next OpenProject Story
-
-1. Ensure `.env.resolved` exists.
-2. Run:
-   `python3 scripts/story_loop/next_story.py 208`
-3. Create or check out the suggested branch.
-4. Give Codex the Story packet for that OpenProject ID.
-
-Notes:
-
-- `.env.resolved` may contain secrets and must never be committed.
-- Next-story lookup is read-only.
-
 ## Development Commands
 
 Run tests:
 
 ```bash
-bash scripts/uv_active.sh run pytest
-bash scripts/uv_active.sh run pytest tests/test_wood_config.py
+uv run --active pytest
+uv run --active pytest tests/test_wood_config.py
 ```
 
 Run lint and format checks:
 
 ```bash
-bash scripts/uv_active.sh run ruff check .
-bash scripts/uv_active.sh run ruff format --check .
+uv run --active ruff check .
+uv run --active ruff format --check .
 ```

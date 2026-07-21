@@ -208,8 +208,6 @@ def test_json_output_for_supported_commands(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / "config.json"
-    artifact_target = tmp_path / "artifacts" / "demo"
-    artifact_target.mkdir(parents=True)
 
     assert main(["--config-path", str(config_path), "init", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -247,6 +245,8 @@ def test_json_output_for_supported_commands(
     )
     assert payload["data"]["config"]["profiles"]["default"]["wood_agents"]["boundary_ref"] is None
     assert payload["data"]["config"]["profiles"]["default"]["paths"]["project_aliases"] == {}
+    assert "artifact_root" not in payload["data"]["config"]["profiles"]["default"]["paths"]
+    assert "artifact_aliases" not in payload["data"]["config"]["profiles"]["default"]["paths"]
 
     assert (
         main(
@@ -310,45 +310,40 @@ def test_json_output_for_supported_commands(
     assert payload["data"]["key"] == "wood_agents.adapters_ref"
     assert payload["data"]["value"] == "pkg://wood-agents/adapters"
 
-    assert (
-        main(
-            [
-                "--config-path",
-                str(config_path),
-                "set",
-                "paths.artifact_aliases.demo",
-                json.dumps(
-                    {
-                        "path": "//nas/artifacts/demo",
-                        "targets": ["/missing/demo-artifacts", str(artifact_target)],
-                    }
-                ),
-                "--apply",
-                "--json",
-            ]
-        )
-        == 0
-    )
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "set"
-    assert payload["data"]["key"] == "paths.artifact_aliases.demo"
 
-    assert (
-        main(
-            [
-                "--config-path",
-                str(config_path),
-                "get",
-                "paths.artifact_aliases.demo",
-                "--json",
-            ]
-        )
-        == 0
+def test_artifact_config_settings_are_obsolete(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+
+    code = main(
+        [
+            "--config-path",
+            str(config_path),
+            "set",
+            "paths.artifact_aliases.demo",
+            '{"path":"//nas/artifacts/demo","targets":["/mnt/demo"]}',
+            "--apply",
+        ]
     )
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "Artifact path settings are obsolete" in err
+
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    document["profiles"]["default"]["paths"]["artifact_root"] = "./artifacts"
+    document["profiles"]["default"]["paths"]["artifact_aliases"] = {}
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    code = main(["--config-path", str(config_path), "validate", "--json"])
+
+    assert code == 2
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "get"
-    assert payload["data"]["resolved_value"]["resolved_path"] == str(artifact_target)
-    assert payload["data"]["resolved_value"]["legacy_format"] is False
+    fields = {issue["field"] for issue in payload["errors"]}
+    assert "paths.artifact_root" in fields
+    assert "paths.artifact_aliases" in fields
 
 
 def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:

@@ -8,7 +8,14 @@ from typing import Any
 
 from wood_config.output import blocked_output, error_output, success_output
 
-from .core import ProjectError, init_project, link_repository, show_project, validate_project
+from .core import (
+    OBSOLETE_ARTIFACT_MESSAGE,
+    ProjectError,
+    init_project,
+    link_repository,
+    show_project,
+    validate_project,
+)
 
 
 def _command_name(args: argparse.Namespace) -> str:
@@ -47,7 +54,7 @@ def _summarize_json_payload(
             command="init",
             summary=f"Project initialization requires approval to write {payload['path']}.",
             data=payload,
-            next_actions=["Re-run with --apply to create project.json and .wood metadata."],
+            next_actions=["Re-run with --apply to create project.json and Wood home resources."],
         )
 
     if command == "show":
@@ -103,9 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--project-id", help="Provide an explicit project ID")
     init_parser.add_argument("--project-slug", help="Provide an explicit project slug")
     init_parser.add_argument(
+        "--wood-home",
+        type=Path,
+        help="Override the user-global Wood home (defaults to WOOD_HOME or ~/.wood)",
+    )
+    init_parser.add_argument(
         "--artifact-root",
         type=Path,
-        help="Override the artifact root (defaults to <project-root>/.wood/artifacts)",
+        help="Obsolete. Use --wood-home or WOOD_HOME instead.",
     )
     init_parser.add_argument("--apply", action="store_true", help="Write project.json")
     init_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -141,9 +153,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "init":
+            if args.artifact_root is not None:
+                raise ProjectError(f"--artifact-root is obsolete. {OBSOLETE_ARTIFACT_MESSAGE}")
             payload = init_project(
                 project_root=args.project_root,
-                artifact_root=args.artifact_root,
+                wood_home=args.wood_home,
                 project_id=args.project_id,
                 project_slug=args.project_slug,
                 apply=args.apply,
