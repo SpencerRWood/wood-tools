@@ -40,6 +40,7 @@ Thumbs.db
 docs/*
 AGENTS.md
 .codex/
+scripts/*
 
 # Local story-loop helper scripts
 scripts/story_loop/next_story.py

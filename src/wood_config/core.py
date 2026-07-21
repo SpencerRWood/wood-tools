@@ -14,12 +14,15 @@ KEY_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]*$")
 SENSITIVE_PARTS = ("token", "secret", "password")
 REQUIRED_PATH_KEYS = (
     "project_root",
-    "artifact_root",
     "scheduler_root",
     "template_search_paths",
 )
-ALIAS_PATH_FIELDS = ("project_aliases", "artifact_aliases")
+ALIAS_PATH_FIELDS = ("project_aliases",)
 REFERENCE_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://.+$")
+OBSOLETE_ARTIFACT_CONFIG_MESSAGE = (
+    "Artifact path settings are obsolete. Use project aliases plus the user-global Wood home "
+    "managed by wood-project init."
+)
 
 
 class ConfigError(ValueError):
@@ -45,9 +48,7 @@ def _default_document() -> dict[str, Any]:
     default_values: dict[str, Any] = {
         "paths": {
             "project_root": "./projects",
-            "artifact_root": "./artifacts",
             "project_aliases": {},
-            "artifact_aliases": {},
             "scheduler_root": "./scheduler",
             "template_search_paths": ["./templates"],
         },
@@ -447,17 +448,11 @@ def _validate_alias_mutation(profile_values: dict[str, Any], *, key: str) -> Non
             field_name="project_aliases",
         )
     elif key == "paths.artifact_aliases":
-        findings = _validate_path_aliases(
-            paths.get("artifact_aliases"), field_name="artifact_aliases"
-        )
+        raise ConfigError(OBSOLETE_ARTIFACT_CONFIG_MESSAGE)
     elif key.startswith("paths.artifact_aliases."):
-        alias_name = key.removeprefix("paths.artifact_aliases.").split(".", 1)[0]
-        aliases = paths.get("artifact_aliases", {})
-        findings = _validate_alias_entry(
-            alias_name,
-            aliases.get(alias_name) if isinstance(aliases, dict) else None,
-            field_name="artifact_aliases",
-        )
+        raise ConfigError(OBSOLETE_ARTIFACT_CONFIG_MESSAGE)
+    elif key == "paths.artifact_root":
+        raise ConfigError(OBSOLETE_ARTIFACT_CONFIG_MESSAGE)
     else:
         return
 
@@ -592,11 +587,19 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
                 }
             )
 
+    for obsolete_key in ("artifact_root", "artifact_aliases"):
+        if obsolete_key in paths:
+            findings.append(
+                {
+                    "code": "obsolete_artifact_setting",
+                    "field": f"paths.{obsolete_key}",
+                    "message": OBSOLETE_ARTIFACT_CONFIG_MESSAGE,
+                    "remediation": f"Remove paths.{obsolete_key} from the profile.",
+                }
+            )
+
     findings.extend(
         _validate_path_aliases(paths.get("project_aliases"), field_name="project_aliases")
-    )
-    findings.extend(
-        _validate_path_aliases(paths.get("artifact_aliases"), field_name="artifact_aliases")
     )
 
     integrations = profile.get("integrations")

@@ -11,7 +11,22 @@ from uuid import uuid4
 
 PROJECT_SCHEMA_VERSION = 1
 PROJECT_FILE_NAME = "project.json"
-METADATA_DIR_NAME = ".wood"
+WOOD_HOME_ENV = "WOOD_HOME"
+WOOD_HOME_DIR_NAME = ".wood"
+WOOD_CONFIG_FILE_NAME = "config.toml"
+WOOD_HOME_DIRECTORY_NAMES = (
+    "packs/templates",
+    "packs/references",
+    "packs/agents",
+    "tools",
+    "scripts",
+    "cache",
+    "state",
+)
+OBSOLETE_ARTIFACT_MESSAGE = (
+    "artifact_root, artifact_dir, metadata_dir, and artifact-specific settings are obsolete. "
+    "Use the user-global Wood home via WOOD_HOME or the default ~/.wood."
+)
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -22,10 +37,10 @@ class ProjectError(ValueError):
 @dataclass(frozen=True)
 class ProjectPaths:
     project_root: Path
-    metadata_dir: Path
     project_file: Path
-    artifact_root: Path
-    artifact_dir: Path
+    wood_home: Path
+    wood_config_file: Path
+    wood_home_dirs: tuple[Path, ...]
 
 
 @dataclass(frozen=True)
@@ -53,28 +68,40 @@ def resolve_project_root(project_root: Path | None = None) -> Path:
     return root
 
 
+def resolve_wood_home(wood_home: Path | None = None) -> Path:
+    raw_home = wood_home
+    if raw_home is None:
+        env_value = os.environ.get(WOOD_HOME_ENV)
+        if env_value is not None and not env_value.strip():
+            raise ProjectError("WOOD_HOME must be a non-empty path when set.")
+        raw_home = Path(env_value) if env_value else Path.home() / WOOD_HOME_DIR_NAME
+    return raw_home.expanduser().resolve()
+
+
+def _validate_wood_home_location(project_root: Path, wood_home: Path) -> None:
+    if wood_home == project_root / WOOD_HOME_DIR_NAME:
+        raise ProjectError(
+            "Wood home must not be the project-local .wood directory. Set WOOD_HOME to a "
+            "user-global path or use the default ~/.wood."
+        )
+
+
 def build_paths(
     *,
     project_root: Path | None = None,
-    artifact_root: Path | None = None,
+    wood_home: Path | None = None,
     project_slug: str | None = None,
 ) -> ProjectPaths:
     resolved_root = resolve_project_root(project_root)
-    resolved_slug = project_slug or slugify_project_name(resolved_root.name)
-    resolved_artifact_root = (
-        artifact_root.expanduser().resolve()
-        if artifact_root is not None
-        else resolved_root / METADATA_DIR_NAME / "artifacts"
-    )
-    metadata_dir = resolved_root / METADATA_DIR_NAME
+    resolved_wood_home = resolve_wood_home(wood_home)
+    _validate_wood_home_location(resolved_root, resolved_wood_home)
     project_file = resolved_root / PROJECT_FILE_NAME
-    artifact_dir = resolved_artifact_root / resolved_slug
     return ProjectPaths(
         project_root=resolved_root,
-        metadata_dir=metadata_dir,
         project_file=project_file,
-        artifact_root=resolved_artifact_root,
-        artifact_dir=artifact_dir,
+        wood_home=resolved_wood_home,
+        wood_config_file=resolved_wood_home / WOOD_CONFIG_FILE_NAME,
+        wood_home_dirs=tuple(resolved_wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES),
     )
 
 
@@ -87,11 +114,11 @@ def create_project_document(
     project_id: str | None,
     project_slug: str | None,
     project_root: Path | None,
-    artifact_root: Path | None,
+    wood_home: Path | None,
 ) -> dict[str, Any]:
     paths = build_paths(
         project_root=project_root,
-        artifact_root=artifact_root,
+        wood_home=wood_home,
         project_slug=project_slug,
     )
     slug = project_slug or slugify_project_name(paths.project_root.name)
@@ -100,9 +127,8 @@ def create_project_document(
         "project_id": project_id or generate_project_id(),
         "project_slug": slug,
         "project_root": str(paths.project_root),
-        "artifact_root": str(paths.artifact_root),
-        "artifact_dir": str(paths.artifact_dir),
-        "metadata_dir": str(paths.metadata_dir),
+        "wood_home": str(paths.wood_home),
+        "wood_config_file": str(paths.wood_config_file),
     }
     validate_project_document(document)
     return document
@@ -123,7 +149,17 @@ def validate_project_document(document: dict[str, Any]) -> None:
     if not isinstance(project_slug, str) or not SLUG_PATTERN.fullmatch(project_slug):
         raise ProjectError("project_slug must use lowercase letters, numbers, and hyphens only.")
 
-    for field in ("project_root", "artifact_root", "artifact_dir", "metadata_dir"):
+    obsolete_fields = [
+        field
+        for field in ("artifact_root", "artifact_dir", "metadata_dir", "artifact_aliases")
+        if field in document
+    ]
+    if obsolete_fields:
+        raise ProjectError(
+            f"{', '.join(obsolete_fields)} are obsolete. {OBSOLETE_ARTIFACT_MESSAGE}"
+        )
+
+    for field in ("project_root", "wood_home", "wood_config_file"):
         value = document.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ProjectError(f"{field} must be a non-empty string.")
@@ -131,16 +167,12 @@ def validate_project_document(document: dict[str, Any]) -> None:
             raise ProjectError(f"{field} must be an absolute path.")
 
     project_root = Path(document["project_root"])
-    artifact_root = Path(document["artifact_root"])
-    artifact_dir = Path(document["artifact_dir"])
-    metadata_dir = Path(document["metadata_dir"])
+    wood_home = Path(document["wood_home"])
+    wood_config_file = Path(document["wood_config_file"])
 
-    if metadata_dir != project_root / METADATA_DIR_NAME:
-        raise ProjectError("metadata_dir must be '<project_root>/.wood'.")
-    if artifact_dir.parent != artifact_root:
-        raise ProjectError("artifact_dir must be inside artifact_root.")
-    if artifact_dir.name != project_slug:
-        raise ProjectError("artifact_dir must end with project_slug.")
+    _validate_wood_home_location(project_root, wood_home)
+    if wood_config_file != wood_home / WOOD_CONFIG_FILE_NAME:
+        raise ProjectError("wood_config_file must be '<wood_home>/config.toml'.")
 
 
 def _validate_existing_directory(field: str, path: Path) -> None:
@@ -154,6 +186,19 @@ def _validate_existing_directory(field: str, path: Path) -> None:
         raise ProjectError(f"{field} does not exist: {path}")
     if not path.is_dir():
         raise ProjectError(f"{field} must be a directory: {path}")
+
+
+def _validate_existing_file(field: str, path: Path) -> None:
+    if not path.exists():
+        nearest_parent = _nearest_existing_parent(path)
+        if nearest_parent is not None and nearest_parent != path.parent:
+            raise ProjectError(
+                f"{field} is unavailable: {path} (nearest existing parent: {nearest_parent}; "
+                "the expected Wood home may not be available)"
+            )
+        raise ProjectError(f"{field} does not exist: {path}")
+    if not path.is_file():
+        raise ProjectError(f"{field} must be a file: {path}")
 
 
 def _ensure_unique_paths(entries: list[tuple[str, Path]]) -> None:
@@ -180,6 +225,20 @@ def _nearest_existing_parent(path: Path) -> Path | None:
 def _check_directory_access(field: str, path: Path, *, require_write: bool) -> dict[str, Any]:
     readable = os.access(path, os.R_OK | os.X_OK)
     writable = os.access(path, os.W_OK | os.X_OK)
+    if not readable:
+        raise ProjectError(f"{field} is not readable: {path}")
+    if require_write and not writable:
+        raise ProjectError(f"{field} is not writable: {path}")
+    return {
+        "path": str(path),
+        "readable": readable,
+        "writable": writable,
+    }
+
+
+def _check_file_access(field: str, path: Path, *, require_write: bool) -> dict[str, Any]:
+    readable = os.access(path, os.R_OK)
+    writable = os.access(path, os.W_OK)
     if not readable:
         raise ProjectError(f"{field} is not readable: {path}")
     if require_write and not writable:
@@ -277,36 +336,43 @@ def validate_project_state(
     validate_project_document(document)
 
     project_root = Path(document["project_root"])
-    metadata_dir = Path(document["metadata_dir"])
-    artifact_root = Path(document["artifact_root"])
-    artifact_dir = Path(document["artifact_dir"])
+    wood_home = Path(document["wood_home"])
+    wood_config_file = Path(document["wood_config_file"])
+    wood_home_dirs = tuple(wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES)
     linked_repositories = _load_linked_repositories(document)
 
     _validate_existing_directory("project_root", project_root)
-    _validate_existing_directory("metadata_dir", metadata_dir)
-    _validate_existing_directory("artifact_root", artifact_root)
-    _validate_existing_directory("artifact_dir", artifact_dir)
+    _validate_existing_directory("wood_home", wood_home)
+    _validate_existing_file("wood_config_file", wood_config_file)
+    for directory in wood_home_dirs:
+        field = f"wood_home_dirs.{directory.relative_to(wood_home)}"
+        _validate_existing_directory(field, directory)
 
     mount_checks = {
         "project_root": _check_directory_access("project_root", project_root, require_write=False),
-        "metadata_dir": _check_directory_access("metadata_dir", metadata_dir, require_write=False),
-        "artifact_root": _check_directory_access(
-            "artifact_root", artifact_root, require_write=False
+        "wood_home": _check_directory_access("wood_home", wood_home, require_write=False),
+        "wood_config_file": _check_file_access(
+            "wood_config_file", wood_config_file, require_write=False
         ),
-        "artifact_dir": _check_directory_access("artifact_dir", artifact_dir, require_write=False),
+        "wood_home_dirs": {
+            str(directory.relative_to(wood_home)): _check_directory_access(
+                f"wood_home_dirs.{directory.relative_to(wood_home)}",
+                directory,
+                require_write=False,
+            )
+            for directory in wood_home_dirs
+        },
     }
-
-    if metadata_dir.name != METADATA_DIR_NAME:
-        raise ProjectError("metadata_dir must use the '.wood' directory name.")
-    if metadata_dir.parent != project_root:
-        raise ProjectError("metadata_dir must be a direct child of project_root.")
 
     _ensure_unique_paths(
         [
             ("project_root", project_root),
-            ("metadata_dir", metadata_dir),
-            ("artifact_root", artifact_root),
-            ("artifact_dir", artifact_dir),
+            ("wood_home", wood_home),
+            ("wood_config_file", wood_config_file),
+            *[
+                (f"wood_home_dirs.{directory.relative_to(wood_home)}", directory)
+                for directory in wood_home_dirs
+            ],
         ]
     )
 
@@ -335,9 +401,12 @@ def validate_project_state(
     _ensure_unique_paths(
         [
             ("project_root", project_root),
-            ("metadata_dir", metadata_dir),
-            ("artifact_root", artifact_root),
-            ("artifact_dir", artifact_dir),
+            ("wood_home", wood_home),
+            ("wood_config_file", wood_config_file),
+            *[
+                (f"wood_home_dirs.{directory.relative_to(wood_home)}", directory)
+                for directory in wood_home_dirs
+            ],
             *linked_entries,
         ]
     )
@@ -347,9 +416,9 @@ def validate_project_state(
         "project": document,
         "checked_paths": {
             "project_root": str(project_root),
-            "metadata_dir": str(metadata_dir),
-            "artifact_root": str(artifact_root),
-            "artifact_dir": str(artifact_dir),
+            "wood_home": str(wood_home),
+            "wood_config_file": str(wood_config_file),
+            "wood_home_dirs": [str(directory) for directory in wood_home_dirs],
         },
         "mount_checks": mount_checks,
         "linked_repositories": linked_payload,
@@ -358,18 +427,23 @@ def validate_project_state(
 
 def save_project_document(project_file: Path, document: dict[str, Any]) -> None:
     validate_project_document(document)
-    metadata_dir = Path(document["metadata_dir"])
-    artifact_root = Path(document["artifact_root"])
-    artifact_dir = Path(document["artifact_dir"])
+    wood_home = Path(document["wood_home"])
+    wood_config_file = Path(document["wood_config_file"])
+    wood_home_dirs = tuple(wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES)
 
     _check_mutation_parent("project_root", project_file.parent)
-    _check_mutation_parent("metadata_dir", metadata_dir)
-    _check_mutation_parent("artifact_root", artifact_root)
-    _check_mutation_parent("artifact_dir", artifact_dir)
+    _check_mutation_parent("wood_home", wood_home)
 
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    artifact_root.mkdir(parents=True, exist_ok=True)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    wood_home.mkdir(parents=True, exist_ok=True)
+    if wood_config_file.exists() and not wood_config_file.is_file():
+        raise ProjectError(f"wood_config_file must be a file: {wood_config_file}")
+    for directory in wood_home_dirs:
+        if directory.exists() and not directory.is_dir():
+            field = f"wood_home_dirs.{directory.relative_to(wood_home)}"
+            raise ProjectError(f"{field} must be a directory: {directory}")
+        directory.mkdir(parents=True, exist_ok=True)
+    if not wood_config_file.exists():
+        wood_config_file.write_text("version = 1\n", encoding="utf-8")
 
     with NamedTemporaryFile("w", encoding="utf-8", dir=project_file.parent, delete=False) as tmp:
         json.dump(document, tmp, indent=2, sort_keys=True)
@@ -392,7 +466,7 @@ def load_project_document(project_file: Path) -> dict[str, Any]:
 def init_project(
     *,
     project_root: Path | None,
-    artifact_root: Path | None,
+    wood_home: Path | None,
     project_id: str | None,
     project_slug: str | None,
     apply: bool,
@@ -401,7 +475,7 @@ def init_project(
         project_id=project_id,
         project_slug=project_slug,
         project_root=project_root,
-        artifact_root=artifact_root,
+        wood_home=wood_home,
     )
     project_file = Path(document["project_root"]) / PROJECT_FILE_NAME
 
