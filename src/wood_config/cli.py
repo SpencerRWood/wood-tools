@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .audit import write_audit_event
 from .core import (
     ConfigError,
     build_paths,
@@ -22,7 +23,12 @@ from .core import (
 from .output import blocked_output, error_output, success_output, warning_output
 
 
-def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
+def _emit(
+    payload: dict[str, Any], *, json_output: bool, command_args: list[str] | None = None
+) -> int:
+    if {"command", "status", "mutation"}.issubset(payload):
+        write_audit_event(payload, cli_name="wood-config", command_args=command_args)
+
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -231,8 +237,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(command_args)
     paths = build_paths(args.config_path)
 
     try:
@@ -243,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.json
                 else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         document = load_config(paths)
@@ -252,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload(args.command, payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "get":
@@ -273,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload(args.command, payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "set":
@@ -303,12 +313,17 @@ def main(argv: list[str] | None = None) -> int:
                 if args.json
                 else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "validate":
             payload = validate_config(document, profile=args.profile)
             if args.json:
-                _emit(_summarize_json_payload(args.command, payload), json_output=True)
+                _emit(
+                    _summarize_json_payload(args.command, payload),
+                    json_output=True,
+                    command_args=command_args,
+                )
                 return 0 if payload["valid"] else 2
             return _emit_validation(payload, json_output=False)
 
@@ -318,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
                 _emit(
                     _summarize_json_payload(args.command, payload) if args.json else payload,
                     json_output=args.json,
+                    command_args=command_args,
                 )
                 if args.json
                 else _emit_doctor(payload, json_output=False)
@@ -335,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
                 errors=[{"message": str(exc)}],
                 next_actions=["Review the command input and try again."],
             )
+            write_audit_event(payload, cli_name="wood-config", command_args=command_args)
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 2
         print(f"Error: {exc}", file=sys.stderr)

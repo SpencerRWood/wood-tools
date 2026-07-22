@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from wood_config.audit import write_audit_event
 from wood_config.output import blocked_output, error_output, success_output
 
 from .core import (
@@ -29,7 +30,12 @@ def _command_name(args: argparse.Namespace) -> str:
     return args.command
 
 
-def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
+def _emit(
+    payload: dict[str, Any], *, json_output: bool, command_args: list[str] | None = None
+) -> int:
+    if {"command", "status", "mutation"}.issubset(payload):
+        write_audit_event(payload, cli_name="wood-project", command_args=command_args)
+
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -231,8 +237,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(command_args)
 
     try:
         if args.command == "init":
@@ -252,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                     else payload
                 ),
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "show":
@@ -263,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload("show", payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "validate":
@@ -273,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload("validate", payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "link" and args.link_command == "repo":
@@ -291,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
                     else payload
                 ),
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "resource" and args.resource_command == "install":
@@ -307,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                     else payload
                 ),
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "resource" and args.resource_command == "inspect":
@@ -320,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload("resource-inspect", payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         if args.command == "resource" and args.resource_command == "path":
@@ -334,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(
                 _summarize_json_payload("resource-path", payload) if args.json else payload,
                 json_output=args.json,
+                command_args=command_args,
             )
 
         parser.error("Unknown command")
@@ -352,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                 errors=[{"message": str(exc)}],
                 next_actions=["Review the project metadata inputs and try again."],
             )
+            write_audit_event(payload, cli_name="wood-project", command_args=command_args)
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 2
         print(f"Error: {exc}", file=sys.stderr)
