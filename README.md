@@ -406,6 +406,29 @@ Behavior notes:
 - Sensitive values must be stored as references only, using keys ending in `_ref`.
 - JSON mode returns a shared envelope with `command`, `status`, `mutation`, `requires_approval`, `summary`, `data`, `warnings`, `errors`, and `next_actions`.
 
+### Audit Logging
+
+Commands that emit the shared JSON envelope also write a metadata-only audit event.
+Events default to JSON Lines at `~/.wood/state/logs/audit.jsonl`, or
+`$WOOD_HOME/state/logs/audit.jsonl` when `WOOD_HOME` is set. Each event records
+the timestamp first, followed by the CLI name, command, redacted full command,
+command intent summary, outcome, mutation status, approval-gate status,
+relevant target type and path, redacted reason or error evidence, and actor.
+Audit events do not include command payloads, environment dumps, secret values,
+resource lifecycle tracking, lineage, health state, or reproducibility inputs.
+
+Audit logging is best-effort: Wood Tools commands do not depend on audit files
+being present or writable.
+
+Environment controls:
+
+- `WOOD_AUDIT_LOG=disabled` turns audit logging off.
+- `WOOD_AUDIT_LOG=console` writes audit events to stderr instead of a file.
+- `WOOD_AUDIT_LOG_PATH=<path>` overrides the audit JSONL file path.
+- `WOOD_AUDIT_LOG_MAX_BYTES=<bytes>` sets the rotation threshold, defaulting to
+  `1000000`.
+- `WOOD_AUDIT_LOG_MAX_FILES=<count>` bounds rotated files, defaulting to `5`.
+
 #### `wood-config validate`
 
 Validate required config settings and report actionable errors.

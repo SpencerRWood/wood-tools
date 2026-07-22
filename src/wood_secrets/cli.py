@@ -5,13 +5,19 @@ import json
 import sys
 from typing import Any
 
+from wood_config.audit import write_audit_event
 from wood_config.output import error_output, success_output, warning_output
 
 from .core import SecretResolver
 from .providers import SecretProviderError
 
 
-def _emit(payload: dict[str, Any], *, json_output: bool) -> int:
+def _emit(
+    payload: dict[str, Any], *, json_output: bool, command_args: list[str] | None = None
+) -> int:
+    if {"command", "status", "mutation"}.issubset(payload):
+        write_audit_event(payload, cli_name="wood-secrets", command_args=command_args)
+
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -131,8 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(command_args)
     resolver = SecretResolver()
 
     try:
@@ -154,8 +161,8 @@ def main(argv: list[str] | None = None) -> int:
                         payload.get("checks") if not payload["ok"] and args.ref is None else None
                     ),
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "providers":
             payload = resolver.providers()
@@ -168,8 +175,8 @@ def main(argv: list[str] | None = None) -> int:
                     data=payload,
                     warnings=payload["providers"] if not payload["ok"] else None,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "status":
             payload = resolver.status(args.provider)
@@ -180,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Secret provider checks completed.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "unlock":
             payload = resolver.unlock(
@@ -197,8 +204,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Unlocked secret provider session.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "lock":
             payload = resolver.lock(args.provider)
@@ -209,8 +216,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Locked secret provider session.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "session":
             payload = resolver.session(args.provider)
@@ -221,8 +228,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Secret runtime session status completed.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "list":
             payload = resolver.list_entries(args.provider, search=args.search)
@@ -233,8 +240,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Listed secret entries without exposing secret values.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "resolve":
             resolved = resolver.resolve(args.ref)
@@ -248,8 +255,8 @@ def main(argv: list[str] | None = None) -> int:
                     summary="Resolved secret reference without exposing the secret value.",
                     data=payload,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "exec":
             raw_args = args.command_args
@@ -285,8 +292,8 @@ def main(argv: list[str] | None = None) -> int:
                     data=payload,
                     warnings=payload["issues"] if payload["status"] != "ok" else None,
                 )
-                return _emit(envelope, json_output=True)
-            return _emit(payload, json_output=False)
+                return _emit(envelope, json_output=True, command_args=command_args)
+            return _emit(payload, json_output=False, command_args=command_args)
 
         parser.error("Unknown command")
         return 2
@@ -305,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 ],
             )
+            write_audit_event(payload, cli_name="wood-secrets", command_args=command_args)
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 2
         print(f"Error: {exc}", file=sys.stderr)
