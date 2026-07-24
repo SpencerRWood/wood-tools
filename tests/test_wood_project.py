@@ -244,7 +244,10 @@ def test_validate_reports_invalid_project_json(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "validate"
     assert payload["status"] == "error"
-    assert "artifact_root, artifact_dir, metadata_dir are obsolete" in payload["summary"]
+    assert (
+        "Unexpected project metadata fields: artifact_dir, artifact_root, metadata_dir"
+        in payload["summary"]
+    )
 
 
 def test_validate_json_success_reports_valid_project(
@@ -846,28 +849,3 @@ def test_init_apply_fails_when_wood_home_parent_is_not_writable(
     assert payload["command"] == "init"
     assert payload["status"] == "error"
     assert payload["summary"] == f"wood_home is not writable: {blocked_parent}"
-
-
-def test_init_rejects_obsolete_artifact_root_flag(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    project_root = tmp_path / "obsolete-artifacts"
-    project_root.mkdir()
-
-    code = main(
-        [
-            "--project-root",
-            str(project_root),
-            "init",
-            "--artifact-root",
-            str(tmp_path / "artifacts"),
-            "--apply",
-            "--json",
-        ]
-    )
-
-    assert code == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "init"
-    assert payload["status"] == "error"
-    assert "--artifact-root is obsolete" in payload["summary"]
