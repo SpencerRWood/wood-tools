@@ -24,6 +24,9 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["*"]
 
+[tool.setuptools.package-data]
+wood_project = ["builtin_template_packs/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

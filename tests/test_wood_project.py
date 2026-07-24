@@ -27,6 +27,7 @@ def _write_resource_manifest(
     version: str = "1.0.0",
     digest: str | None = None,
     helper_contract: dict[str, object] | None = None,
+    template_pack: dict[str, object] | None = None,
 ) -> dict[str, object]:
     manifest: dict[str, object] = {
         "schema_version": 1,
@@ -45,11 +46,56 @@ def _write_resource_manifest(
         }
     if helper_contract is not None:
         manifest["helper_contract"] = helper_contract
+    if template_pack is not None:
+        manifest["template_pack"] = template_pack
     (source_dir / "wood-resource.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return manifest
+
+
+def _write_template_pack_manifest(
+    source_dir: Path,
+    *,
+    name: str = "service-app",
+    version: str = "1.0.0",
+    digest: str | None = None,
+    variables: dict[str, object] | None = None,
+    operations: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    template_pack = {
+        "schema_version": 1,
+        "name": name,
+        "version": version,
+        "variables": variables
+        or {
+            "project-name": {
+                "type": "string",
+                "required": True,
+                "description": "Display name for the generated project",
+            }
+        },
+        "operations": operations
+        or [
+            {
+                "type": "render",
+                "template": "templates/README.md.tmpl",
+                "output": "README.md",
+                "overwrite": "safe",
+                "safe_overwrite": {"strategy": "if-unchanged"},
+            }
+        ],
+        "validation": [{"rule": "project-name", "message": "Project name is required."}],
+    }
+    return _write_resource_manifest(
+        source_dir,
+        kind="template",
+        name=name,
+        version=version,
+        digest=digest,
+        template_pack=template_pack,
+    )
 
 
 def test_init_show_validate_success_path_creates_global_wood_home(
@@ -728,6 +774,135 @@ def test_agent_resource_installs_as_distinct_pack_metadata(
         "installed_location": str(install_dir.resolve()),
     }
     assert (install_dir / ".wood-resource-install.json").exists()
+
+
+def test_template_pack_explicit_source_show_reports_contract_without_install_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "template-source-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "service-app-pack"
+    project_root.mkdir()
+    (source_dir / "templates").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "templates" / "README.md.tmpl").write_text(
+        "# {{project-name}}\n",
+        encoding="utf-8",
+    )
+    manifest = _write_template_pack_manifest(source_dir)
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "template",
+                "show",
+                "service-app",
+                "--source-dir",
+                str(source_dir),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    template_pack = payload["data"]["template_pack"]
+    assert payload["command"] == "template-show"
+    assert template_pack["source"] == "explicit"
+    assert template_pack["version"] == "1.0.0"
+    assert template_pack["digest"] == manifest["digest"]
+    assert template_pack["planned_outputs"] == ["README.md"]
+    assert template_pack["variables"]["project-name"]["required"] is True
+    assert "installed_location" not in json.dumps(payload)
+
+
+def test_template_pack_installed_list_and_project_lock_precedence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "template-lock-app"
+    wood_home = tmp_path / "wood-home"
+    source_v1 = tmp_path / "service-app-v1"
+    source_v2 = tmp_path / "service-app-v2"
+    project_root.mkdir()
+    for source_dir in (source_v1, source_v2):
+        (source_dir / "templates").mkdir(parents=True)
+        (source_dir / "templates" / "README.md.tmpl").write_text(
+            f"# {source_dir.name}\n",
+            encoding="utf-8",
+        )
+    monkeypatch.chdir(project_root)
+
+    manifest_v1 = _write_template_pack_manifest(source_v1, version="1.0.0")
+    _write_template_pack_manifest(source_v2, version="2.0.0")
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+    assert main(["resource", "install", str(source_v1), "--apply", "--json"]) == 0
+    capsys.readouterr()
+    assert main(["resource", "install", str(source_v2), "--apply", "--json"]) == 0
+    capsys.readouterr()
+
+    assert main(["template", "list", "--json"]) == 0
+    installed_payload = json.loads(capsys.readouterr().out)
+    assert installed_payload["data"]["precedence"] == ["locked", "installed", "built-in"]
+    assert installed_payload["data"]["template_packs"][0]["source"] == "installed"
+    assert installed_payload["data"]["template_packs"][0]["version"] == "2.0.0"
+
+    project_file = project_root / "project.json"
+    document = json.loads(project_file.read_text(encoding="utf-8"))
+    document["template_packs"] = [
+        {
+            "name": "service-app",
+            "version": "1.0.0",
+            "digest": manifest_v1["digest"],
+            "source": "user-pack",
+        }
+    ]
+    project_file.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+
+    assert main(["template", "show", "service-app", "--json"]) == 0
+    locked_payload = json.loads(capsys.readouterr().out)
+    template_pack = locked_payload["data"]["template_pack"]
+    assert template_pack["source"] == "locked"
+    assert template_pack["source_detail"] == "template_packs[service-app]"
+    assert template_pack["version"] == "1.0.0"
+    persisted = json.loads(project_file.read_text(encoding="utf-8"))
+    assert str(wood_home.resolve()) not in json.dumps(persisted["template_packs"])
+
+
+def test_template_pack_errors_for_missing_and_invalid_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "template-error-app"
+    wood_home = tmp_path / "wood-home"
+    source_dir = tmp_path / "bad-template"
+    project_root.mkdir()
+    source_dir.mkdir()
+    monkeypatch.chdir(project_root)
+
+    (source_dir / "README.md.tmpl").write_text("# hello\n", encoding="utf-8")
+    _write_resource_manifest(source_dir, kind="template", name="bad-template")
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    code = main(["template", "show", "missing-pack", "--json"])
+    missing_payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert missing_payload["command"] == "template-show"
+    assert missing_payload["status"] == "error"
+    assert missing_payload["summary"] == "Template pack not found: missing-pack"
+
+    code = main(["template", "show", "bad-template", "--source-dir", str(source_dir), "--json"])
+    invalid_payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert invalid_payload["command"] == "template-show"
+    assert invalid_payload["status"] == "error"
+    assert invalid_payload["summary"] == "template resources must define template_pack."
 
 
 def test_init_reports_invalid_slug_in_json_error_output(
