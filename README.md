@@ -256,6 +256,8 @@ Commands:
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
+- `wood-project template list` list resolved template packs
+- `wood-project template show <name>` show a resolved template pack contract
 - `wood-project user` inspect the authenticated OpenProject user
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
 - `wood-project story <id>` inspect one work package plus raw description and relation context
@@ -327,6 +329,63 @@ can call the stable `wood-project resource path ...` interface instead of depend
 `~/.wood/tools/` or `~/.wood/scripts/` paths. Reinstalling the same identity, version, and digest is
 safe and returns the existing metadata; conflicting installed files fail before activation.
 
+Template pack resources (`kind: "template"`) must include a declarative, versioned
+`template_pack` contract. Resolution uses this precedence:
+
+1. `--source-dir` explicit source when provided
+2. exact project lock entries in `project.json.template_packs`
+3. installed user packs under the configured Wood home
+4. built-in packs shipped with `wood-project`
+
+Project lock entries store resource identity and digest only; they must not store absolute
+`~/.wood/` paths.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "template",
+  "name": "service-app",
+  "version": "1.0.0",
+  "digest": "sha256:<64 lowercase hex characters>",
+  "compatibility": {
+    "wood_tools": ">=0.1.1"
+  },
+  "template_pack": {
+    "schema_version": 1,
+    "name": "service-app",
+    "version": "1.0.0",
+    "variables": {
+      "project-name": {
+        "type": "string",
+        "required": true,
+        "description": "Display name for the generated project"
+      }
+    },
+    "operations": [
+      {
+        "type": "render",
+        "template": "templates/README.md.tmpl",
+        "output": "README.md",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        }
+      }
+    ],
+    "validation": [
+      {
+        "rule": "project-name",
+        "message": "Project name is required."
+      }
+    ]
+  }
+}
+```
+
+`wood-project template list --json` and `wood-project template show <name> --json` emit the
+selected source, exact version, digest, variables, planned outputs, operations, and validation
+rules without exposing installed Wood home paths.
+
 Examples:
 
 ```bash
@@ -339,6 +398,8 @@ wood-project resource install ./packs/demo-helper
 wood-project resource install ./packs/demo-helper --apply --json
 wood-project resource inspect script demo-helper --version 1.0.0 --json
 wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
+wood-project template list --json
+wood-project template show basic-python --json
 wood-project user --json
 wood-project story 292 --json
 wood-project show --json
