@@ -6,6 +6,7 @@ import platform
 import shutil
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -29,8 +30,12 @@ from .providers import (
 
 SESSION_SCHEMA_VERSION = 1
 DEFAULT_SESSION_FILE = Path.home() / ".wood" / "runtime" / "secrets" / "vaultwarden-session.json"
+DEFAULT_APPDATA_DIR = Path.home() / ".wood" / "runtime" / "bitwarden-cli"
+BITWARDEN_DATA_FILE = "data.json"
 SESSION_PROBE_SEARCH = "__wood_tools_session_probe__"
 UNLOCK_PASSWORD_ENV = "WOOD_SECRETS_BW_UNLOCK_PASSWORD"
+APPDATA_ENV = "BITWARDENCLI_APPDATA_DIR"
+GUI_UNLOCK_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -173,7 +178,8 @@ def prompt_for_password_macos() -> str:
         'display dialog "Unlock Vaultwarden" '
         'with title "wood-secrets" '
         'default answer "" with hidden answer '
-        'buttons {"Cancel", "OK"} default button "OK"'
+        'buttons {"Cancel", "OK"} default button "OK" '
+        f"giving up after {GUI_UNLOCK_TIMEOUT_SECONDS}"
     )
     try:
         proc = subprocess.run(
@@ -191,7 +197,7 @@ def prompt_for_password_macos() -> str:
 
     password = proc.stdout.rstrip("\n")
     if not password:
-        raise SecretProviderError("Vaultwarden GUI unlock did not provide a password.")
+        raise SecretProviderError("Vaultwarden GUI unlock timed out or did not provide a password.")
     return password
 
 
@@ -204,20 +210,30 @@ class VaultwardenSecretProvider(SecretProvider):
         *,
         executable: str = "bw",
         server_url: str | None = None,
+        appdata_dir: Path | None = None,
+        appdata_source_dir: Path | None = None,
         runner: Callable[..., str] | None = None,
         which: Callable[[str], str | None] | None = None,
         session_store: VaultwardenSessionStore | None = None,
         password_prompt: Callable[[], str] | None = None,
+        stdin_isatty: Callable[[], bool] | None = None,
         system_name: str | None = None,
         environ: dict[str, str] | None = None,
     ) -> None:
         self.executable = executable
         self.server_url = self._normalize_server_url(server_url)
+        self._system_name = system_name or platform.system()
+        self.appdata_dir = (appdata_dir or DEFAULT_APPDATA_DIR).expanduser()
+        self.appdata_source_dir = (
+            appdata_source_dir.expanduser()
+            if appdata_source_dir is not None
+            else self._default_appdata_source_dir()
+        )
         self._runner = runner or self._run_command
         self._which = which or shutil.which
         self._session_store = session_store or VaultwardenSessionStore()
         self._password_prompt = password_prompt or prompt_for_password_macos
-        self._system_name = system_name or platform.system()
+        self._stdin_isatty = stdin_isatty or sys.stdin.isatty
         self._environ = environ if environ is not None else os.environ
 
     @staticmethod
@@ -233,6 +249,62 @@ class VaultwardenSecretProvider(SecretProvider):
 
     def _configured_server(self) -> str:
         return self._runner(["config", "server"]).strip()
+
+    def _default_appdata_source_dir(self) -> Path:
+        if self._system_name == "Darwin":
+            return Path.home() / "Library" / "Application Support" / "Bitwarden CLI"
+        if self._system_name == "Windows":
+            appdata = self._environ.get("APPDATA")
+            if appdata:
+                return Path(appdata) / "Bitwarden CLI"
+        xdg_config_home = self._environ.get("XDG_CONFIG_HOME")
+        if xdg_config_home:
+            return Path(xdg_config_home) / "Bitwarden CLI"
+        return Path.home() / ".config" / "Bitwarden CLI"
+
+    def _ensure_appdata_dir(self) -> None:
+        self.appdata_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.appdata_dir, 0o700)
+        self._bootstrap_appdata_file()
+
+    def _bootstrap_appdata_file(self) -> None:
+        target = self.appdata_dir / BITWARDEN_DATA_FILE
+        source = self.appdata_source_dir / BITWARDEN_DATA_FILE
+        if not source.exists():
+            return
+        try:
+            source.resolve(strict=False).relative_to(self.appdata_dir.resolve(strict=False))
+            return
+        except ValueError:
+            pass
+        if target.exists() and self._data_file_has_login_state(target):
+            return
+        if target.exists() and not self._data_file_has_login_state(source):
+            return
+        shutil.copyfile(source, target)
+        os.chmod(target, 0o600)
+
+    def _data_file_has_login_state(self, path: Path) -> bool:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        return any(
+            bool(payload.get(key))
+            for key in (
+                "authenticatedAccounts",
+                "global_account_accounts",
+                "global_account_activeAccountId",
+            )
+        )
+
+    def _command_env(self) -> dict[str, str]:
+        self._ensure_appdata_dir()
+        env = dict(self._environ)
+        env.setdefault(APPDATA_ENV, str(self.appdata_dir))
+        return env
 
     def _ensure_server_configured(self) -> None:
         if not self.server_url:
@@ -261,8 +333,8 @@ class VaultwardenSecretProvider(SecretProvider):
         return (
             "Vaultwarden CLI server does not match wood-config. "
             f"Configured {self.server_url}; active CLI server {current_display}. "
-            "Run 'wood-secrets unlock --provider vaultwarden --interactive --write-session' "
-            "to apply the configured server."
+            "Run 'wood-secrets unlock' or 'wood-secrets unlock --gui' to apply the "
+            "configured server."
         )
 
     def _run_command(
@@ -279,6 +351,7 @@ class VaultwardenSecretProvider(SecretProvider):
             proc = subprocess.run(
                 command,
                 input=input_text,
+                env=self._command_env(),
                 check=True,
                 capture_output=True,
                 text=True,
@@ -313,6 +386,7 @@ class VaultwardenSecretProvider(SecretProvider):
         if not token:
             return False
         try:
+            self._ensure_server_configured()
             payload = self._run_json(
                 ["list", "items", "--search", SESSION_PROBE_SEARCH],
                 session_token=token,
@@ -397,6 +471,10 @@ class VaultwardenSecretProvider(SecretProvider):
             raise SecretProviderError("Choose either interactive unlock or GUI unlock, not both.")
         if not gui and not interactive:
             raise SecretProviderError("Unlock requires either --interactive or --gui.")
+        if interactive and not self._stdin_isatty():
+            raise ProviderLockedError(
+                "Interactive Vaultwarden unlock requires a local terminal TTY."
+            )
         if gui and self._system_name != "Darwin":
             raise ProviderUnavailableError("GUI unlock is only available on macOS.")
 

@@ -61,6 +61,7 @@ def build_default_registry(
 ) -> dict[str, SecretProvider]:
     env = environ if environ is not None else os.environ
     executable = "bw"
+    appdata_dir: str | None = None
     session_file: str | None = None
     server_url: str | None = None
 
@@ -76,6 +77,9 @@ def build_default_registry(
                 executable_value = cli.get("executable")
                 if isinstance(executable_value, str) and executable_value.strip():
                     executable = executable_value
+                appdata_value = cli.get("appdata_dir")
+                if isinstance(appdata_value, str) and appdata_value.strip():
+                    appdata_dir = appdata_value
             url_value = vaultwarden.get("url")
             if isinstance(url_value, str) and url_value.strip():
                 server_url = url_value.strip()
@@ -90,6 +94,7 @@ def build_default_registry(
         "vaultwarden": VaultwardenSecretProvider(
             executable=executable,
             server_url=server_url,
+            appdata_dir=None if appdata_dir is None else Path(os.path.expanduser(appdata_dir)),
             environ=env,
             session_store=VaultwardenSessionStore(
                 path=None if session_file is None else Path(os.path.expanduser(session_file))
@@ -166,6 +171,26 @@ class SecretResolver:
 
     def provider_names(self) -> list[str]:
         return sorted(self._providers)
+
+    def configured_reference(self, integration_name: str) -> str:
+        for target in self._integration_targets:
+            if target.name == integration_name:
+                if target.reference is None:
+                    raise MissingSecretError(
+                        f"Secret reference is not configured for integration '{integration_name}'."
+                    )
+                return target.reference
+        known = ", ".join(sorted(target.name for target in self._integration_targets))
+        raise InvalidSecretReferenceError(
+            f"Unknown integration '{integration_name}'. Known integrations: {known}."
+        )
+
+    def resolve_configured(self, integration_name: str) -> ResolvedSecret:
+        return self.resolve(self.configured_reference(integration_name))
+
+    def configured_status(self, integration_name: str) -> dict[str, Any]:
+        reference = self.configured_reference(integration_name)
+        return self.inspect_reference(reference)
 
     def providers(self) -> dict[str, Any]:
         statuses = [status.to_dict() for status in self.provider_statuses()]
@@ -254,6 +279,8 @@ class SecretResolver:
 
     def resolve(self, reference: str) -> ResolvedSecret:
         scheme = parse_reference_scheme(reference)
+        if scheme == "vaultwarden":
+            parse_vaultwarden_reference(reference)
         provider = self.get_provider(scheme)
 
         try:

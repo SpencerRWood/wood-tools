@@ -69,12 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("vaultwarden",),
         help="Provider name to unlock",
     )
-    unlock_mode = unlock_parser.add_mutually_exclusive_group(required=True)
+    unlock_mode = unlock_parser.add_mutually_exclusive_group()
     unlock_mode.add_argument("--interactive", action="store_true", help="Prompt in the terminal")
     unlock_mode.add_argument("--gui", action="store_true", help="Prompt with a GUI dialog")
     unlock_parser.add_argument(
         "--write-session",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Write the unlocked session token to the protected runtime session file",
     )
     unlock_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -191,9 +192,10 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(payload, json_output=False, command_args=command_args)
 
         if args.command == "unlock":
+            interactive = args.interactive or not args.gui
             payload = resolver.unlock(
                 args.provider,
-                interactive=args.interactive,
+                interactive=interactive,
                 gui=args.gui,
                 write_session=args.write_session,
             )
@@ -205,7 +207,12 @@ def main(argv: list[str] | None = None) -> int:
                     data=payload,
                 )
                 return _emit(envelope, json_output=True, command_args=command_args)
-            return _emit(payload, json_output=False, command_args=command_args)
+            print(
+                "Unlocked "
+                f"{payload['provider']}; session {payload['session']['state']} "
+                f"at {payload['session']['path']}."
+            )
+            return 0
 
         if args.command == "lock":
             payload = resolver.lock(args.provider)
