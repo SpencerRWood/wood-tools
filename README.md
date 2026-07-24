@@ -95,7 +95,8 @@ Global option:
           "config_ref": "env://VAULTWARDEN_CONFIG",
           "session_file": "~/.config/wood-tools/vaultwarden-session.json",
           "cli": {
-            "executable": "bw"
+            "executable": "bw",
+            "appdata_dir": "~/.wood/runtime/bitwarden-cli"
           }
         }
       },
@@ -137,8 +138,8 @@ Supported commands:
 - `wood-secrets check --ref <reference>`
 - `wood-secrets providers`
 - `wood-secrets status --provider vaultwarden`
-- `wood-secrets unlock --provider vaultwarden --interactive --write-session`
-- `wood-secrets unlock --provider vaultwarden --gui --write-session`
+- `wood-secrets unlock`
+- `wood-secrets unlock --gui`
 - `wood-secrets lock --provider vaultwarden`
 - `wood-secrets session --provider vaultwarden`
 - `wood-secrets list --provider vaultwarden`
@@ -176,8 +177,8 @@ wood-secrets check
 wood-secrets check --ref env://OPENPROJECT_TOKEN --json
 wood-secrets providers --json
 wood-secrets status --provider vaultwarden
-wood-secrets unlock --provider vaultwarden --interactive --write-session
-wood-secrets unlock --provider vaultwarden --gui --write-session
+wood-secrets unlock
+wood-secrets unlock --gui
 wood-secrets lock --provider vaultwarden
 wood-secrets session --provider vaultwarden --json
 wood-secrets list --provider vaultwarden --search openproject --json
@@ -194,8 +195,12 @@ Behavior notes:
 - Secret values are never printed by the CLI; resolved output is redacted.
 - `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
 - `wood-secrets` reads `integrations.vaultwarden.url` from the active `wood-config` profile.
+- `wood-secrets unlock` defaults to the Vaultwarden provider, prompts in the interactive terminal, and writes the protected runtime session file for later processes.
+- `wood-secrets unlock --no-write-session` keeps the session only in the current process.
+- `wood-secrets` runs `bw` with `BITWARDENCLI_APPDATA_DIR` pointed at a writable runtime directory, defaulting to `~/.wood/runtime/bitwarden-cli`, so sandboxed commands do not need to write Bitwarden CLI lock files under Bitwarden's default home-directory location.
 - `wood-secrets unlock --provider vaultwarden ...` applies that configured URL with `bw config server <url>` before unlocking.
 - `wood-secrets unlock --provider vaultwarden ...` uses `bw unlock --passwordenv ...` for compatibility with current Bitwarden CLI releases.
+- Interactive unlock fails closed when no local terminal TTY is available.
 - `wood-secrets list --provider vaultwarden ...` lists only item names, field names, and whether a login password exists; it never prints secret values.
 - `wood-secrets exec --env NAME --ref ... -- command ...` resolves a secret locally, injects it only into the child process environment, and does not print the secret value itself.
 - `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
