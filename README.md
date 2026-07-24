@@ -244,7 +244,6 @@ Optional fields:
 - `linked_repositories` may be provided as either an object keyed by repository name or a list of `{ "name", "path" }` objects. Each linked repository path must be absolute, may include an optional `role`, and is validated when present.
 - `wood-project validate` performs non-mutating availability checks for the configured project root, Wood home resources, and linked repository directories. JSON output includes per-path access details.
 - Mutating `wood-project` commands preflight the required parent directories and fail early with clear errors when the Wood home is unavailable or not writable.
-- Legacy `artifact_root`, `artifact_dir`, and `metadata_dir` project fields are obsolete and produce explicit remediation guidance.
 - No `wood-project` command creates or requires a project-local `.wood/` directory.
 
 Commands:
@@ -257,6 +256,9 @@ Commands:
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
+- `wood-project user` inspect the authenticated OpenProject user
+- `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
+- `wood-project story <id>` inspect one work package plus raw description and relation context
 - `wood-project show` read and print the current `project.json`
 - `wood-project validate` verify the current `project.json` schema, required directories, path relationships, linked repository paths, and mounted path accessibility
 
@@ -265,7 +267,6 @@ Options for `init`:
 - `--project-id <value>` provide an explicit project ID instead of generating a UUID
 - `--project-slug <value>` provide an explicit slug instead of deriving one from the root folder
 - `--wood-home <path>` override the user-global Wood home, defaulting to `WOOD_HOME` or `~/.wood`
-- `--artifact-root <path>` is obsolete and returns guidance to use `--wood-home` or `WOOD_HOME`
 - `--json` emit JSON envelope output
 
 Options for `link repo`:
@@ -275,6 +276,18 @@ Options for `link repo`:
 - `--role <value>` store an optional repository role such as `app`, `library`, or `infra`
 - `--apply` write the updated `project.json`
 - `--json` emit JSON envelope output
+
+Options for OpenProject inspection commands:
+
+- `--config-path <path>` override the user-global `wood-config` file
+- `--profile <name>` read OpenProject settings from a specific profile
+- `--json` emit the shared JSON envelope for each inspection command
+
+OpenProject inspection reads `integrations.openproject.url`,
+`integrations.openproject.project_id`, `integrations.openproject.token_ref`, and optional
+`integrations.openproject.user_agent` from the active `wood-config` profile. The token reference is
+resolved in memory through `wood-secrets`; commands perform only `GET` requests and never print the
+resolved token.
 
 Resource manifest format:
 
@@ -326,6 +339,8 @@ wood-project resource install ./packs/demo-helper
 wood-project resource install ./packs/demo-helper --apply --json
 wood-project resource inspect script demo-helper --version 1.0.0 --json
 wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
+wood-project user --json
+wood-project story 292 --json
 wood-project show --json
 wood-project validate --json
 ```

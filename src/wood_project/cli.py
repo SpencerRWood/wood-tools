@@ -10,7 +10,6 @@ from wood_config.audit import write_audit_event
 from wood_config.output import blocked_output, error_output, success_output
 
 from .core import (
-    OBSOLETE_ARTIFACT_MESSAGE,
     ProjectError,
     init_project,
     inspect_resource,
@@ -20,6 +19,7 @@ from .core import (
     show_project,
     validate_project,
 )
+from .openproject import OpenProjectClient, OpenProjectError, load_settings
 
 
 def _command_name(args: argparse.Namespace) -> str:
@@ -135,6 +135,14 @@ def _summarize_json_payload(
             data=payload,
         )
 
+    if command in {"user", "project", "story"}:
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary=f"OpenProject {command} inspection completed.",
+            data=payload,
+        )
+
     return success_output(
         command="validate",
         mutation="read-only",
@@ -165,11 +173,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--wood-home",
         type=Path,
         help="Override the user-global Wood home (defaults to WOOD_HOME or ~/.wood)",
-    )
-    init_parser.add_argument(
-        "--artifact-root",
-        type=Path,
-        help="Obsolete. Use --wood-home or WOOD_HOME instead.",
     )
     init_parser.add_argument("--apply", action="store_true", help="Write project.json")
     init_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -233,6 +236,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resource_path_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    user_parser = subparsers.add_parser(
+        "user",
+        help="Inspect the authenticated OpenProject user",
+    )
+    user_parser.add_argument("--config-path", type=Path, help="Override wood-config path")
+    user_parser.add_argument("--profile", help="wood-config profile to read")
+    user_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    project_parser = subparsers.add_parser(
+        "project",
+        help="Inspect an OpenProject project",
+    )
+    project_parser.add_argument("--config-path", type=Path, help="Override wood-config path")
+    project_parser.add_argument("--profile", help="wood-config profile to read")
+    project_parser.add_argument(
+        "openproject_project_id",
+        nargs="?",
+        help="Project numeric ID or identifier. Defaults to configured project_id.",
+    )
+    project_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    story_parser = subparsers.add_parser(
+        "story",
+        help="Inspect a work package plus its relation context",
+    )
+    story_parser.add_argument("--config-path", type=Path, help="Override wood-config path")
+    story_parser.add_argument("--profile", help="wood-config profile to read")
+    story_parser.add_argument("work_package_id", type=int)
+    story_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     return parser
 
 
@@ -243,8 +276,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "init":
-            if args.artifact_root is not None:
-                raise ProjectError(f"--artifact-root is obsolete. {OBSOLETE_ARTIFACT_MESSAGE}")
             payload = init_project(
                 project_root=args.project_root,
                 wood_home=args.wood_home,
@@ -350,10 +381,32 @@ def main(argv: list[str] | None = None) -> int:
                 command_args=command_args,
             )
 
+        if args.command in {"user", "project", "story"}:
+            settings = load_settings(config_path=args.config_path, profile=args.profile)
+            client = OpenProjectClient(settings)
+            command_name = _command_name(args)
+
+            if args.command == "user":
+                payload = client.me()
+            elif args.command == "project":
+                payload = client.project(args.openproject_project_id)
+            elif args.command == "story":
+                payload = client.story_context(args.work_package_id)
+            else:
+                parser.error("Unknown OpenProject command")
+                return 2
+
+            return _emit(
+                _summarize_json_payload(command_name, payload) if args.json else payload,
+                json_output=args.json,
+                command_args=command_args,
+            )
+
         parser.error("Unknown command")
         return 2
-    except ProjectError as exc:
+    except (ProjectError, OpenProjectError) as exc:
         command_name = _command_name(args)
+        message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
         if getattr(args, "json", False):
             payload = error_output(
                 command=command_name,
@@ -362,14 +415,24 @@ def main(argv: list[str] | None = None) -> int:
                     if command_name in {"init", "link-repo", "resource-install"}
                     else "read-only"
                 ),
-                summary=str(exc),
-                errors=[{"message": str(exc)}],
-                next_actions=["Review the project metadata inputs and try again."],
+                summary=message,
+                errors=(
+                    [{"code": exc.code, "message": message}]
+                    if isinstance(exc, OpenProjectError)
+                    else [{"message": message}]
+                ),
+                next_actions=[
+                    (
+                        "Check OpenProject config, secret readiness, and network access."
+                        if isinstance(exc, OpenProjectError)
+                        else "Review the project metadata inputs and try again."
+                    )
+                ],
             )
             write_audit_event(payload, cli_name="wood-project", command_args=command_args)
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 2
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error: {message}", file=sys.stderr)
         return 2
 
 

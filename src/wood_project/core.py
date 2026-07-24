@@ -37,10 +37,15 @@ RESOURCE_KIND_DIRECTORIES = {
     "script": "scripts",
 }
 HELPER_RESOURCE_KINDS = {"tool", "script"}
-OBSOLETE_ARTIFACT_MESSAGE = (
-    "artifact_root, artifact_dir, metadata_dir, and artifact-specific settings are obsolete. "
-    "Use the user-global Wood home via WOOD_HOME or the default ~/.wood."
-)
+PROJECT_DOCUMENT_FIELDS = {
+    "schema_version",
+    "project_id",
+    "project_slug",
+    "project_root",
+    "wood_home",
+    "wood_config_file",
+    "linked_repositories",
+}
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -365,15 +370,9 @@ def validate_project_document(document: dict[str, Any]) -> None:
     if not isinstance(project_slug, str) or not SLUG_PATTERN.fullmatch(project_slug):
         raise ProjectError("project_slug must use lowercase letters, numbers, and hyphens only.")
 
-    obsolete_fields = [
-        field
-        for field in ("artifact_root", "artifact_dir", "metadata_dir", "artifact_aliases")
-        if field in document
-    ]
-    if obsolete_fields:
-        raise ProjectError(
-            f"{', '.join(obsolete_fields)} are obsolete. {OBSOLETE_ARTIFACT_MESSAGE}"
-        )
+    unexpected_fields = sorted(set(document) - PROJECT_DOCUMENT_FIELDS)
+    if unexpected_fields:
+        raise ProjectError("Unexpected project metadata fields: " + ", ".join(unexpected_fields))
 
     for field in ("project_root", "wood_home", "wood_config_file"):
         value = document.get(field)
