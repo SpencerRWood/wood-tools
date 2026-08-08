@@ -1434,6 +1434,18 @@ def _infer_template_variables(template_pack: dict[str, Any], target_root: Path) 
     return variables
 
 
+def _template_summary(template_pack: dict[str, Any]) -> dict[str, str]:
+    summary = {
+        "name": template_pack["name"],
+        "version": template_pack["version"],
+        "source": template_pack["source"],
+        "digest": template_pack["digest"],
+    }
+    if "source_detail" in template_pack:
+        summary["source_detail"] = template_pack["source_detail"]
+    return summary
+
+
 def _template_pack_from_install_dir(
     install_dir: Path,
     *,
@@ -1530,39 +1542,27 @@ def render_template_pack(
     project_file: Path | None = None,
     project_root: Path | None = None,
 ) -> dict[str, Any]:
-    target_root = resolve_project_root(project_root)
-    template_pack, template_root = _resolve_template_pack_for_render(
+    plan = plan_template_pack(
         name=name,
         source_dir=source_dir,
         project_file=project_file,
-        project_root=target_root,
+        project_root=project_root,
+        include_template_root=True,
     )
-    variables = _infer_template_variables(template_pack, target_root)
-    planned_files: list[dict[str, str]] = []
-    rendered_files: list[tuple[Path, str]] = []
+    if plan["conflicts"]:
+        conflict = plan["conflicts"][0]
+        raise ProjectError(f"Template output already exists: {conflict['path']}")
 
-    for operation in template_pack["operations"]:
+    target_root = Path(plan["target_root"])
+    template_root = Path(plan["template_root"])
+    rendered_files: list[tuple[Path, str]] = []
+    for operation in plan["operations"]:
         template_path = template_root / operation["template"]
-        if not template_path.exists():
-            raise ProjectError(f"Template source file does not exist: {operation['template']}")
-        if not template_path.is_file():
-            raise ProjectError(f"Template source must be a file: {operation['template']}")
-        relative_output = _replace_template_variables(operation["output"], variables)
-        destination = target_root / relative_output
-        if destination.exists():
-            raise ProjectError(f"Template output already exists: {relative_output}")
         rendered = _replace_template_variables(
             template_path.read_text(encoding="utf-8"),
-            variables,
+            plan["variables"],
         )
-        planned_files.append(
-            {
-                "path": relative_output,
-                "template": operation["template"],
-                "overwrite": operation["overwrite"],
-            }
-        )
-        rendered_files.append((destination, rendered))
+        rendered_files.append((target_root / operation["path"], rendered))
 
     for destination, rendered in rendered_files:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1572,14 +1572,83 @@ def render_template_pack(
         "changed": bool(rendered_files),
         "target_root": str(target_root),
         "template": {
-            "name": template_pack["name"],
-            "version": template_pack["version"],
-            "source": template_pack["source"],
-            "digest": template_pack["digest"],
+            key: value
+            for key, value in plan["template"].items()
+            if key in {"name", "version", "source", "digest"}
         },
-        "variables": variables,
-        "files": planned_files,
+        "variables": plan["variables"],
+        "files": [
+            {
+                "path": operation["path"],
+                "template": operation["template"],
+                "overwrite": operation["overwrite"],
+            }
+            for operation in plan["operations"]
+        ],
     }
+
+
+def plan_template_pack(
+    *,
+    name: str,
+    source_dir: Path | None = None,
+    project_file: Path | None = None,
+    project_root: Path | None = None,
+    include_template_root: bool = False,
+) -> dict[str, Any]:
+    target_root = resolve_project_root(project_root)
+    template_pack, template_root = _resolve_template_pack_for_render(
+        name=name,
+        source_dir=source_dir,
+        project_file=project_file,
+        project_root=target_root,
+    )
+    variables = _infer_template_variables(template_pack, target_root)
+    operations: list[dict[str, Any]] = []
+    conflicts: list[dict[str, str]] = []
+
+    for operation in template_pack["operations"]:
+        template_path = template_root / operation["template"]
+        if not template_path.exists():
+            raise ProjectError(f"Template source file does not exist: {operation['template']}")
+        if not template_path.is_file():
+            raise ProjectError(f"Template source must be a file: {operation['template']}")
+        relative_output = _replace_template_variables(operation["output"], variables)
+        destination = target_root / relative_output
+        exists = destination.exists()
+        decision = "conflict" if exists else "create"
+        if exists:
+            conflicts.append(
+                {
+                    "path": relative_output,
+                    "reason": "output-exists",
+                }
+            )
+        planned_operation = {
+            "type": operation["type"],
+            "template": operation["template"],
+            "path": relative_output,
+            "output": operation["output"],
+            "overwrite": operation["overwrite"],
+            "exists": exists,
+            "decision": decision,
+        }
+        if "safe_overwrite" in operation:
+            planned_operation["safe_overwrite"] = operation["safe_overwrite"]
+        operations.append(planned_operation)
+
+    payload: dict[str, Any] = {
+        "changed": False,
+        "target_root": str(target_root),
+        "template": _template_summary(template_pack),
+        "variables": variables,
+        "features": template_pack.get("features", {}),
+        "operations": operations,
+        "conflicts": conflicts,
+    }
+    if include_template_root:
+        payload["template_root"] = str(template_root)
+    return payload
 
 
 def _resolve_repository_path(repo_path: Path) -> Path:
