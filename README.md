@@ -383,6 +383,10 @@ Project lock entries store resource identity and digest only; they must not stor
 }
 ```
 
+`wood-template plan <name>` previews the base template in the current directory without creating
+files. It reports the exact template source, version, digest, inferred variables, planned render
+operations, overwrite decisions, and output conflicts.
+
 `wood-template generate <name>` renders the base template into the current directory. It infers
 `project-name`, `package-name`, and `package-module` from the current folder name, fails before
 writing if any planned output already exists, and works with built-in templates even before
@@ -415,6 +419,7 @@ wood-project resource install ./packs/demo-helper
 wood-project resource install ./packs/demo-helper --apply --json
 wood-project resource inspect script demo-helper --version 1.0.0 --json
 wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
+wood-template plan python-cli --json
 wood-template generate python-cli
 wood-template list --json
 wood-template show python-cli --json

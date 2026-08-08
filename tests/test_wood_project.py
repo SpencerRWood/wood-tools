@@ -898,6 +898,114 @@ def test_template_pack_errors_for_missing_and_invalid_contract(
     assert invalid_payload["summary"] == "template resources must define template_pack."
 
 
+def test_wood_template_plan_reports_operations_without_mutating(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "plan-tool"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["plan", "python-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "plan"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["changed"] is False
+    assert payload["data"]["template"]["name"] == "python-cli"
+    assert payload["data"]["template"]["source"] == "built-in"
+    assert payload["data"]["template"]["digest"].startswith("sha256:")
+    assert "template_root" not in payload["data"]
+    assert payload["data"]["variables"] == {
+        "package-module": "plan_tool",
+        "package-name": "plan-tool",
+        "project-name": "plan-tool",
+    }
+    assert [operation["path"] for operation in payload["data"]["operations"]] == [
+        ".pre-commit-config.yaml",
+        "README.md",
+        "pyproject.toml",
+        "src/plan_tool/__init__.py",
+        "src/plan_tool/__main__.py",
+        "src/plan_tool/cli.py",
+        "tests/test_cli.py",
+    ]
+    assert all(operation["decision"] == "create" for operation in payload["data"]["operations"])
+    assert payload["data"]["conflicts"] == []
+    assert not (project_root / "README.md").exists()
+    assert not (project_root / "src").exists()
+    assert ".wood" not in json.dumps(payload)
+
+
+def test_wood_template_plan_reports_actionable_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "plan-error-tool"
+    source_dir = tmp_path / "custom-pack"
+    project_root.mkdir()
+    (source_dir / "templates").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    (source_dir / "templates" / "README.md.tmpl").write_text(
+        "# {{project-name}}\n",
+        encoding="utf-8",
+    )
+    _write_template_pack_manifest(
+        source_dir,
+        variables={
+            "project-name": {
+                "type": "string",
+                "required": True,
+                "description": "Display name for the generated project",
+            },
+            "service-port": {
+                "type": "integer",
+                "required": True,
+                "description": "Port for the generated service",
+            },
+        },
+    )
+
+    code = template_main(["plan", "missing-pack", "--json"])
+    missing_payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert missing_payload["command"] == "plan"
+    assert missing_payload["mutation"] == "read-only"
+    assert missing_payload["summary"] == "Template pack not found: missing-pack"
+
+    code = template_main(["plan", "service-app", "--source-dir", str(source_dir), "--json"])
+    variable_payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert variable_payload["command"] == "plan"
+    assert variable_payload["mutation"] == "read-only"
+    assert (
+        variable_payload["summary"]
+        == "Template variable requires an explicit value: service-port."
+    )
+
+
+def test_wood_template_plan_reports_output_conflicts_without_mutating(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "conflict-tool"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+    (project_root / "README.md").write_text("keep\n", encoding="utf-8")
+
+    assert template_main(["plan", "python-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["data"]["changed"] is False
+    assert payload["data"]["conflicts"] == [
+        {"path": "README.md", "reason": "output-exists"}
+    ]
+    decisions = {
+        operation["path"]: operation["decision"] for operation in payload["data"]["operations"]
+    }
+    assert decisions["README.md"] == "conflict"
+    assert decisions["pyproject.toml"] == "create"
+    assert (project_root / "README.md").read_text(encoding="utf-8") == "keep\n"
+    assert not (project_root / "pyproject.toml").exists()
+
+
 def test_builtin_first_party_template_pack_names_features_and_content(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -940,6 +1048,83 @@ def test_builtin_first_party_template_pack_names_features_and_content(
     assert "FastAPI backend with SQLAlchemy and Alembic" in web_readme
     assert "React, Vite, TypeScript, Tailwind" in web_readme
     assert "## Acceptance Criteria" in planning_story
+
+
+def test_wood_template_plan_covers_every_first_party_base_template(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected_outputs = {
+        "python-api-service": [
+            ".pre-commit-config.yaml",
+            "README.md",
+            "alembic.ini",
+            "alembic/env.py",
+            "alembic/script.py.mako",
+            "pyproject.toml",
+            "src/orders_api/__init__.py",
+            "src/orders_api/config.py",
+            "src/orders_api/db.py",
+            "src/orders_api/main.py",
+            "tests/test_health.py",
+        ],
+        "python-cli": [
+            ".pre-commit-config.yaml",
+            "README.md",
+            "pyproject.toml",
+            "src/orders_api/__init__.py",
+            "src/orders_api/__main__.py",
+            "src/orders_api/cli.py",
+            "tests/test_cli.py",
+        ],
+        "python-library": [
+            ".pre-commit-config.yaml",
+            "README.md",
+            "pyproject.toml",
+            "src/orders_api/__init__.py",
+            "tests/test_package.py",
+        ],
+        "python-web-app": [
+            "README.md",
+            "backend/alembic.ini",
+            "backend/alembic/env.py",
+            "backend/alembic/script.py.mako",
+            "backend/pyproject.toml",
+            "backend/src/orders_api/__init__.py",
+            "backend/src/orders_api/config.py",
+            "backend/src/orders_api/db.py",
+            "backend/src/orders_api/main.py",
+            "backend/tests/test_health.py",
+            "frontend/eslint.config.js",
+            "frontend/index.html",
+            "frontend/package.json",
+            "frontend/src/App.tsx",
+            "frontend/src/main.tsx",
+            "frontend/src/styles.css",
+            "frontend/tsconfig.json",
+            "frontend/vite.config.ts",
+        ],
+        "software-planning": [
+            "README.md",
+            "requirements.md",
+            "change-order.md",
+            "implementation-backlog.md",
+            "story-description.md",
+        ],
+    }
+
+    for template_name, outputs in expected_outputs.items():
+        project_root = tmp_path / template_name / "orders-api"
+        project_root.mkdir(parents=True)
+        monkeypatch.chdir(project_root)
+
+        assert template_main(["plan", template_name, "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+
+        assert payload["data"]["template"]["name"] == template_name
+        assert [operation["path"] for operation in payload["data"]["operations"]] == outputs
+        assert payload["data"]["conflicts"] == []
+        assert payload["data"]["features"] == {}
+        assert not any(project_root.iterdir())
 
 
 def test_wood_template_renders_python_cli_in_current_directory(

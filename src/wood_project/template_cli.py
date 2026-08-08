@@ -9,7 +9,13 @@ from typing import Any
 from wood_config.audit import write_audit_event
 from wood_config.output import error_output, success_output
 
-from .core import ProjectError, list_template_packs, render_template_pack, show_template_pack
+from .core import (
+    ProjectError,
+    list_template_packs,
+    plan_template_pack,
+    render_template_pack,
+    show_template_pack,
+)
 
 
 def _emit(
@@ -50,6 +56,18 @@ def _summarize_json_payload(command: str, payload: dict[str, Any]) -> dict[str, 
             data=payload,
         )
 
+    if command == "plan":
+        template = payload["template"]
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary=(
+                f"Planned {template['name']} into {len(payload['operations'])} operation(s) "
+                f"with {len(payload['conflicts'])} conflict(s)."
+            ),
+            data=payload,
+        )
+
     template_pack = payload["template_pack"]
     return success_output(
         command=command,
@@ -79,12 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        help="'generate', 'list', or 'show'",
+        help="'generate', 'list', 'plan', or 'show'",
     )
     parser.add_argument(
         "name",
         nargs="?",
-        help="Template pack name for 'generate' or 'show'",
+        help="Template pack name for 'generate', 'plan', or 'show'",
     )
     parser.add_argument(
         "--source-dir",
@@ -127,6 +145,21 @@ def main(argv: list[str] | None = None) -> int:
             )
             return _emit(
                 _summarize_json_payload("show", payload) if args.json else payload,
+                json_output=args.json,
+                command_args=command_args,
+            )
+
+        if args.command == "plan":
+            if args.name is None:
+                parser.error("plan requires a template name")
+            payload = plan_template_pack(
+                name=args.name,
+                source_dir=args.source_dir,
+                project_file=args.project_file,
+                project_root=args.project_root,
+            )
+            return _emit(
+                _summarize_json_payload("plan", payload) if args.json else payload,
                 json_output=args.json,
                 command_args=command_args,
             )
