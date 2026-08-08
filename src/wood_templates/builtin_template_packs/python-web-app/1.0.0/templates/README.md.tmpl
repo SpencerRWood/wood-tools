@@ -1,0 +1,26 @@
+# {{project-name}}
+
+Architecture: full-stack Python web application.
+
+Implementation stack: FastAPI backend with SQLAlchemy and Alembic, plus a React, Vite, TypeScript, Tailwind, Radix UI, lucide-react, and react-router-dom frontend.
+
+## Layout
+
+- `backend/`: FastAPI app, database models, Alembic migrations, and backend tests
+- `frontend/`: React app served by Vite
+
+## Local Development
+
+Run the backend from `backend/` and the frontend from `frontend/`.
+
+```bash
+cd backend
+uv sync --group dev
+uv run uvicorn {{package-module}}.main:app --reload
+```
+
+```bash
+cd frontend
+npm install
+npm run dev
+```

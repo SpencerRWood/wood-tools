@@ -256,8 +256,9 @@ Commands:
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
-- `wood-project template list` list resolved template packs
-- `wood-project template show <name>` show a resolved template pack contract
+- `wood-template generate <name>` render a template into the current project directory
+- `wood-template list` list resolved template packs
+- `wood-template show <name>` show a resolved template pack contract
 - `wood-project user` inspect the authenticated OpenProject user
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
 - `wood-project story <id>` inspect one work package plus raw description and relation context
@@ -382,9 +383,25 @@ Project lock entries store resource identity and digest only; they must not stor
 }
 ```
 
-`wood-project template list --json` and `wood-project template show <name> --json` emit the
-selected source, exact version, digest, variables, planned outputs, operations, and validation
-rules without exposing installed Wood home paths.
+`wood-template generate <name>` renders the base template into the current directory. It infers
+`project-name`, `package-name`, and `package-module` from the current folder name, fails before
+writing if any planned output already exists, and works with built-in templates even before
+`project.json` exists.
+
+`wood-template list --json` and `wood-template show <name> --json` are inspection commands. They
+emit the selected source, exact version, digest, variables, planned outputs, operations, and
+validation rules without exposing installed Wood home paths.
+
+Built-in first-party templates:
+
+- `python-cli`: Python command-line application using uv, argparse, pytest, ruff, and pre-commit
+- `python-library`: importable Python library package using uv, pytest, ruff, and pre-commit
+- `python-api-service`: FastAPI API service using Pydantic Settings, SQLAlchemy, Alembic, SQLite, pytest, pytest-asyncio, httpx, ruff, and pre-commit
+- `python-web-app`: `frontend/` React, Vite, TypeScript, Tailwind, Radix UI, lucide-react, and react-router-dom app with a `backend/` FastAPI, SQLAlchemy, and Alembic service
+- `software-planning`: copyable requirements, change-order, implementation-backlog, and story-description files
+
+These built-ins intentionally include only base files for now. Optional Docker, devcontainer,
+PostgreSQL, and CI variants can be added later once the command UX supports them directly.
 
 Examples:
 
@@ -398,8 +415,9 @@ wood-project resource install ./packs/demo-helper
 wood-project resource install ./packs/demo-helper --apply --json
 wood-project resource inspect script demo-helper --version 1.0.0 --json
 wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
-wood-project template list --json
-wood-project template show basic-python --json
+wood-template generate python-cli
+wood-template list --json
+wood-template show python-cli --json
 wood-project user --json
 wood-project story 292 --json
 wood-project show --json

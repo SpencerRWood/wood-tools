@@ -25,7 +25,7 @@ where = ["src"]
 include = ["*"]
 
 [tool.setuptools.package-data]
-wood_project = ["builtin_template_packs/**/*"]
+wood_templates = ["builtin_template_packs/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -53,3 +53,4 @@ line-ending = "auto"
 wood-config = "wood_config.cli:main"
 wood-project = "wood_project.cli:main"
 wood-secrets = "wood_secrets.cli:main"
+wood-template = "wood_project.template_cli:main"

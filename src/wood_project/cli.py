@@ -15,10 +15,8 @@ from .core import (
     inspect_resource,
     install_resource,
     link_repository,
-    list_template_packs,
     resolve_resource_path,
     show_project,
-    show_template_pack,
     validate_project,
 )
 from .openproject import OpenProjectClient, OpenProjectError, load_settings
@@ -29,8 +27,6 @@ def _command_name(args: argparse.Namespace) -> str:
         return "link-repo"
     if args.command == "resource":
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
-    if args.command == "template":
-        return f"template-{getattr(args, 'template_command', 'unknown')}"
     return args.command
 
 
@@ -139,26 +135,6 @@ def _summarize_json_payload(
             data=payload,
         )
 
-    if command == "template-list":
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary=f"Resolved {len(payload['template_packs'])} template pack(s).",
-            data=payload,
-        )
-
-    if command == "template-show":
-        template_pack = payload["template_pack"]
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary=(
-                f"Resolved template pack {template_pack['name']} {template_pack['version']} "
-                f"from {template_pack['source']}."
-            ),
-            data=payload,
-        )
-
     if command in {"user", "project", "story"}:
         return success_output(
             command=command,
@@ -259,32 +235,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional file or directory within the installed resource",
     )
     resource_path_parser.add_argument("--json", action="store_true", help="Emit JSON output")
-
-    template_parser = subparsers.add_parser("template", help="List and inspect template packs")
-    template_subparsers = template_parser.add_subparsers(dest="template_command", required=True)
-
-    template_list_parser = template_subparsers.add_parser(
-        "list",
-        help="List template packs using explicit, locked, installed, then built-in precedence",
-    )
-    template_list_parser.add_argument(
-        "--source-dir",
-        type=Path,
-        help="Inspect a template pack source directory before project resolution",
-    )
-    template_list_parser.add_argument("--json", action="store_true", help="Emit JSON output")
-
-    template_show_parser = template_subparsers.add_parser(
-        "show",
-        help="Show a resolved template pack contract",
-    )
-    template_show_parser.add_argument("name", help="Template pack name")
-    template_show_parser.add_argument(
-        "--source-dir",
-        type=Path,
-        help="Inspect a template pack source directory before project resolution",
-    )
-    template_show_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     user_parser = subparsers.add_parser(
         "user",
@@ -427,31 +377,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             return _emit(
                 _summarize_json_payload("resource-path", payload) if args.json else payload,
-                json_output=args.json,
-                command_args=command_args,
-            )
-
-        if args.command == "template" and args.template_command == "list":
-            payload = list_template_packs(
-                source_dir=args.source_dir,
-                project_file=args.project_file,
-                project_root=args.project_root,
-            )
-            return _emit(
-                _summarize_json_payload("template-list", payload) if args.json else payload,
-                json_output=args.json,
-                command_args=command_args,
-            )
-
-        if args.command == "template" and args.template_command == "show":
-            payload = show_template_pack(
-                name=args.name,
-                source_dir=args.source_dir,
-                project_file=args.project_file,
-                project_root=args.project_root,
-            )
-            return _emit(
-                _summarize_json_payload("template-show", payload) if args.json else payload,
                 json_output=args.json,
                 command_args=command_args,
             )

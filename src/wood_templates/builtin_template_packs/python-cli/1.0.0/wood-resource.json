@@ -1,0 +1,117 @@
+{
+  "compatibility": {
+    "wood_tools": ">=0.1.1"
+  },
+  "digest": "sha256:3bcbf27585e16e5ced97d8dd1faf712e70aecdd76e39f5e89a82bae27c5e3bd3",
+  "kind": "template",
+  "name": "python-cli",
+  "schema_version": 1,
+  "template_pack": {
+    "expected_tree": [
+      ".pre-commit-config.yaml",
+      "README.md",
+      "pyproject.toml",
+      "src/{{package-module}}/__init__.py",
+      "src/{{package-module}}/__main__.py",
+      "src/{{package-module}}/cli.py",
+      "tests/test_cli.py"
+    ],
+    "implementation_stack": "Python 3.11+, uv, argparse, pytest, ruff, pre-commit",
+    "name": "python-cli",
+    "operations": [
+      {
+        "output": ".pre-commit-config.yaml",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/.pre-commit-config.yaml.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "README.md",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/README.md.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "pyproject.toml",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/pyproject.toml.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "src/{{package-module}}/__init__.py",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/src/package/__init__.py.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "src/{{package-module}}/__main__.py",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/src/package/__main__.py.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "src/{{package-module}}/cli.py",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/src/package/cli.py.tmpl",
+        "type": "render"
+      },
+      {
+        "output": "tests/test_cli.py",
+        "overwrite": "safe",
+        "safe_overwrite": {
+          "strategy": "if-unchanged"
+        },
+        "template": "templates/tests/test_cli.py.tmpl",
+        "type": "render"
+      }
+    ],
+    "schema_version": 1,
+    "validation": [
+      {
+        "message": "Project name is required.",
+        "rule": "project-name"
+      },
+      {
+        "message": "Package name is required.",
+        "rule": "package-name"
+      }
+    ],
+    "variables": {
+      "package-module": {
+        "description": "Python import package, with hyphens converted to underscores",
+        "required": true,
+        "type": "string"
+      },
+      "package-name": {
+        "description": "Distribution and source package name",
+        "required": true,
+        "type": "string"
+      },
+      "project-name": {
+        "description": "Display name for the generated project",
+        "required": true,
+        "type": "string"
+      }
+    },
+    "version": "1.0.0"
+  },
+  "version": "1.0.0"
+}

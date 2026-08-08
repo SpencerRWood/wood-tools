@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 import wood_project.core as project_core
+import wood_templates
 from wood_project.cli import main
+from wood_project.template_cli import main as template_main
 
 WOOD_HOME_DIRS = {
     "packs/templates",
@@ -68,6 +70,7 @@ def _write_template_pack_manifest(
         "schema_version": 1,
         "name": name,
         "version": version,
+        "implementation_stack": "Python 3.11+, pytest, ruff",
         "variables": variables
         or {
             "project-name": {
@@ -86,6 +89,8 @@ def _write_template_pack_manifest(
                 "safe_overwrite": {"strategy": "if-unchanged"},
             }
         ],
+        "expected_tree": ["README.md"],
+        "features": {},
         "validation": [{"rule": "project-name", "message": "Project name is required."}],
     }
     return _write_resource_manifest(
@@ -795,23 +800,11 @@ def test_template_pack_explicit_source_show_reports_contract_without_install_pat
     assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
     capsys.readouterr()
 
-    assert (
-        main(
-            [
-                "template",
-                "show",
-                "service-app",
-                "--source-dir",
-                str(source_dir),
-                "--json",
-            ]
-        )
-        == 0
-    )
+    assert template_main(["show", "service-app", "--source-dir", str(source_dir), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     template_pack = payload["data"]["template_pack"]
-    assert payload["command"] == "template-show"
+    assert payload["command"] == "show"
     assert template_pack["source"] == "explicit"
     assert template_pack["version"] == "1.0.0"
     assert template_pack["digest"] == manifest["digest"]
@@ -846,7 +839,7 @@ def test_template_pack_installed_list_and_project_lock_precedence(
     assert main(["resource", "install", str(source_v2), "--apply", "--json"]) == 0
     capsys.readouterr()
 
-    assert main(["template", "list", "--json"]) == 0
+    assert template_main(["list", "--json"]) == 0
     installed_payload = json.loads(capsys.readouterr().out)
     assert installed_payload["data"]["precedence"] == ["locked", "installed", "built-in"]
     assert installed_payload["data"]["template_packs"][0]["source"] == "installed"
@@ -864,7 +857,7 @@ def test_template_pack_installed_list_and_project_lock_precedence(
     ]
     project_file.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
-    assert main(["template", "show", "service-app", "--json"]) == 0
+    assert template_main(["show", "service-app", "--json"]) == 0
     locked_payload = json.loads(capsys.readouterr().out)
     template_pack = locked_payload["data"]["template_pack"]
     assert template_pack["source"] == "locked"
@@ -890,19 +883,301 @@ def test_template_pack_errors_for_missing_and_invalid_contract(
     assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
     capsys.readouterr()
 
-    code = main(["template", "show", "missing-pack", "--json"])
+    code = template_main(["show", "missing-pack", "--json"])
     missing_payload = json.loads(capsys.readouterr().out)
     assert code == 2
-    assert missing_payload["command"] == "template-show"
+    assert missing_payload["command"] == "show"
     assert missing_payload["status"] == "error"
     assert missing_payload["summary"] == "Template pack not found: missing-pack"
 
-    code = main(["template", "show", "bad-template", "--source-dir", str(source_dir), "--json"])
+    code = template_main(["show", "bad-template", "--source-dir", str(source_dir), "--json"])
     invalid_payload = json.loads(capsys.readouterr().out)
     assert code == 2
-    assert invalid_payload["command"] == "template-show"
+    assert invalid_payload["command"] == "show"
     assert invalid_payload["status"] == "error"
     assert invalid_payload["summary"] == "template resources must define template_pack."
+
+
+def test_builtin_first_party_template_pack_names_features_and_content(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "builtin-template-app"
+    wood_home = tmp_path / "wood-home"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert main(["init", "--wood-home", str(wood_home), "--apply"]) == 0
+    capsys.readouterr()
+
+    assert template_main(["list", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    template_packs = payload["data"]["template_packs"]
+    assert [template["name"] for template in template_packs] == [
+        "python-api-service",
+        "python-cli",
+        "python-library",
+        "python-web-app",
+        "software-planning",
+    ]
+    for template_pack in template_packs:
+        assert template_pack["source"] == "built-in"
+        assert template_pack["version"] == "1.0.0"
+        assert template_pack["digest"].startswith("sha256:")
+        assert template_pack["implementation_stack"]
+        assert template_pack["expected_tree"] == sorted(template_pack["expected_tree"])
+        assert template_pack["features"] == {}
+        assert "installed_location" not in json.dumps(template_pack)
+
+    builtin_root = Path(wood_templates.__file__).parent / "builtin_template_packs"
+    web_readme = (
+        builtin_root / "python-web-app" / "1.0.0" / "templates" / "README.md.tmpl"
+    ).read_text(encoding="utf-8")
+    planning_story = (
+        builtin_root / "software-planning" / "1.0.0" / "templates" / "story-description.md.tmpl"
+    ).read_text(encoding="utf-8")
+    assert "Architecture: full-stack Python web application." in web_readme
+    assert "FastAPI backend with SQLAlchemy and Alembic" in web_readme
+    assert "React, Vite, TypeScript, Tailwind" in web_readme
+    assert "## Acceptance Criteria" in planning_story
+
+
+def test_wood_template_renders_python_cli_in_current_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "my-tool"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["generate", "python-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "generate"
+    assert payload["mutation"] == "mutating"
+    assert payload["data"]["changed"] is True
+    assert set(payload["data"]["template"]) == {"digest", "name", "source", "version"}
+    assert payload["data"]["template"]["name"] == "python-cli"
+    assert payload["data"]["template"]["source"] == "built-in"
+    assert payload["data"]["template"]["version"] == "1.0.0"
+    assert payload["data"]["template"]["digest"].startswith("sha256:")
+    assert "template_pack" not in payload["data"]
+    assert "operations" not in json.dumps(payload["data"])
+    assert "source_detail" not in json.dumps(payload["data"])
+    assert payload["data"]["variables"] == {
+        "package-module": "my_tool",
+        "package-name": "my-tool",
+        "project-name": "my-tool",
+    }
+    assert [file["path"] for file in payload["data"]["files"]] == [
+        ".pre-commit-config.yaml",
+        "README.md",
+        "pyproject.toml",
+        "src/my_tool/__init__.py",
+        "src/my_tool/__main__.py",
+        "src/my_tool/cli.py",
+        "tests/test_cli.py",
+    ]
+    assert "Architecture: Python command-line application." in (
+        project_root / "README.md"
+    ).read_text(encoding="utf-8")
+    pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'name = "my-tool"' in pyproject
+    assert 'my-tool = "my_tool.cli:main"' in pyproject
+    assert 'where = ["src"]' in pyproject
+    assert 'pythonpath = ["src"]' in pyproject
+    assert (project_root / "src" / "my_tool" / "cli.py").exists()
+    assert "raise SystemExit(main())" in (
+        project_root / "src" / "my_tool" / "__main__.py"
+    ).read_text(encoding="utf-8")
+    assert "ruff-pre-commit" in (project_root / ".pre-commit-config.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "{{" not in (project_root / "tests" / "test_cli.py").read_text(encoding="utf-8")
+    assert ".wood" not in json.dumps(payload)
+
+
+def test_wood_template_renders_opinionated_python_api_service(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "orders-api"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["generate", "python-api-service", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "generate"
+    assert payload["data"]["template"]["name"] == "python-api-service"
+    assert [file["path"] for file in payload["data"]["files"]] == [
+        ".pre-commit-config.yaml",
+        "README.md",
+        "alembic.ini",
+        "alembic/env.py",
+        "alembic/script.py.mako",
+        "pyproject.toml",
+        "src/orders_api/__init__.py",
+        "src/orders_api/config.py",
+        "src/orders_api/db.py",
+        "src/orders_api/main.py",
+        "tests/test_health.py",
+    ]
+    assert "Pydantic Settings, SQLAlchemy, Alembic, SQLite" in (
+        project_root / "README.md"
+    ).read_text(encoding="utf-8")
+    pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"alembic>=1.13"' in pyproject
+    assert '"pydantic-settings>=2.2"' in pyproject
+    assert '"sqlalchemy>=2.0"' in pyproject
+    assert '"httpx>=0.28.0"' in pyproject
+    assert '"pytest-asyncio>=1.0.0"' in pyproject
+    assert 'where = ["src"]' in pyproject
+    assert 'pythonpath = ["src"]' in pyproject
+    assert "from alembic import context" in (project_root / "alembic" / "env.py").read_text(
+        encoding="utf-8"
+    )
+    assert "sqlite:///./app.db" in (project_root / "alembic.ini").read_text(encoding="utf-8")
+    assert "FastAPI(title=settings.app_name)" in (
+        project_root / "src" / "orders_api" / "main.py"
+    ).read_text(encoding="utf-8")
+    assert '@app.get("/api/health")' in (project_root / "src" / "orders_api" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "TestClient(app)" in (project_root / "tests" / "test_health.py").read_text(
+        encoding="utf-8"
+    )
+    assert "ruff-pre-commit" in (project_root / ".pre-commit-config.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "{{" not in "\n".join(
+        [
+            (project_root / "src" / "orders_api" / "main.py").read_text(encoding="utf-8"),
+            (project_root / "src" / "orders_api" / "config.py").read_text(encoding="utf-8"),
+            (project_root / "alembic" / "env.py").read_text(encoding="utf-8"),
+        ]
+    )
+
+
+def test_wood_template_renders_python_library_baseline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "shared-utils"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["generate", "python-library", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["data"]["template"]["name"] == "python-library"
+    assert [file["path"] for file in payload["data"]["files"]] == [
+        ".pre-commit-config.yaml",
+        "README.md",
+        "pyproject.toml",
+        "src/shared_utils/__init__.py",
+        "tests/test_package.py",
+    ]
+    assert "uv, pyproject packaging, pytest, ruff, and pre-commit" in (
+        project_root / "README.md"
+    ).read_text(encoding="utf-8")
+    assert 'where = ["src"]' in (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "ruff-pre-commit" in (project_root / ".pre-commit-config.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "{{" not in (project_root / "tests" / "test_package.py").read_text(encoding="utf-8")
+
+
+def test_wood_template_renders_opinionated_python_web_app(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "client-portal"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["generate", "python-web-app", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "generate"
+    assert payload["data"]["template"]["name"] == "python-web-app"
+    assert [file["path"] for file in payload["data"]["files"]] == [
+        "README.md",
+        "backend/alembic.ini",
+        "backend/alembic/env.py",
+        "backend/alembic/script.py.mako",
+        "backend/pyproject.toml",
+        "backend/src/client_portal/__init__.py",
+        "backend/src/client_portal/config.py",
+        "backend/src/client_portal/db.py",
+        "backend/src/client_portal/main.py",
+        "backend/tests/test_health.py",
+        "frontend/eslint.config.js",
+        "frontend/index.html",
+        "frontend/package.json",
+        "frontend/src/App.tsx",
+        "frontend/src/main.tsx",
+        "frontend/src/styles.css",
+        "frontend/tsconfig.json",
+        "frontend/vite.config.ts",
+    ]
+    assert (
+        "React, Vite, TypeScript, Tailwind, Radix UI, lucide-react, and react-router-dom frontend"
+        in (project_root / "README.md").read_text(encoding="utf-8")
+    )
+    frontend_package = (project_root / "frontend" / "package.json").read_text(encoding="utf-8")
+    assert '"react-router-dom":' in frontend_package
+    assert '"tailwindcss":' in frontend_package
+    assert '"@radix-ui/react-tabs":' in frontend_package
+    assert '"lucide-react":' in frontend_package
+    assert '"lint": "eslint ."' in frontend_package
+    assert '"globals":' in frontend_package
+    assert "from alembic import context" in (
+        project_root / "backend" / "alembic" / "env.py"
+    ).read_text(encoding="utf-8")
+    assert "TestClient(app)" in (project_root / "backend" / "tests" / "test_health.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'pythonpath = ["src"]' in (project_root / "backend" / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert "FastAPI(title=settings.app_name)" in (
+        project_root / "backend" / "src" / "client_portal" / "main.py"
+    ).read_text(encoding="utf-8")
+    assert '"/api": "http://localhost:8000"' in (
+        project_root / "frontend" / "vite.config.ts"
+    ).read_text(encoding="utf-8")
+    assert '@import "tailwindcss";' in (project_root / "frontend" / "src" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    assert "<BrowserRouter>" in (project_root / "frontend" / "src" / "main.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'fetch("/api/health")' in (project_root / "frontend" / "src" / "App.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "{{" not in "\n".join(
+        [
+            (project_root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8"),
+            (project_root / "frontend" / "src" / "main.tsx").read_text(encoding="utf-8"),
+            (project_root / "frontend" / "vite.config.ts").read_text(encoding="utf-8"),
+        ]
+    )
+
+
+def test_wood_template_fails_before_mutation_when_output_exists(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "conflict-app"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+    (project_root / "README.md").write_text("keep\n", encoding="utf-8")
+
+    code = template_main(["generate", "python-cli", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 2
+    assert payload["command"] == "generate"
+    assert payload["mutation"] == "mutating"
+    assert payload["summary"] == "Template output already exists: README.md"
+    assert (project_root / "README.md").read_text(encoding="utf-8") == "keep\n"
+    assert not (project_root / "pyproject.toml").exists()
 
 
 def test_init_reports_invalid_slug_in_json_error_output(
