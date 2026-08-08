@@ -310,6 +310,85 @@ def _validate_template_operation(index: int, raw_operation: object) -> dict[str,
     return operation
 
 
+def _validate_template_operations(field: str, raw_operations: object) -> list[dict[str, Any]]:
+    if not isinstance(raw_operations, list) or not raw_operations:
+        raise ProjectError(f"{field} must be a non-empty array.")
+    return [
+        _validate_template_operation(index, operation)
+        for index, operation in enumerate(raw_operations)
+    ]
+
+
+def _validate_template_expected_tree(field: str, raw_tree: object) -> list[str]:
+    if not isinstance(raw_tree, list) or not raw_tree:
+        raise ProjectError(f"{field} must be a non-empty array.")
+    expected_tree: list[str] = []
+    seen: set[str] = set()
+    for index, raw_path in enumerate(raw_tree):
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ProjectError(f"{field}[{index}] must be a non-empty string.")
+        path = Path(raw_path)
+        if path.is_absolute() or ".." in path.parts:
+            raise ProjectError(f"{field}[{index}] must be relative.")
+        if raw_path in seen:
+            raise ProjectError(f"{field} contains duplicate path '{raw_path}'.")
+        seen.add(raw_path)
+        expected_tree.append(raw_path)
+    return expected_tree
+
+
+def _validate_template_features(raw_features: object) -> dict[str, Any]:
+    if raw_features is None:
+        return {}
+    if not isinstance(raw_features, dict):
+        raise ProjectError("template_pack.features must be an object.")
+
+    features: dict[str, Any] = {}
+    for feature_name, raw_feature in sorted(raw_features.items()):
+        _validate_slug("template_pack.features key", feature_name)
+        if not isinstance(raw_feature, dict):
+            raise ProjectError(f"template_pack.features.{feature_name} must be an object.")
+        description = raw_feature.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise ProjectError(
+                f"template_pack.features.{feature_name}.description must be non-empty."
+            )
+        conflicts_with_raw = raw_feature.get("conflicts_with", [])
+        if not isinstance(conflicts_with_raw, list):
+            raise ProjectError(
+                f"template_pack.features.{feature_name}.conflicts_with must be an array."
+            )
+        conflicts_with: list[str] = []
+        for index, conflict in enumerate(conflicts_with_raw):
+            conflict_name = _validate_slug(
+                f"template_pack.features.{feature_name}.conflicts_with[{index}]",
+                conflict,
+            )
+            conflicts_with.append(conflict_name)
+        operations = _validate_template_operations(
+            f"template_pack.features.{feature_name}.operations",
+            raw_feature.get("operations"),
+        )
+        expected_tree = _validate_template_expected_tree(
+            f"template_pack.features.{feature_name}.expected_tree",
+            raw_feature.get("expected_tree"),
+        )
+        features[feature_name] = {
+            "description": description,
+            "conflicts_with": conflicts_with,
+            "operations": operations,
+            "expected_tree": expected_tree,
+        }
+    for feature_name, feature in features.items():
+        for conflict_name in feature["conflicts_with"]:
+            if conflict_name not in features:
+                raise ProjectError(
+                    f"template_pack.features.{feature_name}.conflicts_with references "
+                    f"unknown feature '{conflict_name}'."
+                )
+    return features
+
+
 def _validate_template_pack_contract(
     kind: str,
     raw_contract: object,
@@ -332,6 +411,9 @@ def _validate_template_pack_contract(
         raise ProjectError("template_pack.name must match resource name.")
     if version != manifest_version:
         raise ProjectError("template_pack.version must match resource version.")
+    implementation_stack = raw_contract.get("implementation_stack")
+    if not isinstance(implementation_stack, str) or not implementation_stack.strip():
+        raise ProjectError("template_pack.implementation_stack must be non-empty.")
 
     raw_variables = raw_contract.get("variables", {})
     if not isinstance(raw_variables, dict):
@@ -340,13 +422,22 @@ def _validate_template_pack_contract(
         key: _validate_template_variable(key, value) for key, value in sorted(raw_variables.items())
     }
 
-    raw_operations = raw_contract.get("operations")
-    if not isinstance(raw_operations, list) or not raw_operations:
-        raise ProjectError("template_pack.operations must be a non-empty array.")
-    operations = [
-        _validate_template_operation(index, operation)
-        for index, operation in enumerate(raw_operations)
-    ]
+    operations = _validate_template_operations(
+        "template_pack.operations",
+        raw_contract.get("operations"),
+    )
+    expected_tree = _validate_template_expected_tree(
+        "template_pack.expected_tree",
+        raw_contract.get("expected_tree"),
+    )
+    operation_outputs = {operation["output"] for operation in operations}
+    missing_outputs = sorted(set(expected_tree) - operation_outputs)
+    if missing_outputs:
+        raise ProjectError(
+            "template_pack.expected_tree entries must have matching operations: "
+            + ", ".join(missing_outputs)
+        )
+    features = _validate_template_features(raw_contract.get("features"))
 
     raw_validation = raw_contract.get("validation", [])
     if not isinstance(raw_validation, list):
@@ -367,8 +458,11 @@ def _validate_template_pack_contract(
         "schema_version": RESOURCE_SCHEMA_VERSION,
         "name": name,
         "version": version,
+        "implementation_stack": implementation_stack,
         "variables": variables,
         "operations": operations,
+        "expected_tree": expected_tree,
+        "features": features,
         "validation": validation,
     }
 
@@ -1133,9 +1227,12 @@ def _template_pack_payload(
         "source": source,
         "version": resource["version"],
         "digest": resource["digest"],
+        "implementation_stack": contract["implementation_stack"],
         "variables": contract.get("variables", {}),
         "planned_outputs": [operation["output"] for operation in operations],
         "operations": operations,
+        "expected_tree": contract["expected_tree"],
+        "features": contract.get("features", {}),
         "validation": contract.get("validation", []),
     }
     if source_detail is not None:
@@ -1154,16 +1251,17 @@ def _load_template_pack_from_source(source_dir: Path, *, source: str) -> dict[st
             f"Template pack source must be a template resource, got {manifest.kind}."
         )
     metadata = _build_resource_metadata(manifest, install_dir=resolved_source)
+    source_detail = str(resolved_source) if source == "explicit" else None
     return _template_pack_payload(
         source=source,
-        source_detail=str(resolved_source),
+        source_detail=source_detail,
         resource=metadata["resource"],
     )
 
 
 def _iter_builtin_template_pack_dirs() -> list[Path]:
     try:
-        root = resources.files("wood_project").joinpath("builtin_template_packs")
+        root = resources.files("wood_templates").joinpath("builtin_template_packs")
     except ModuleNotFoundError:
         return []
     if not root.is_dir():
@@ -1173,7 +1271,7 @@ def _iter_builtin_template_pack_dirs() -> list[Path]:
         if not name_dir.is_dir():
             continue
         for version_dir in name_dir.iterdir():
-            if version_dir.is_dir():
+            if version_dir.is_dir() and (version_dir / RESOURCE_MANIFEST_FILE_NAME).is_file():
                 dirs.append(Path(str(version_dir)))
     return sorted(dirs, key=lambda path: (path.parent.name, path.name))
 
@@ -1256,10 +1354,18 @@ def list_template_packs(
             "template_packs": [_load_template_pack_from_source(source_dir, source="explicit")],
         }
 
-    _, document, _ = _load_project_for_resource(
-        project_file=project_file,
-        project_root=project_root,
-    )
+    root = resolve_project_root(project_root)
+    file_path = project_file or root / PROJECT_FILE_NAME
+    if not file_path.exists():
+        if project_file is not None:
+            load_project_document(file_path)
+        return {
+            "precedence": ["built-in"],
+            "template_packs": _builtin_template_pack_payloads(),
+        }
+
+    document = load_project_document(file_path)
+    validate_project_state(document)
     seen_names: set[str] = set()
     selected: list[dict[str, Any]] = []
     for payload in [
@@ -1298,6 +1404,182 @@ def show_template_pack(
             }
     source_hint = f" from {source_dir.expanduser().resolve()}" if source_dir is not None else ""
     raise ProjectError(f"Template pack not found: {requested_name}{source_hint}")
+
+
+def _replace_template_variables(value: str, variables: dict[str, str]) -> str:
+    rendered = value
+    for key, replacement in sorted(variables.items()):
+        rendered = rendered.replace("{{" + key + "}}", replacement)
+    return rendered
+
+
+def _infer_template_variables(template_pack: dict[str, Any], target_root: Path) -> dict[str, str]:
+    project_name = target_root.name
+    package_name = slugify_project_name(project_name)
+    inferred = {
+        "project-name": project_name,
+        "package-name": package_name,
+        "package-module": package_name.replace("-", "_"),
+    }
+    variables: dict[str, str] = {}
+    for name, contract in template_pack.get("variables", {}).items():
+        if name in inferred:
+            variables[name] = inferred[name]
+            continue
+        if "default" in contract:
+            variables[name] = str(contract["default"])
+            continue
+        if contract.get("required") is True:
+            raise ProjectError(f"Template variable requires an explicit value: {name}.")
+    return variables
+
+
+def _template_pack_from_install_dir(
+    install_dir: Path,
+    *,
+    source: str,
+    source_detail: str | None,
+) -> dict[str, Any]:
+    metadata = _load_installed_resource_metadata(install_dir)
+    resource = metadata.get("resource")
+    if not isinstance(resource, dict):
+        metadata_path = _resource_metadata_path(install_dir)
+        raise ProjectError(f"Installed resource metadata is corrupt: {metadata_path}")
+    digest = compute_resource_digest(install_dir)
+    if digest != resource.get("digest"):
+        raise ProjectError(
+            "Installed template pack digest mismatch: "
+            f"expected {resource.get('digest')}, got {digest}."
+        )
+    return _template_pack_payload(source=source, source_detail=source_detail, resource=resource)
+
+
+def _resolve_template_pack_for_render(
+    *,
+    name: str,
+    source_dir: Path | None,
+    project_file: Path | None,
+    project_root: Path | None,
+) -> tuple[dict[str, Any], Path]:
+    requested_name = _validate_slug("name", name)
+    if source_dir is not None:
+        resolved_source = source_dir.expanduser().resolve()
+        payload = _load_template_pack_from_source(resolved_source, source="explicit")
+        if payload["name"] != requested_name:
+            raise ProjectError(f"Template pack not found: {requested_name} from {resolved_source}")
+        return payload, resolved_source
+
+    root = resolve_project_root(project_root)
+    file_path = project_file or root / PROJECT_FILE_NAME
+    if file_path.exists():
+        document = load_project_document(file_path)
+        validate_project_state(document)
+        for entry in document.get("template_packs", []) or []:
+            if entry["name"] != requested_name:
+                continue
+            resource_payload = inspect_resource(
+                kind=TEMPLATE_PACK_RESOURCE_KIND,
+                name=requested_name,
+                version=entry["version"],
+                project_root=Path(document["project_root"]),
+            )
+            resource = resource_payload["resource"]
+            if resource.get("digest") != entry["digest"]:
+                raise ProjectError(
+                    f"Locked template pack {requested_name} {entry['version']} digest mismatch: "
+                    f"expected {entry['digest']}, got {resource.get('digest')}."
+                )
+            return (
+                _template_pack_payload(
+                    source="locked",
+                    source_detail=f"template_packs[{requested_name}]",
+                    resource=resource,
+                ),
+                Path(resource_payload["path"]),
+            )
+
+        wood_home = Path(document["wood_home"])
+        installed_base = _resource_base_dir(wood_home, TEMPLATE_PACK_RESOURCE_KIND) / requested_name
+        if installed_base.exists():
+            install_dir = _select_installed_version(installed_base, None)
+            return (
+                _template_pack_from_install_dir(
+                    install_dir,
+                    source="installed",
+                    source_detail=None,
+                ),
+                install_dir,
+            )
+    elif project_file is not None:
+        load_project_document(file_path)
+
+    builtin_dirs = [
+        path for path in _iter_builtin_template_pack_dirs() if path.parent.name == requested_name
+    ]
+    if builtin_dirs:
+        source_path = sorted(builtin_dirs, reverse=True)[0]
+        return _load_template_pack_from_source(source_path, source="built-in"), source_path
+
+    raise ProjectError(f"Template pack not found: {requested_name}")
+
+
+def render_template_pack(
+    *,
+    name: str,
+    source_dir: Path | None = None,
+    project_file: Path | None = None,
+    project_root: Path | None = None,
+) -> dict[str, Any]:
+    target_root = resolve_project_root(project_root)
+    template_pack, template_root = _resolve_template_pack_for_render(
+        name=name,
+        source_dir=source_dir,
+        project_file=project_file,
+        project_root=target_root,
+    )
+    variables = _infer_template_variables(template_pack, target_root)
+    planned_files: list[dict[str, str]] = []
+    rendered_files: list[tuple[Path, str]] = []
+
+    for operation in template_pack["operations"]:
+        template_path = template_root / operation["template"]
+        if not template_path.exists():
+            raise ProjectError(f"Template source file does not exist: {operation['template']}")
+        if not template_path.is_file():
+            raise ProjectError(f"Template source must be a file: {operation['template']}")
+        relative_output = _replace_template_variables(operation["output"], variables)
+        destination = target_root / relative_output
+        if destination.exists():
+            raise ProjectError(f"Template output already exists: {relative_output}")
+        rendered = _replace_template_variables(
+            template_path.read_text(encoding="utf-8"),
+            variables,
+        )
+        planned_files.append(
+            {
+                "path": relative_output,
+                "template": operation["template"],
+                "overwrite": operation["overwrite"],
+            }
+        )
+        rendered_files.append((destination, rendered))
+
+    for destination, rendered in rendered_files:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered, encoding="utf-8")
+
+    return {
+        "changed": bool(rendered_files),
+        "target_root": str(target_root),
+        "template": {
+            "name": template_pack["name"],
+            "version": template_pack["version"],
+            "source": template_pack["source"],
+            "digest": template_pack["digest"],
+        },
+        "variables": variables,
+        "files": planned_files,
+    }
 
 
 def _resolve_repository_path(repo_path: Path) -> Path:
