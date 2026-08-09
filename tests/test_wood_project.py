@@ -6,10 +6,16 @@ from pathlib import Path
 
 import pytest
 
-import wood_project.core as project_core
 import wood_templates
+from resources.packages import compute_resource_digest
 from wood_project.cli import main
-from wood_project.template_cli import main as template_main
+from wood_project.core import ProjectError, resolve_wood_home
+from wood_project.core import paths as project_paths
+from wood_templates.cli import main as template_main
+from wood_templates.core import renderer as template_renderer
+from wood_templates.core.catalog import list_template_packs, show_template_pack
+from wood_templates.core.manifest import validate_template_pack_contract
+from wood_templates.core.renderer import plan_template_pack, render_template_pack
 
 WOOD_HOME_DIRS = {
     "packs/templates",
@@ -20,6 +26,31 @@ WOOD_HOME_DIRS = {
     "cache",
     "state",
 }
+
+
+def test_template_behavior_is_owned_by_wood_templates() -> None:
+    assert list_template_packs.__module__ == "wood_templates.core.catalog"
+    assert show_template_pack.__module__ == "wood_templates.core.catalog"
+    assert validate_template_pack_contract.__module__ == "wood_templates.core.manifest"
+    assert plan_template_pack.__module__ == "wood_templates.core.renderer"
+    assert render_template_pack.__module__ == "wood_templates.core.renderer"
+
+
+def test_template_generate_requires_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "preview-app"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert template_main(["generate", "python-cli", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "blocked"
+    assert payload["requires_approval"] is True
+    assert not (project_root / "pyproject.toml").exists()
 
 
 def _write_resource_manifest(
@@ -37,7 +68,7 @@ def _write_resource_manifest(
         "kind": kind,
         "name": name,
         "version": version,
-        "digest": digest or project_core.compute_resource_digest(source_dir),
+        "digest": digest or compute_resource_digest(source_dir),
         "compatibility": {"wood_tools": ">=0.1.1"},
     }
     if helper_contract is None and kind in {"tool", "script"}:
@@ -252,18 +283,18 @@ def test_default_wood_home_uses_home_and_wood_home_env_overrides(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("WOOD_HOME", raising=False)
 
-    assert project_core.resolve_wood_home() == (home / ".wood").resolve()
+    assert resolve_wood_home() == (home / ".wood").resolve()
 
     override = tmp_path / "override"
     monkeypatch.setenv("WOOD_HOME", str(override))
-    assert project_core.resolve_wood_home() == override.resolve()
+    assert resolve_wood_home() == override.resolve()
 
 
 def test_empty_wood_home_env_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WOOD_HOME", " ")
 
-    with pytest.raises(project_core.ProjectError, match="WOOD_HOME must be a non-empty path"):
-        project_core.resolve_wood_home()
+    with pytest.raises(ProjectError, match="WOOD_HOME must be a non-empty path"):
+        resolve_wood_home()
 
 
 def test_validate_reports_invalid_project_json(
@@ -1132,7 +1163,7 @@ def test_wood_template_renders_python_cli_in_current_directory(
     project_root.mkdir()
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "python-cli", "--json"]) == 0
+    assert template_main(["generate", "python-cli", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["command"] == "generate"
@@ -1186,7 +1217,7 @@ def test_wood_template_renders_python_cli_in_current_directory(
         },
         "files": [
             {
-                "digest": project_core._content_digest((project_root / path).read_bytes()),
+                "digest": template_renderer._content_digest((project_root / path).read_bytes()),
                 "path": path,
             }
             for path in [
@@ -1216,7 +1247,7 @@ def test_wood_template_renders_opinionated_python_api_service(
     project_root.mkdir()
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "python-api-service", "--json"]) == 0
+    assert template_main(["generate", "python-api-service", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["command"] == "generate"
@@ -1277,7 +1308,7 @@ def test_wood_template_renders_python_library_baseline(
     project_root.mkdir()
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "python-library", "--json"]) == 0
+    assert template_main(["generate", "python-library", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["data"]["template"]["name"] == "python-library"
@@ -1305,7 +1336,7 @@ def test_wood_template_renders_opinionated_python_web_app(
     project_root.mkdir()
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "python-web-app", "--json"]) == 0
+    assert template_main(["generate", "python-web-app", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["command"] == "generate"
@@ -1382,7 +1413,7 @@ def test_wood_template_fails_before_mutation_when_output_exists(
     monkeypatch.chdir(project_root)
     (project_root / "README.md").write_text("keep\n", encoding="utf-8")
 
-    code = template_main(["generate", "python-cli", "--json"])
+    code = template_main(["generate", "python-cli", "--apply", "--json"])
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 2
@@ -1401,7 +1432,7 @@ def test_wood_template_repeat_execution_is_a_no_op(
     project_root.mkdir()
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "python-library", "--json"]) == 0
+    assert template_main(["generate", "python-library", "--apply", "--json"]) == 0
     capsys.readouterr()
     before = {
         path.relative_to(project_root).as_posix(): path.read_bytes()
@@ -1409,7 +1440,7 @@ def test_wood_template_repeat_execution_is_a_no_op(
         if path.is_file()
     }
 
-    assert template_main(["generate", "python-library", "--json"]) == 0
+    assert template_main(["generate", "python-library", "--apply", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     after = {
         path.relative_to(project_root).as_posix(): path.read_bytes()
@@ -1437,7 +1468,10 @@ def test_wood_template_explicit_source_result_is_reproducible_offline(
     monkeypatch.chdir(project_root)
 
     assert (
-        template_main(["generate", "service-app", "--source-dir", str(source_dir), "--json"]) == 0
+        template_main(
+            ["generate", "service-app", "--source-dir", str(source_dir), "--apply", "--json"]
+        )
+        == 0
     )
     capsys.readouterr()
     shutil.rmtree(source_dir)
@@ -1448,7 +1482,7 @@ def test_wood_template_explicit_source_result_is_reproducible_offline(
     assert str(source_dir) not in json.dumps(lock)
     for file_entry in lock["files"]:
         output = project_root / file_entry["path"]
-        assert project_core._content_digest(output.read_bytes()) == file_entry["digest"]
+        assert template_renderer._content_digest(output.read_bytes()) == file_entry["digest"]
 
 
 def test_wood_template_refuses_checksum_mismatch_before_mutation(
@@ -1462,7 +1496,9 @@ def test_wood_template_refuses_checksum_mismatch_before_mutation(
     _write_template_pack_manifest(source_dir, digest=f"sha256:{'0' * 64}")
     monkeypatch.chdir(project_root)
 
-    code = template_main(["generate", "service-app", "--source-dir", str(source_dir), "--json"])
+    code = template_main(
+        ["generate", "service-app", "--source-dir", str(source_dir), "--apply", "--json"]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 2
@@ -1486,12 +1522,17 @@ def test_wood_template_partial_failure_restores_prior_state(
         _write_template_pack_manifest(source_dir, version=version)
     monkeypatch.chdir(project_root)
 
-    assert template_main(["generate", "service-app", "--source-dir", str(source_v1), "--json"]) == 0
+    assert (
+        template_main(
+            ["generate", "service-app", "--source-dir", str(source_v1), "--apply", "--json"]
+        )
+        == 0
+    )
     capsys.readouterr()
     original_readme = (project_root / "README.md").read_bytes()
     original_lock = (project_root / "wood.lock.json").read_bytes()
 
-    real_replace = project_core._replace_staged_file
+    real_replace = template_renderer._replace_staged_file
     calls = 0
 
     def fail_during_lock_activation(source: Path, destination: Path) -> None:
@@ -1501,9 +1542,11 @@ def test_wood_template_partial_failure_restores_prior_state(
             raise OSError("injected activation failure")
         real_replace(source, destination)
 
-    monkeypatch.setattr(project_core, "_replace_staged_file", fail_during_lock_activation)
+    monkeypatch.setattr(template_renderer, "_replace_staged_file", fail_during_lock_activation)
 
-    code = template_main(["generate", "service-app", "--source-dir", str(source_v2), "--json"])
+    code = template_main(
+        ["generate", "service-app", "--source-dir", str(source_v2), "--apply", "--json"]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 2
@@ -1527,7 +1570,9 @@ def test_wood_template_refuses_generated_wood_home_paths(
     _write_template_pack_manifest(source_dir)
     monkeypatch.chdir(project_root)
 
-    code = template_main(["generate", "service-app", "--source-dir", str(source_dir), "--json"])
+    code = template_main(
+        ["generate", "service-app", "--source-dir", str(source_dir), "--apply", "--json"]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 2
@@ -1549,7 +1594,9 @@ def test_wood_template_refuses_output_through_symlinked_parent(
     _write_template_pack_manifest(source_dir)
     monkeypatch.chdir(project_root)
 
-    code = template_main(["generate", "service-app", "--source-dir", str(source_dir), "--json"])
+    code = template_main(
+        ["generate", "service-app", "--source-dir", str(source_dir), "--apply", "--json"]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 2
@@ -1624,14 +1671,14 @@ def test_validate_fails_when_required_path_is_not_readable(
     capsys.readouterr()
 
     tools_dir = (wood_home / "tools").resolve()
-    original_access = project_core.os.access
+    original_access = project_paths.os.access
 
     def fake_access(path: object, mode: int) -> bool:
-        if Path(path) == tools_dir and mode == (project_core.os.R_OK | project_core.os.X_OK):
+        if Path(path) == tools_dir and mode == (project_paths.os.R_OK | project_paths.os.X_OK):
             return False
         return original_access(path, mode)
 
-    monkeypatch.setattr(project_core.os, "access", fake_access)
+    monkeypatch.setattr(project_paths.os, "access", fake_access)
 
     code = main(["validate", "--json"])
 
@@ -1650,15 +1697,15 @@ def test_init_apply_fails_when_wood_home_parent_is_not_writable(
     wood_home = tmp_path / "shared" / "wood-home"
     blocked_parent = (tmp_path / "shared").resolve()
     blocked_parent.mkdir()
-    original_access = project_core.os.access
+    original_access = project_paths.os.access
 
     def fake_access(path: object, mode: int) -> bool:
-        if Path(path) == blocked_parent and mode == (project_core.os.W_OK | project_core.os.X_OK):
+        if Path(path) == blocked_parent and mode == (project_paths.os.W_OK | project_paths.os.X_OK):
             return False
         return original_access(path, mode)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr(project_core.os, "access", fake_access)
+        monkeypatch.setattr(project_paths.os, "access", fake_access)
         code = main(
             [
                 "--project-root",

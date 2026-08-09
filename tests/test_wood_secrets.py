@@ -9,7 +9,7 @@ import pytest
 
 from wood_secrets.cli import main
 from wood_secrets.core import SecretResolver
-from wood_secrets.providers import (
+from wood_secrets.core.providers import (
     EnvironmentSecretProvider,
     MissingSecretError,
     ProviderLockedError,
@@ -19,7 +19,7 @@ from wood_secrets.providers import (
     SecretProviderError,
     normalize_env_fallback_name,
 )
-from wood_secrets.vaultwarden import (
+from wood_secrets.core.vaultwarden import (
     APPDATA_ENV,
     UNLOCK_PASSWORD_ENV,
     VaultwardenSecretProvider,
@@ -150,7 +150,7 @@ def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
         config_document: dict[str, object] | None = None,
     ) -> None:
         monkeypatch.setattr(
-            "wood_secrets.core.load_config",
+            "wood_secrets.core.resolver.load_config",
             lambda _: config_document if config_document is not None else make_config_document(),
         )
         env_provider = EnvironmentSecretProvider(environ=environ or {})
@@ -574,7 +574,7 @@ def test_resolver_resolves_configured_integration_reference_in_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "wood_secrets.core.load_config",
+        "wood_secrets.core.resolver.load_config",
         lambda _: make_config_document(
             openproject_ref="vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
         ),
@@ -599,7 +599,7 @@ def test_resolver_reports_configured_integration_status_without_leaking_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "wood_secrets.core.load_config",
+        "wood_secrets.core.resolver.load_config",
         lambda _: make_config_document(
             openproject_ref="vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
         ),
@@ -672,7 +672,7 @@ def test_vaultwarden_unlock_writes_protected_runtime_session_file(
         environ=environ,
         stdin_isatty=lambda: True,
     )
-    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.getpass", lambda _: "master-password")
 
     status = provider.unlock(interactive=True, write_session=True)
 
@@ -750,7 +750,7 @@ def test_vaultwarden_unlock_applies_configured_server_before_unlock(
         environ=environ,
         stdin_isatty=lambda: True,
     )
-    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.getpass", lambda _: "master-password")
 
     status = provider.unlock(interactive=True, write_session=False)
 
@@ -808,7 +808,7 @@ def test_vaultwarden_unlock_logs_out_before_reconfiguring_server_when_required(
         environ=environ,
         stdin_isatty=lambda: True,
     )
-    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.getpass", lambda _: "master-password")
 
     status = provider.unlock(interactive=True, write_session=False)
 
@@ -845,7 +845,7 @@ def test_vaultwarden_unlock_restores_existing_password_env(
         environ=environ,
         stdin_isatty=lambda: True,
     )
-    monkeypatch.setattr("wood_secrets.vaultwarden.getpass", lambda _: "master-password")
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.getpass", lambda _: "master-password")
 
     status = provider.unlock(interactive=True, write_session=False)
 
@@ -872,7 +872,7 @@ def test_vaultwarden_gui_prompt_empty_result_is_controlled_error(
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("wood_secrets.vaultwarden.subprocess.run", fake_run)
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.subprocess.run", fake_run)
 
     with pytest.raises(SecretProviderError, match="timed out"):
         prompt_for_password_macos()
@@ -905,7 +905,7 @@ def test_vaultwarden_subprocess_uses_writable_appdata_dir(
         )
         return subprocess.CompletedProcess(command, 0, stdout="{}\n", stderr="")
 
-    monkeypatch.setattr("wood_secrets.vaultwarden.subprocess.run", fake_run)
+    monkeypatch.setattr("wood_secrets.core.vaultwarden.subprocess.run", fake_run)
     provider = VaultwardenSecretProvider(
         executable="bw",
         appdata_dir=appdata_dir,

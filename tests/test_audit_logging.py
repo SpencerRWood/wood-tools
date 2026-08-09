@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from wood_config.audit import (
+from resources.cli.audit import (
     MAX_BYTES_ENV,
     MAX_FILES_ENV,
     MODE_ENV,
@@ -13,7 +13,7 @@ from wood_config.audit import (
     build_audit_event,
     write_audit_event,
 )
-from wood_config.output import blocked_output, error_output, success_output
+from resources.cli.output import blocked_output, error_output, success_output
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:

@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .audit import write_audit_event
+from resources.cli.audit import write_audit_event
+from resources.cli.output import blocked_output, error_output, success_output, warning_output
+
 from .core import (
     ConfigError,
     build_paths,
@@ -20,7 +22,6 @@ from .core import (
     show_config,
     validate_config,
 )
-from .output import blocked_output, error_output, success_output, warning_output
 
 
 def _emit(

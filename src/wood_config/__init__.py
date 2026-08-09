@@ -1,5 +1,1 @@
-"""wood-config package."""
-
-from .cli import main
-
-__all__ = ["main"]
+"""Configuration services for Wood tools."""
