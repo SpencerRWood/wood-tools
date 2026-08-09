@@ -389,8 +389,15 @@ operations, overwrite decisions, and output conflicts.
 
 `wood-template generate <name>` renders the base template into the current directory. It infers
 `project-name`, `package-name`, and `package-module` from the current folder name, fails before
-writing if any planned output already exists, and works with built-in templates even before
-`project.json` exists.
+writing if a planned output would be overwritten unexpectedly, and works with built-in templates
+even before `project.json` exists. Application stages and verifies the complete plan before
+activation, restores the prior project state after a partial write failure, and is a no-op when
+repeated against unchanged generated files.
+
+Successful application writes a root-level `wood.lock.json` with the template name, source, exact
+version and digest, Wood Tools version, declared inputs, applicable reference and agent pack
+versions, and generated-file digests. The lock uses portable resource identities rather than
+absolute Wood home paths, and template application never creates a project-local `.wood/`.
 
 `wood-template list --json` and `wood-template show <name> --json` are inspection commands. They
 emit the selected source, exact version, digest, variables, planned outputs, operations, and

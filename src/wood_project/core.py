@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from importlib import resources
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
@@ -20,6 +20,8 @@ RESOURCE_MANIFEST_FILE_NAME = "wood-resource.json"
 RESOURCE_INSTALL_METADATA_FILE_NAME = ".wood-resource-install.json"
 TEMPLATE_PACK_RESOURCE_KIND = "template"
 TEMPLATE_PACK_CONTRACT_FIELD = "template_pack"
+TEMPLATE_LOCK_FILE_NAME = "wood.lock.json"
+TEMPLATE_LOCK_SCHEMA_VERSION = 1
 WOOD_HOME_ENV = "WOOD_HOME"
 WOOD_HOME_DIR_NAME = ".wood"
 WOOD_CONFIG_FILE_NAME = "config.toml"
@@ -1446,6 +1448,125 @@ def _template_summary(template_pack: dict[str, Any]) -> dict[str, str]:
     return summary
 
 
+def _content_digest(content: bytes) -> str:
+    return f"sha256:{sha256(content).hexdigest()}"
+
+
+def _validate_portable_rendered_content(content: str) -> None:
+    forbidden_paths = {str(Path.home() / WOOD_HOME_DIR_NAME), f"~/{WOOD_HOME_DIR_NAME}"}
+    configured_wood_home = os.environ.get(WOOD_HOME_ENV)
+    if configured_wood_home:
+        forbidden_paths.add(str(Path(configured_wood_home).expanduser().resolve()))
+    if any(path in content for path in forbidden_paths):
+        raise ProjectError("Generated template content must not contain Wood home paths.")
+
+
+def _load_template_lock(lock_path: Path) -> dict[str, Any] | None:
+    if not lock_path.exists():
+        return None
+    if not lock_path.is_file():
+        raise ProjectError(f"Template lock must be a file: {TEMPLATE_LOCK_FILE_NAME}")
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ProjectError(f"Invalid JSON in {TEMPLATE_LOCK_FILE_NAME}: {exc}") from exc
+    if not isinstance(lock, dict) or lock.get("schema_version") != TEMPLATE_LOCK_SCHEMA_VERSION:
+        raise ProjectError(f"Unsupported or invalid {TEMPLATE_LOCK_FILE_NAME}.")
+    template = lock.get("template")
+    files = lock.get("files")
+    if not isinstance(template, dict) or not isinstance(files, list):
+        raise ProjectError(f"Unsupported or invalid {TEMPLATE_LOCK_FILE_NAME}.")
+    return lock
+
+
+def _locked_output_digests(lock: dict[str, Any] | None) -> dict[str, str]:
+    if lock is None:
+        return {}
+    digests: dict[str, str] = {}
+    for entry in lock["files"]:
+        if not isinstance(entry, dict):
+            raise ProjectError(f"Unsupported or invalid {TEMPLATE_LOCK_FILE_NAME}.")
+        path = entry.get("path")
+        digest = entry.get("digest")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            raise ProjectError(f"Unsupported or invalid {TEMPLATE_LOCK_FILE_NAME}.")
+        _validate_resource_digest(digest)
+        digests[path] = digest
+    return digests
+
+
+def _template_lock_payload(plan: dict[str, Any], rendered: dict[str, bytes]) -> dict[str, Any]:
+    return {
+        "schema_version": TEMPLATE_LOCK_SCHEMA_VERSION,
+        "template": {key: plan["template"][key] for key in ("name", "source", "version", "digest")},
+        "wood_tools_version": WOOD_TOOLS_VERSION,
+        "declared_inputs": plan["variables"],
+        "reference_packs": [],
+        "agent_packs": [],
+        "files": [
+            {"path": path, "digest": _content_digest(content)}
+            for path, content in sorted(rendered.items())
+        ],
+    }
+
+
+def _replace_staged_file(source: Path, destination: Path) -> None:
+    source.replace(destination)
+
+
+def _created_parent_directories(destination: Path, target_root: Path) -> list[Path]:
+    created: list[Path] = []
+    parent = destination.parent
+    while parent != target_root and not parent.exists():
+        created.append(parent)
+        parent = parent.parent
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return created
+
+
+def _activate_template_files(
+    *,
+    target_root: Path,
+    staged_files: dict[str, Path],
+) -> None:
+    records: list[dict[str, Any]] = []
+    created_directories: list[Path] = []
+    try:
+        for index, (relative_path, staged_path) in enumerate(staged_files.items()):
+            destination = target_root / relative_path
+            created_directories.extend(_created_parent_directories(destination, target_root))
+            backup = staged_path.parent / f".backup-{index}"
+            record = {
+                "destination": destination,
+                "backup": backup,
+                "had_existing": destination.exists(),
+                "activated": False,
+            }
+            records.append(record)
+            if record["had_existing"]:
+                _replace_staged_file(destination, backup)
+            _replace_staged_file(staged_path, destination)
+            record["activated"] = True
+    except OSError as exc:
+        for record in reversed(records):
+            destination = record["destination"]
+            backup = record["backup"]
+            if record["activated"] and destination.exists():
+                destination.unlink()
+            if record["had_existing"] and backup.exists():
+                _replace_staged_file(backup, destination)
+        for directory in sorted(
+            set(created_directories), key=lambda path: len(path.parts), reverse=True
+        ):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        raise ProjectError(
+            "Template application failed; prior project state was restored."
+        ) from exc
+
+
 def _template_pack_from_install_dir(
     install_dir: Path,
     *,
@@ -1555,21 +1676,55 @@ def render_template_pack(
 
     target_root = Path(plan["target_root"])
     template_root = Path(plan["template_root"])
-    rendered_files: list[tuple[Path, str]] = []
+    rendered_files: dict[str, bytes] = {}
     for operation in plan["operations"]:
         template_path = template_root / operation["template"]
         rendered = _replace_template_variables(
             template_path.read_text(encoding="utf-8"),
             plan["variables"],
         )
-        rendered_files.append((target_root / operation["path"], rendered))
+        rendered_files[operation["path"]] = rendered.encode("utf-8")
 
-    for destination, rendered in rendered_files:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(rendered, encoding="utf-8")
+    lock_path = target_root / TEMPLATE_LOCK_FILE_NAME
+    existing_lock = _load_template_lock(lock_path)
+    if existing_lock is not None:
+        locked_template = existing_lock["template"]
+        if locked_template.get("name") != plan["template"]["name"]:
+            raise ProjectError(
+                f"Template lock already belongs to {locked_template.get('name', '<unknown>')}."
+            )
+    lock_payload = _template_lock_payload(plan, rendered_files)
+    lock_content = (json.dumps(lock_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    changed_paths = {
+        operation["path"]
+        for operation in plan["operations"]
+        if operation["decision"] in {"create", "overwrite"}
+    }
+    if not lock_path.exists() or lock_path.read_bytes() != lock_content:
+        changed_paths.add(TEMPLATE_LOCK_FILE_NAME)
+
+    if changed_paths:
+        with TemporaryDirectory(prefix=".wood-template-stage-", dir=target_root) as temp_dir:
+            staging_root = Path(temp_dir)
+            staged_files: dict[str, Path] = {}
+            content_by_path = {**rendered_files, TEMPLATE_LOCK_FILE_NAME: lock_content}
+            for relative_path in sorted(changed_paths):
+                staged_path = staging_root / relative_path
+                staged_path.parent.mkdir(parents=True, exist_ok=True)
+                staged_path.write_bytes(content_by_path[relative_path])
+                staged_files[relative_path] = staged_path
+
+            actual_digest = compute_resource_digest(template_root)
+            if actual_digest != plan["template"]["digest"]:
+                raise ProjectError(
+                    "Template pack changed after planning: "
+                    f"expected {plan['template']['digest']}, got {actual_digest}."
+                )
+            _activate_template_files(target_root=target_root, staged_files=staged_files)
 
     return {
-        "changed": bool(rendered_files),
+        "changed": bool(changed_paths),
         "target_root": str(target_root),
         "template": {
             key: value
@@ -1577,6 +1732,7 @@ def render_template_pack(
             if key in {"name", "version", "source", "digest"}
         },
         "variables": plan["variables"],
+        "lock_file": TEMPLATE_LOCK_FILE_NAME,
         "files": [
             {
                 "path": operation["path"],
@@ -1606,6 +1762,9 @@ def plan_template_pack(
     variables = _infer_template_variables(template_pack, target_root)
     operations: list[dict[str, Any]] = []
     conflicts: list[dict[str, str]] = []
+    lock = _load_template_lock(target_root / TEMPLATE_LOCK_FILE_NAME)
+    locked_digests = _locked_output_digests(lock)
+    seen_outputs: set[str] = set()
 
     for operation in template_pack["operations"]:
         template_path = template_root / operation["template"]
@@ -1614,14 +1773,52 @@ def plan_template_pack(
         if not template_path.is_file():
             raise ProjectError(f"Template source must be a file: {operation['template']}")
         relative_output = _replace_template_variables(operation["output"], variables)
+        output_path = Path(relative_output)
+        if output_path.is_absolute() or ".." in output_path.parts:
+            raise ProjectError(
+                f"Rendered template output must stay within the project: {relative_output}"
+            )
+        if relative_output in seen_outputs:
+            raise ProjectError(
+                f"Template operations resolve to duplicate output: {relative_output}"
+            )
+        seen_outputs.add(relative_output)
         destination = target_root / relative_output
+        if not destination.resolve().is_relative_to(target_root.resolve()):
+            raise ProjectError(
+                f"Rendered template output must stay within the project: {relative_output}"
+            )
         exists = destination.exists()
-        decision = "conflict" if exists else "create"
-        if exists:
+        rendered = _replace_template_variables(
+            template_path.read_text(encoding="utf-8"),
+            variables,
+        ).encode("utf-8")
+        _validate_portable_rendered_content(rendered.decode("utf-8"))
+        decision = "create"
+        conflict_reason = "output-exists"
+        if exists and not destination.is_file():
+            decision = "conflict"
+        elif exists and destination.read_bytes() == rendered:
+            decision = "unchanged"
+        elif exists and operation["overwrite"] == "always":
+            decision = "overwrite"
+        elif (
+            exists
+            and operation["overwrite"] == "safe"
+            and operation.get("safe_overwrite", {}).get("strategy") == "if-unchanged"
+            and locked_digests.get(relative_output) == _content_digest(destination.read_bytes())
+        ):
+            decision = "overwrite"
+        elif exists:
+            decision = "conflict"
+            conflict_reason = (
+                "output-modified" if relative_output in locked_digests else "output-exists"
+            )
+        if decision == "conflict":
             conflicts.append(
                 {
                     "path": relative_output,
-                    "reason": "output-exists",
+                    "reason": conflict_reason,
                 }
             )
         planned_operation = {
