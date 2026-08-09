@@ -49,6 +49,13 @@ def _summarize_json_payload(command: str, payload: dict[str, Any]) -> dict[str, 
 
     if command == "generate":
         template = payload["template"]
+        if not payload["changed"]:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary=f"Template {template['name']} is already current.",
+                data=payload,
+            )
         return success_output(
             command=command,
             mutation="mutating",
