@@ -6,11 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from wood_config.audit import write_audit_event
-from wood_config.output import error_output, success_output
+from resources.cli.audit import write_audit_event
+from resources.cli.output import blocked_output, error_output, success_output
+from resources.packages import ResourceError
 
 from .core import (
-    ProjectError,
+    TemplateError,
     list_template_packs,
     plan_template_pack,
     render_template_pack,
@@ -117,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect a template pack source directory before project resolution",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    parser.add_argument("--apply", action="store_true", help="Apply template generation")
 
     return parser
 
@@ -127,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(command_args)
 
     try:
+        if args.command != "generate" and args.apply:
+            parser.error("--apply is only valid with generate")
         if args.command == "list":
             if args.name is not None:
                 parser.error(f"Unexpected argument for list: {args.name}")
@@ -175,6 +179,20 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"Unknown command: {args.command}")
         if args.name is None:
             parser.error("generate requires a template name")
+        if not args.apply:
+            payload = plan_template_pack(
+                name=args.name,
+                source_dir=args.source_dir,
+                project_file=args.project_file,
+                project_root=args.project_root,
+            )
+            output = blocked_output(
+                command="generate",
+                summary=f"Generating template {args.name} requires approval.",
+                data=payload,
+                next_actions=[f"Re-run wood-template generate {args.name} with --apply."],
+            )
+            return _emit(output, json_output=args.json, command_args=command_args)
         payload = render_template_pack(
             name=args.name,
             source_dir=args.source_dir,
@@ -186,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             json_output=args.json,
             command_args=command_args,
         )
-    except ProjectError as exc:
+    except (TemplateError, ResourceError) as exc:
         if getattr(args, "json", False):
             command = args.command
             payload = error_output(

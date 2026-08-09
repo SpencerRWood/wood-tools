@@ -64,7 +64,7 @@ def test_init_set_get_show_success_path(
     assert "project_root': './projects'" in out
     assert "alias_resolution" in out
     assert str(project_target) in out
-    assert "user_agent': 'wood-tools/0.1'" in out
+    assert "user_agent': 'wood-tools/0.2.0'" in out
     assert "'executable': 'bw'" in out
 
     assert (
@@ -225,7 +225,7 @@ def test_json_output_for_supported_commands(
         payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"][
             "user_agent"
         ]
-        == "wood-tools/0.1"
+        == "wood-tools/0.2.0"
     )
     assert (
         payload["data"]["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"][
@@ -289,7 +289,7 @@ def test_json_output_for_supported_commands(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "get"
     assert payload["data"]["key"] == "integrations.openproject.user_agent"
-    assert payload["data"]["value"] == "wood-tools/0.1"
+    assert payload["data"]["value"] == "wood-tools/0.2.0"
 
     assert (
         main(
@@ -311,7 +311,7 @@ def test_json_output_for_supported_commands(
     assert payload["data"]["value"] == "pkg://wood-agents/adapters"
 
 
-def test_artifact_config_settings_are_obsolete(
+def test_unsupported_path_settings_are_rejected(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / "config.json"
@@ -330,7 +330,7 @@ def test_artifact_config_settings_are_obsolete(
 
     assert code == 2
     err = capsys.readouterr().err
-    assert "Artifact path settings are obsolete" in err
+    assert "Unsupported path setting: paths.artifact_aliases" in err
 
     document = json.loads(config_path.read_text(encoding="utf-8"))
     document["profiles"]["default"]["paths"]["artifact_root"] = "./artifacts"
@@ -344,6 +344,27 @@ def test_artifact_config_settings_are_obsolete(
     fields = {issue["field"] for issue in payload["errors"]}
     assert "paths.artifact_root" in fields
     assert "paths.artifact_aliases" in fields
+
+
+def test_string_alias_schema_is_rejected(
+    tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.json"
+    assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
+
+    code = main(
+        [
+            "--config-path",
+            str(config_path),
+            "set",
+            "paths.project_aliases.demo",
+            '"./projects/demo"',
+            "--apply",
+        ]
+    )
+
+    assert code == 2
+    assert "Alias entries must be objects with path and targets fields." in capsys.readouterr().err
 
 
 def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      VIRTUAL_ENV: /tmp/wood-tools-venv
+      UV_PROJECT_ENVIRONMENT: /tmp/wood-tools-venv
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Create environment
+        run: uv venv "$VIRTUAL_ENV"
+
+      - name: Install dependencies
+        run: uv sync --active --group dev
+
+      - name: Lint
+        run: uv run --active ruff check .
+
+      - name: Check formatting
+        run: uv run --active ruff format --check .
+
+      - name: Run tests and architecture checks
+        run: uv run --active pytest -q

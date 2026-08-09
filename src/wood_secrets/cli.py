@@ -5,11 +5,11 @@ import json
 import sys
 from typing import Any
 
-from wood_config.audit import write_audit_event
-from wood_config.output import error_output, success_output, warning_output
+from resources.cli.audit import write_audit_event
+from resources.cli.output import error_output, success_output, warning_output
 
 from .core import SecretResolver
-from .providers import SecretProviderError
+from .core.providers import SecretProviderError
 
 
 def _emit(

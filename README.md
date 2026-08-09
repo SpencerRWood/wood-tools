@@ -5,8 +5,72 @@ Deterministic Python CLI tooling for project delivery workflows.
 ## What This Repo Includes
 
 - `wood-config` for local config initialization, profile management, validation, and diagnostics
-- `wood-project` for workspace `project.json` initialization, display, and validation
+- `wood-project` for workspace metadata, resources, OpenProject inspection, and Story workflows
 - `wood-secrets` for provider health checks and redacted secret reference resolution
+- `wood-template` for planning and applying built-in or installed project templates
+
+### Package Boundaries
+
+- Each public command is implemented by its capability package's `cli.py` module.
+- Domain behavior shared by a package's CLI and other consumers lives in that package's `core/`
+  package.
+- `wood_project` owns local project metadata, its command families, and the shared OpenProject
+  client.
+- `resources.packages` owns generic resource manifests, validation, installation, and lookup as a
+  shared library package with no console entry point.
+- `wood_project.story` owns Story Loop discovery, status, and branch behavior and reuses the
+  project-owned OpenProject client.
+- `wood_templates` owns the template CLI, template domain API, and all built-in template packs.
+- `resources.cli` owns output envelopes and audit logging shared by every command.
+
+```text
+src/
+  resources/
+    __init__.py
+    cli/
+      audit.py
+      models.py
+      output.py
+    packages/
+      manifest.py
+      models.py
+      store.py
+  wood_config/
+    cli.py
+    core/
+  wood_secrets/
+    cli.py
+    core/
+  wood_project/
+    cli.py
+    commands/
+      project.py
+      resources.py
+      openproject.py
+    core/
+      documents.py
+      models.py
+      paths.py
+      project.py
+      validation.py
+    openproject/
+      client.py
+      config.py
+      models.py
+    story/
+      models.py
+      openproject.py
+      discovery.py
+      status.py
+      branches.py
+  wood_templates/
+    cli.py
+    core/
+      catalog.py
+      manifest.py
+      project.py
+      renderer.py
+```
 
 ## Quick Setup
 
@@ -84,7 +148,7 @@ Global option:
           "url": "https://openproject.example.test",
           "project_id": "wood",
           "token_ref": "env://OPENPROJECT_TOKEN",
-          "user_agent": "wood-tools/0.1"
+          "user_agent": "wood-tools/0.2.0"
         },
         "ntfy": {
           "url": null,
@@ -123,9 +187,7 @@ Alias notes:
 
 - `paths.project_aliases` maps stable shared paths to machine-specific candidate targets.
 - The object form uses `path` for the canonical NAS-backed location and `targets` for candidate local mount paths checked in order.
-- Legacy string aliases such as `"demo": "./projects/demo"` are still accepted and resolve as a single direct target.
 - `show`, `get`, `validate`, and `doctor` include alias resolution metadata so you can see which target matched on the current machine.
-- Legacy `paths.artifact_root` and `paths.artifact_aliases` settings are obsolete. Use project aliases plus the user-global Wood home managed by `wood-project init`.
 
 ### `wood-secrets`
 
@@ -256,12 +318,14 @@ Commands:
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
-- `wood-template generate <name>` render a template into the current project directory
+- `wood-template generate <name>` preview rendering a template into the current project directory
+- `wood-template generate <name> --apply` apply the approved template generation
 - `wood-template list` list resolved template packs
 - `wood-template show <name>` show a resolved template pack contract
 - `wood-project user` inspect the authenticated OpenProject user
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
-- `wood-project story <id>` inspect one work package plus raw description and relation context
+- `wood-project story show <id>` inspect one work package plus description and relation context
+- `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
 - `wood-project show` read and print the current `project.json`
 - `wood-project validate` verify the current `project.json` schema, required directories, path relationships, linked repository paths, and mounted path accessibility
 
@@ -291,6 +355,61 @@ OpenProject inspection reads `integrations.openproject.url`,
 `integrations.openproject.user_agent` from the active `wood-config` profile. The token reference is
 resolved in memory through `wood-secrets`; commands perform only `GET` requests and never print the
 resolved token.
+
+#### `wood-project story`
+
+Story workflow commands for deterministic OpenProject Story intake and branch preparation.
+
+Commands:
+
+- `wood-project story show <id>` inspect a Story and its relation context
+- `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
+- `wood-project story set-status <id> <status>` preview a Story status update
+- `wood-project story set-status <id> <status> --apply` apply the approved status update
+- `wood-project story create-branch <id> --title <title>` preview the branch operation
+- `wood-project story create-branch <id> --title <title> --apply` apply the branch operation
+
+Options:
+
+- `--config-path <path>` override the user-global `wood-config` file for OpenProject commands
+- `--profile <name>` read OpenProject settings from a specific profile
+- `--json` emit deterministic JSON for agent workflows
+- `--status <name>` choose the candidate status for `next`, default `New`
+- `--type <name>` choose the work package type for `next`, default `Story`
+- `--page-size <count>` control OpenProject collection reads for `next`, default `1000`
+- `--allow-dirty` allow branch creation or checkout with a dirty worktree after explicit approval
+
+Story workflow behavior:
+
+- `wood-project story next` is read-only and performs only OpenProject `GET` requests.
+- `wood-project story set-status` is preview-by-default; mutation requires `--apply`.
+- `wood-project story create-branch` is preview-by-default; git mutation requires `--apply`.
+- `wood-project story create-branch` refuses dirty worktrees unless `--allow-dirty` is set.
+- Story branches use `feature/op-<openproject-id>-<slug>`.
+- JSON output uses the shared command envelope and places Story details, branch names, previews,
+  and mutation results under `data`.
+
+Examples:
+
+```bash
+wood-project story next 208 --json
+wood-project story set-status 301 "In progress" --json
+wood-project story set-status 301 "In progress" --apply --json
+wood-project story create-branch 301 --title "Productize Story Loop commands" --json
+wood-project story create-branch 301 --title "Productize Story Loop commands" --apply --json
+```
+
+### Story Loop Approval Gates
+
+The Story Loop keeps read-only discovery and dry-run previews automatic, including repository
+inspection, next-story lookup, status-change previews, and branch previews. After discovery, one
+explicit start-work approval may cover the normal implementation batch for the current Story:
+setting the OpenProject Story to In Progress, preparing the Story branch, editing scoped local
+files, and running relevant local checks.
+
+Separate approval is still required when the working tree already has unrelated changes and for
+finalization or external side effects such as commit, push, merge, deploy, Story closure, backlog
+sync, Google Drive updates, archival, or notifications.
 
 Resource manifest format:
 
@@ -336,7 +455,7 @@ Template pack resources (`kind: "template"`) must include a declarative, version
 1. `--source-dir` explicit source when provided
 2. exact project lock entries in `project.json.template_packs`
 3. installed user packs under the configured Wood home
-4. built-in packs shipped with `wood-project`
+4. built-in packs shipped with `wood-template`
 
 Project lock entries store resource identity and digest only; they must not store absolute
 `~/.wood/` paths.
@@ -387,7 +506,8 @@ Project lock entries store resource identity and digest only; they must not stor
 files. It reports the exact template source, version, digest, inferred variables, planned render
 operations, overwrite decisions, and output conflicts.
 
-`wood-template generate <name>` renders the base template into the current directory. It infers
+`wood-template generate <name>` previews generation and reports that approval is required.
+`wood-template generate <name> --apply` renders the base template into the current directory. It infers
 `project-name`, `package-name`, and `package-module` from the current folder name, fails before
 writing if a planned output would be overwritten unexpectedly, and works with built-in templates
 even before `project.json` exists. Application stages and verifies the complete plan before
@@ -428,6 +548,7 @@ wood-project resource inspect script demo-helper --version 1.0.0 --json
 wood-project resource path script demo-helper --version 1.0.0 --relative-path run.py --json
 wood-template plan python-cli --json
 wood-template generate python-cli
+wood-template generate python-cli --apply
 wood-template list --json
 wood-template show python-cli --json
 wood-project user --json
@@ -613,3 +734,6 @@ Run lint and format checks:
 uv run --active ruff check .
 uv run --active ruff format --check .
 ```
+
+The `CI` GitHub Actions workflow runs the same lint, formatting, test, and architecture checks on
+pushes and pull requests.

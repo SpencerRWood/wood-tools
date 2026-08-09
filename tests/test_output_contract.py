@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from wood_config.output import blocked_output, error_output, success_output, warning_output
+from resources.cli.output import blocked_output, error_output, success_output, warning_output
 
 
 def test_success_output_contract_is_stable() -> None:

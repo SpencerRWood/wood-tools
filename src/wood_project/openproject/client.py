@@ -2,102 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 
-from wood_config.core import ConfigError, build_paths, load_config
-from wood_secrets.core import SecretResolver
-from wood_secrets.providers import SecretProviderError
-
-
-class OpenProjectError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-@dataclass(frozen=True)
-class OpenProjectSettings:
-    base_url: str
-    project_id: str
-    token: str = field(repr=False)
-    token_provider: str
-    user_agent: str
-
-
-class Transport(Protocol):
-    def __call__(
-        self,
-        req: request.Request,
-        *,
-        timeout: int,
-    ) -> Any: ...
-
-
-def _active_profile(document: dict[str, Any], profile: str | None) -> tuple[str, dict[str, Any]]:
-    selected = profile or str(document["active_profile"])
-    profiles = document.get("profiles", {})
-    values = profiles.get(selected)
-    if not isinstance(values, dict):
-        raise OpenProjectError(
-            "OPENPROJECT_CONFIG_UNAVAILABLE",
-            f"Config profile {selected!r} is not available.",
-        )
-    return selected, values
-
-
-def load_settings(
-    *,
-    config_path: Path | None = None,
-    profile: str | None = None,
-    resolver: SecretResolver | None = None,
-) -> OpenProjectSettings:
-    try:
-        document = load_config(build_paths(config_path))
-        _, values = _active_profile(document, profile)
-    except (ConfigError, OSError, KeyError, TypeError, ValueError) as exc:
-        raise OpenProjectError("OPENPROJECT_CONFIG_UNAVAILABLE", str(exc)) from exc
-
-    integrations = values.get("integrations")
-    openproject = integrations.get("openproject") if isinstance(integrations, dict) else None
-    openproject = openproject if isinstance(openproject, dict) else {}
-
-    base_url = openproject.get("url")
-    project_id = openproject.get("project_id")
-    token_ref = openproject.get("token_ref")
-    user_agent = openproject.get("user_agent") or "wood-tools/0.1"
-    missing = [
-        field
-        for field, value in (
-            ("integrations.openproject.url", base_url),
-            ("integrations.openproject.project_id", project_id),
-            ("integrations.openproject.token_ref", token_ref),
-        )
-        if not isinstance(value, str) or not value.strip()
-    ]
-    if missing:
-        raise OpenProjectError(
-            "OPENPROJECT_CONFIG_UNAVAILABLE",
-            "Missing required OpenProject configuration: " + ", ".join(missing) + ".",
-        )
-
-    secret_resolver = resolver or SecretResolver()
-    try:
-        token = secret_resolver.resolve(str(token_ref).strip())
-    except SecretProviderError as exc:
-        raise OpenProjectError("OPENPROJECT_ACCESS_UNAVAILABLE", str(exc)) from exc
-
-    return OpenProjectSettings(
-        base_url=base_url.strip(),
-        project_id=project_id.strip(),
-        token=token.value,
-        token_provider=token.provider,
-        user_agent=str(user_agent).strip() or "wood-tools/0.1",
-    )
+from .models import OpenProjectError, OpenProjectSettings, Transport
 
 
 def embedded_elements(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -203,21 +112,26 @@ class OpenProjectClient:
         self._transport = transport or request.urlopen
         self._timeout = timeout
 
-    def get_json(
+    def request_json(
         self,
+        method: str,
         path: str,
         *,
         query: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = f"{self.settings.base_url.rstrip('/')}{path}"
         if query:
             url = f"{url}?{parse.urlencode(query)}"
 
         credentials = base64.b64encode(f"apikey:{self.settings.token}".encode()).decode("ascii")
-        req = request.Request(url, method="GET")
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Basic {credentials}")
         req.add_header("Accept", "application/hal+json")
         req.add_header("User-Agent", self.settings.user_agent)
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
 
         try:
             with self._transport(req, timeout=self._timeout) as response:
@@ -246,6 +160,14 @@ class OpenProjectClient:
                 "OPENPROJECT_LOOKUP_FAILED",
                 f"OpenProject returned invalid JSON for {path}: {exc}",
             ) from exc
+
+    def get_json(
+        self,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self.request_json("GET", path, query=query)
 
     def me(self) -> dict[str, Any]:
         return summarize_user(self.get_json("/api/v3/users/me"))

@@ -7,6 +7,8 @@ from urllib import parse
 import pytest
 
 from wood_project import cli as project_cli
+from wood_project.commands import openproject as openproject_commands
+from wood_project.commands import story as story_commands
 from wood_project.openproject import (
     OpenProjectClient,
     OpenProjectError,
@@ -14,7 +16,7 @@ from wood_project.openproject import (
     load_settings,
 )
 from wood_secrets.core import SecretResolver
-from wood_secrets.providers import SecretProviderError
+from wood_secrets.core.providers import SecretProviderError
 
 
 class FakeResponse:
@@ -157,6 +159,44 @@ def test_client_uses_read_only_get_requests_and_summarizes_work_package() -> Non
     assert "super-secret-token" not in json.dumps(payload)
 
 
+def test_client_request_json_supports_mutations() -> None:
+    seen: dict[str, Any] = {}
+
+    def transport(req: Any, *, timeout: int) -> FakeResponse:
+        seen.update(
+            method=req.get_method(),
+            body=json.loads(req.data.decode("utf-8")),
+            content_type=req.headers["Content-type"],
+            timeout=timeout,
+        )
+        return FakeResponse({"id": 301, "lockVersion": 5})
+
+    client = OpenProjectClient(
+        OpenProjectSettings(
+            base_url="https://openproject.example.test",
+            project_id="wood",
+            token="super-secret-token",
+            token_provider="env",
+            user_agent="wood-tools-test/1",
+        ),
+        transport=transport,
+    )
+
+    payload = client.request_json(
+        "PATCH",
+        "/api/v3/work_packages/301",
+        body={"lockVersion": 4},
+    )
+
+    assert seen == {
+        "method": "PATCH",
+        "body": {"lockVersion": 4},
+        "content_type": "application/json",
+        "timeout": 30,
+    }
+    assert payload == {"id": 301, "lockVersion": 5}
+
+
 def test_client_story_context_fetches_relation_fixture() -> None:
     seen_paths: list[str] = []
 
@@ -241,7 +281,7 @@ def test_wood_project_openproject_json_uses_standard_envelope_and_no_secret_outp
             }
 
     monkeypatch.setattr(
-        project_cli,
+        story_commands,
         "load_settings",
         lambda **kwargs: OpenProjectSettings(
             base_url="https://openproject.example.test",
@@ -251,13 +291,13 @@ def test_wood_project_openproject_json_uses_standard_envelope_and_no_secret_outp
             user_agent="wood-tools-test/1",
         ),
     )
-    monkeypatch.setattr(project_cli, "OpenProjectClient", FakeClient)
+    monkeypatch.setattr(story_commands, "OpenProjectClient", FakeClient)
 
-    code = project_cli.main(["story", "292", "--json"])
+    code = project_cli.main(["story", "show", "292", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "story"
+    assert payload["command"] == "story-show"
     assert payload["status"] == "success"
     assert payload["mutation"] == "read-only"
     assert payload["data"]["work_package"]["id"] == 292
@@ -271,7 +311,7 @@ def test_wood_project_openproject_provider_failure_returns_error_envelope(
     def fail_settings(**kwargs: object) -> object:
         raise OpenProjectError("OPENPROJECT_ACCESS_UNAVAILABLE", "provider locked")
 
-    monkeypatch.setattr(project_cli, "load_settings", fail_settings)
+    monkeypatch.setattr(openproject_commands, "load_settings", fail_settings)
 
     code = project_cli.main(["user", "--json"])
 
