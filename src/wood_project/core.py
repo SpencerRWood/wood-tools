@@ -14,7 +14,7 @@ from uuid import uuid4
 
 PROJECT_SCHEMA_VERSION = 1
 RESOURCE_SCHEMA_VERSION = 1
-WOOD_TOOLS_VERSION = "0.1.1"
+WOOD_TOOLS_VERSION = "0.2.0"
 PROJECT_FILE_NAME = "project.json"
 RESOURCE_MANIFEST_FILE_NAME = "wood-resource.json"
 RESOURCE_INSTALL_METADATA_FILE_NAME = ".wood-resource-install.json"
