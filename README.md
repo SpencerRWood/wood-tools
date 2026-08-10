@@ -333,6 +333,8 @@ Commands:
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
 - `wood-project story show <id>` inspect one work package plus description and relation context
 - `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
+- `wood-project backlog export <initiative-id>` export a read-only Story Backlog snapshot
+- `wood-project backlog upload <workbook.xlsx> --initiative-id <id>` build a deterministic upload plan without applying it
 - `wood-project release bump <patch|minor|major|X.Y.Z>` preview a static `pyproject.toml` version bump
 - `wood-project release bump <patch|minor|major|X.Y.Z> --apply` apply an approved version bump
 - `wood-project release tag` preview creating local tag `v<project.version>`
@@ -410,6 +412,44 @@ wood-project story set-status 301 "In progress" --json
 wood-project story set-status 301 "In progress" --apply --json
 wood-project story create-branch 301 --title "Productize Story Loop commands" --json
 wood-project story create-branch 301 --title "Productize Story Loop commands" --apply --json
+```
+
+#### `wood-project backlog`
+
+Story Backlog workflow commands for exporting OpenProject snapshots and previewing workbook upload
+plans.
+
+Commands:
+
+- `wood-project backlog export <initiative-id>` export `story_backlog.json` and `story_backlog.xlsx`
+- `wood-project backlog upload <workbook.xlsx> --initiative-id <id>` build the deterministic OpenProject upload plan without applying it
+
+Options:
+
+- `--env-file <path>` read resolved OpenProject settings from a specific file, default `.env.resolved`
+- `--output-dir <path>` write export artifacts to a specific directory, default `/tmp/wood-tools/story-backlog`
+- `--story-type <name>` choose the exported story type, default `Story`
+- `--epic-type <name>` choose the hierarchy epic type, default `Epic`
+- `--closed-status <name>` provide a closed status name for export; repeatable
+- `--story-id-field <key>` read an optional OpenProject field into `Story ID`
+- `--requirement-ids-field <key>` read an optional OpenProject field into `Requirement IDs`
+- `--page-size <count>` control OpenProject collection reads for export, default `500`
+- `--sheet-name <name>` choose the workbook tab for upload planning, default `Story Backlog`
+- `--initiative-id <id>` validate and provide the root work-package ID for upload planning
+- `--dry-run` explicitly request the default non-mutating upload plan
+- `--json` emit deterministic JSON for agent workflows
+
+Story Backlog behavior:
+
+- `backlog export` is read-only against OpenProject and writes local snapshot artifacts.
+- `backlog upload` defaults to dry-run planning and performs no OpenProject mutations.
+- Applying upload plans remains an explicit external-system operation outside this first-class planning command.
+
+Examples:
+
+```bash
+wood-project backlog export 208 --output-dir /tmp/wood-tools/story-backlog/current --json
+wood-project backlog upload /tmp/wood-tools/story-backlog/current/story_backlog.xlsx --initiative-id 208 --dry-run --json
 ```
 
 #### `wood-project release`

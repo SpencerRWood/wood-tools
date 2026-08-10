@@ -15,6 +15,7 @@ from .core.models import ProjectError
 from .openproject.models import OpenProjectError
 from .release import ReleaseWorkflowError
 from .story import StoryWorkflowError
+from .story_backlog import StoryBacklogWorkflowError
 
 
 def _command_name(args: argparse.Namespace) -> str:
@@ -26,6 +27,10 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"story-{getattr(args, 'story_command', 'unknown')}"
     if args.command == "release":
         return f"release-{getattr(args, 'release_command', 'unknown')}"
+    if args.command == "story-backlog":
+        return f"story-backlog-{getattr(args, 'story_backlog_command', 'unknown')}"
+    if args.command == "backlog":
+        return f"backlog-{getattr(args, 'story_backlog_command', 'unknown')}"
     return args.command
 
 
@@ -160,6 +165,27 @@ def _summarize_json_payload(
                 f"Re-run wood-project release {command.removeprefix('release-')} with --apply."
             ],
         )
+    if command == "story-backlog-export":
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary="Story Backlog snapshot exported.",
+            data=payload,
+        )
+    if command == "backlog-export":
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary="Story Backlog snapshot exported.",
+            data=payload,
+        )
+    if command in {"story-backlog-upload-plan", "backlog-upload"}:
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary="Story Backlog upload plan built.",
+            data=payload,
+        )
     summary = (
         f"Loaded project metadata from {payload['path']}."
         if command == "show"
@@ -211,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         OpenProjectError,
         StoryWorkflowError,
         ReleaseWorkflowError,
+        StoryBacklogWorkflowError,
     ) as exc:
         command = _command_name(args)
         message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
@@ -235,7 +262,10 @@ def main(argv: list[str] | None = None) -> int:
                 summary=message,
                 errors=(
                     [{"code": exc.code, "message": message}]
-                    if isinstance(exc, OpenProjectError | StoryWorkflowError)
+                    if isinstance(
+                        exc,
+                        OpenProjectError | StoryWorkflowError | StoryBacklogWorkflowError,
+                    )
                     else [{"message": message}]
                 ),
                 next_actions=[
