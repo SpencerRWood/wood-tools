@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,21 @@ def test_template_behavior_is_owned_by_wood_templates() -> None:
     assert validate_template_pack_contract.__module__ == "wood_templates.core.manifest"
     assert plan_template_pack.__module__ == "wood_templates.core.renderer"
     assert render_template_pack.__module__ == "wood_templates.core.renderer"
+
+
+def test_template_package_data_explicitly_includes_hidden_templates() -> None:
+    pyproject = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    patterns = pyproject["tool"]["setuptools"]["package-data"]["wood_templates"]
+    hidden_templates = sorted(
+        path.name
+        for path in (Path(__file__).parents[1] / "src/wood_templates/builtin_template_packs").rglob(
+            ".*"
+        )
+        if path.is_file()
+    )
+
+    assert hidden_templates == [".pre-commit-config.yaml.tmpl"] * 3
+    assert "builtin_template_packs/**/.pre-commit-config.yaml.tmpl" in patterns
 
 
 def test_template_generate_requires_apply(
@@ -871,11 +887,11 @@ def test_template_pack_installed_list_and_project_lock_precedence(
     assert main(["resource", "install", str(source_v2), "--apply", "--json"]) == 0
     capsys.readouterr()
 
-    assert template_main(["list", "--json"]) == 0
+    assert template_main(["list", "service-app", "--info", "--json"]) == 0
     installed_payload = json.loads(capsys.readouterr().out)
     assert installed_payload["data"]["precedence"] == ["locked", "installed", "built-in"]
-    assert installed_payload["data"]["template_packs"][0]["source"] == "installed"
-    assert installed_payload["data"]["template_packs"][0]["version"] == "2.0.0"
+    assert installed_payload["data"]["template_pack"]["source"] == "installed"
+    assert installed_payload["data"]["template_pack"]["version"] == "2.0.0"
 
     project_file = project_root / "project.json"
     document = json.loads(project_file.read_text(encoding="utf-8"))
@@ -921,6 +937,13 @@ def test_template_pack_errors_for_missing_and_invalid_contract(
     assert missing_payload["command"] == "show"
     assert missing_payload["status"] == "error"
     assert missing_payload["summary"] == "Template pack not found: missing-pack"
+
+    code = template_main(["list", "missing-pack", "--info", "--json"])
+    missing_info_payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert missing_info_payload["command"] == "list"
+    assert missing_info_payload["status"] == "error"
+    assert missing_info_payload["summary"] == "Template pack not found: missing-pack"
 
     code = template_main(["show", "bad-template", "--source-dir", str(source_dir), "--json"])
     invalid_payload = json.loads(capsys.readouterr().out)
@@ -1049,15 +1072,27 @@ def test_builtin_first_party_template_pack_names_features_and_content(
     assert template_main(["list", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
-    template_packs = payload["data"]["template_packs"]
-    assert [template["name"] for template in template_packs] == [
+    template_names = [
         "python-api-service",
         "python-cli",
         "python-library",
         "python-web-app",
         "software-planning",
     ]
-    for template_pack in template_packs:
+    assert payload["data"]["templates"] == template_names
+
+    assert template_main(["list"]) == 0
+    output = capsys.readouterr().out
+    assert output.splitlines() == template_names
+    assert "digest" not in output
+    assert "template_packs" not in output
+
+    for template_name in template_names:
+        assert template_main(["list", template_name, "--info", "--json"]) == 0
+        template_payload = json.loads(capsys.readouterr().out)
+        assert template_payload["command"] == "list"
+        template_pack = template_payload["data"]["template_pack"]
+        assert template_pack["name"] == template_name
         assert template_pack["source"] == "built-in"
         assert template_pack["version"] == "1.0.0"
         assert template_pack["digest"].startswith("sha256:")

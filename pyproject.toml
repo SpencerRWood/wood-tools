@@ -25,7 +25,10 @@ where = ["src"]
 include = ["resources", "resources.*", "wood_*"]
 
 [tool.setuptools.package-data]
-wood_templates = ["builtin_template_packs/**/*"]
+wood_templates = [
+    "builtin_template_packs/**/*",
+    "builtin_template_packs/**/.pre-commit-config.yaml.tmpl",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
