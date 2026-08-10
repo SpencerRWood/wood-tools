@@ -13,6 +13,7 @@ from resources.packages import ResourceError
 from .commands import COMMAND_MODULES
 from .core.models import ProjectError
 from .openproject.models import OpenProjectError
+from .release import ReleaseWorkflowError
 from .story import StoryWorkflowError
 
 
@@ -23,6 +24,8 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
     if args.command == "story":
         return f"story-{getattr(args, 'story_command', 'unknown')}"
+    if args.command == "release":
+        return f"release-{getattr(args, 'release_command', 'unknown')}"
     return args.command
 
 
@@ -141,6 +144,22 @@ def _summarize_json_payload(
                 f"Re-run wood-project story {command.removeprefix('story-')} with --apply."
             ],
         )
+    if command in {"release-bump", "release-tag", "release-github-create"}:
+        if apply:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary=f"{command.removeprefix('release-')} completed.",
+                data=payload,
+            )
+        return blocked_output(
+            command=command,
+            summary=f"{command.removeprefix('release-')} requires approval.",
+            data=payload,
+            next_actions=[
+                f"Re-run wood-project release {command.removeprefix('release-')} with --apply."
+            ],
+        )
     summary = (
         f"Loaded project metadata from {payload['path']}."
         if command == "show"
@@ -186,7 +205,13 @@ def main(argv: list[str] | None = None) -> int:
                 return _emit(output, json_output=args.json, command_args=command_args)
         parser.error("Unknown command")
         return 2
-    except (ProjectError, ResourceError, OpenProjectError, StoryWorkflowError) as exc:
+    except (
+        ProjectError,
+        ResourceError,
+        OpenProjectError,
+        StoryWorkflowError,
+        ReleaseWorkflowError,
+    ) as exc:
         command = _command_name(args)
         message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
         if getattr(args, "json", False):
@@ -201,6 +226,9 @@ def main(argv: list[str] | None = None) -> int:
                         "resource-install",
                         "story-set-status",
                         "story-create-branch",
+                        "release-bump",
+                        "release-tag",
+                        "release-github-create",
                     }
                     else "read-only"
                 ),

@@ -333,6 +333,12 @@ Commands:
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
 - `wood-project story show <id>` inspect one work package plus description and relation context
 - `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
+- `wood-project release bump <patch|minor|major|X.Y.Z>` preview a static `pyproject.toml` version bump
+- `wood-project release bump <patch|minor|major|X.Y.Z> --apply` apply an approved version bump
+- `wood-project release tag` preview creating local tag `v<project.version>`
+- `wood-project release tag --apply` create the approved local release tag
+- `wood-project release github-create` preview creating a GitHub release from an existing tag
+- `wood-project release github-create --apply` create the approved GitHub release
 - `wood-project show` read and print the current `project.json`
 - `wood-project validate` verify the current `project.json` schema, required directories, path relationships, linked repository paths, and mounted path accessibility
 
@@ -404,6 +410,46 @@ wood-project story set-status 301 "In progress" --json
 wood-project story set-status 301 "In progress" --apply --json
 wood-project story create-branch 301 --title "Productize Story Loop commands" --json
 wood-project story create-branch 301 --title "Productize Story Loop commands" --apply --json
+```
+
+#### `wood-project release`
+
+Release workflow commands for deterministic version, tag, and GitHub release preparation.
+
+Commands:
+
+- `wood-project release bump <patch|minor|major|X.Y.Z>` preview a `[project].version` update in `pyproject.toml`
+- `wood-project release bump <patch|minor|major|X.Y.Z> --apply` apply the approved version update
+- `wood-project release tag` preview creating local git tag `v<project.version>`
+- `wood-project release tag --apply` create the approved local git tag
+- `wood-project release github-create` preview a GitHub release for `v<project.version>`
+- `wood-project release github-create --apply` create the approved GitHub release
+
+Options:
+
+- `--pyproject <path>` read version metadata from a specific `pyproject.toml`, default `pyproject.toml`
+- `--version <X.Y.Z>` use an explicit version for `tag` or `github-create`
+- `--allow-dirty` allow `release tag --apply` with a dirty worktree after explicit approval
+- `--generate-notes` pass GitHub's generated release notes flag to `github-create`
+- `--notes-from-history` build release notes from commit history before `github-create`
+- `--json` emit deterministic JSON for agent workflows
+
+Release workflow behavior:
+
+- `wood-project release bump`, `release tag`, and `release github-create` are preview-by-default.
+- Mutation requires `--apply`; use separate approval for version edits, tag creation, and GitHub release creation.
+- `release tag` refuses dirty worktrees unless `--allow-dirty` is set.
+- `release github-create --apply` requires the local tag to exist and the GitHub CLI to be authenticated.
+
+Examples:
+
+```bash
+wood-project release bump patch --json
+wood-project release bump patch --apply --json
+wood-project release tag --json
+wood-project release tag --apply --json
+wood-project release github-create --notes-from-history --json
+wood-project release github-create --notes-from-history --apply --json
 ```
 
 ### Story Loop Approval Gates
