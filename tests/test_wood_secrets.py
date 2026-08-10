@@ -327,6 +327,105 @@ def test_resolve_invalid_explicit_field_reference_returns_error(
     assert "at least two path segments" in payload["summary"]
 
 
+def test_resolve_env_json_previews_without_writing_or_leaking_secret(
+    install_stub_resolver,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    output_file = tmp_path / ".env.resolved"
+    env_file.write_text(
+        "\n".join(
+            [
+                "# local development",
+                "OPENPROJECT_TOKEN_REF=vaultwarden://wood/openproject/prod/api-token",
+                "PLAIN_VALUE=kept",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    install_stub_resolver()
+
+    code = main(
+        [
+            "resolve-env",
+            "--input",
+            str(env_file),
+            "--output",
+            str(output_file),
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    assert not output_file.exists()
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    assert payload["command"] == "resolve-env"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["resolved_count"] == 1
+    assert payload["data"]["resolved"][0]["output_key"] == "OPENPROJECT_TOKEN"
+    assert payload["data"]["resolved"][0]["redacted_value"] == "[REDACTED]"
+    assert "super-secret-token" not in rendered
+
+
+def test_resolve_env_apply_writes_file_without_printing_secret(
+    install_stub_resolver,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    output_file = tmp_path / ".env.resolved"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENPROJECT_TOKEN_REF=vaultwarden://wood/openproject/prod/api-token",
+                "NTFY_TOKEN_REF=env://NTFY_TOKEN",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    install_stub_resolver(environ={"NTFY_TOKEN": "ntfy-secret"})
+
+    code = main(
+        [
+            "resolve-env",
+            "--input",
+            str(env_file),
+            "--output",
+            str(output_file),
+            "--apply",
+        ]
+    )
+
+    assert code == 0
+    assert output_file.read_text(encoding="utf-8") == (
+        "OPENPROJECT_TOKEN=super-secret-token\nNTFY_TOKEN=ntfy-secret\n"
+    )
+    out = capsys.readouterr().out
+    assert "resolved OPENPROJECT_TOKEN" in out
+    assert "resolved NTFY_TOKEN" in out
+    assert "super-secret-token" not in out
+    assert "ntfy-secret" not in out
+
+
+def test_resolve_env_force_requires_apply(
+    install_stub_resolver,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("TOKEN_REF=vaultwarden://wood/prod/api-token\n", encoding="utf-8")
+    install_stub_resolver()
+
+    code = main(["resolve-env", "--input", str(env_file), "--force", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert "--force can only be used with --apply" in payload["summary"]
+
+
 def test_doctor_reports_locked_provider(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
