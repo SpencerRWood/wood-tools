@@ -41,10 +41,21 @@ def _emit(
 
 def _summarize_json_payload(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "list":
+        if "template_pack" in payload:
+            template_pack = payload["template_pack"]
+            return success_output(
+                command=command,
+                mutation="read-only",
+                summary=(
+                    f"Resolved template pack {template_pack['name']} {template_pack['version']} "
+                    f"from {template_pack['source']}."
+                ),
+                data=payload,
+            )
         return success_output(
             command=command,
             mutation="read-only",
-            summary=f"Resolved {len(payload['template_packs'])} template pack(s).",
+            summary=f"Resolved {len(payload['templates'])} template pack(s).",
             data=payload,
         )
 
@@ -88,6 +99,26 @@ def _summarize_json_payload(command: str, payload: dict[str, Any]) -> dict[str, 
     )
 
 
+def _list_names_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "precedence": payload["precedence"],
+        "templates": [template_pack["name"] for template_pack in payload["template_packs"]],
+    }
+
+
+def _emit_template_names(payload: dict[str, Any], *, command_args: list[str] | None = None) -> int:
+    output = success_output(
+        command="list",
+        mutation="read-only",
+        summary=f"Resolved {len(payload['templates'])} template pack(s).",
+        data=payload,
+    )
+    write_audit_event(output, cli_name="wood-template", command_args=command_args)
+    for template_name in payload["templates"]:
+        print(template_name)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wood-template",
@@ -110,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "name",
         nargs="?",
-        help="Template pack name for 'generate', 'plan', or 'show'",
+        help="Template pack name for 'generate', 'list --info', 'plan', or 'show'",
     )
     parser.add_argument(
         "--source-dir",
@@ -119,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     parser.add_argument("--apply", action="store_true", help="Apply template generation")
+    parser.add_argument("--info", action="store_true", help="Show detailed template list info")
 
     return parser
 
@@ -131,14 +163,33 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command != "generate" and args.apply:
             parser.error("--apply is only valid with generate")
+        if args.command != "list" and args.info:
+            parser.error("--info is only valid with list")
         if args.command == "list":
+            if args.info:
+                if args.name is None:
+                    parser.error("list --info requires a template name")
+                payload = show_template_pack(
+                    name=args.name,
+                    source_dir=args.source_dir,
+                    project_file=args.project_file,
+                    project_root=args.project_root,
+                )
+                return _emit(
+                    _summarize_json_payload("list", payload) if args.json else payload,
+                    json_output=args.json,
+                    command_args=command_args,
+                )
             if args.name is not None:
-                parser.error(f"Unexpected argument for list: {args.name}")
+                parser.error(f"Unexpected argument for list: {args.name}. Use --info for details.")
             payload = list_template_packs(
                 source_dir=args.source_dir,
                 project_file=args.project_file,
                 project_root=args.project_root,
             )
+            payload = _list_names_payload(payload)
+            if not args.json:
+                return _emit_template_names(payload, command_args=command_args)
             return _emit(
                 _summarize_json_payload("list", payload) if args.json else payload,
                 json_output=args.json,

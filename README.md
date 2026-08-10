@@ -320,7 +320,8 @@ Commands:
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
 - `wood-template generate <name>` preview rendering a template into the current project directory
 - `wood-template generate <name> --apply` apply the approved template generation
-- `wood-template list` list resolved template packs
+- `wood-template list` list resolved template pack names
+- `wood-template list <name> --info` show detailed metadata for one resolved template pack
 - `wood-template show <name>` show a resolved template pack contract
 - `wood-project user` inspect the authenticated OpenProject user
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
@@ -519,9 +520,11 @@ version and digest, Wood Tools version, declared inputs, applicable reference an
 versions, and generated-file digests. The lock uses portable resource identities rather than
 absolute Wood home paths, and template application never creates a project-local `.wood/`.
 
-`wood-template list --json` and `wood-template show <name> --json` are inspection commands. They
-emit the selected source, exact version, digest, variables, planned outputs, operations, and
-validation rules without exposing installed Wood home paths.
+`wood-template list` prints only the resolved template pack names. Use
+`wood-template list <name> --info` or `wood-template show <name>` to inspect one template in
+detail, including source, exact version, digest, variables, planned outputs, operations, and
+validation rules without exposing installed Wood home paths. JSON output is available for both
+the concise list and detailed inspection modes.
 
 Built-in first-party templates:
 
@@ -550,7 +553,7 @@ wood-template plan python-cli --json
 wood-template generate python-cli
 wood-template generate python-cli --apply
 wood-template list --json
-wood-template show python-cli --json
+wood-template list python-cli --info --json
 wood-project user --json
 wood-project story 292 --json
 wood-project show --json
