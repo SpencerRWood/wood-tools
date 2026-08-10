@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from resources.cli.audit import write_audit_event
 from resources.cli.output import error_output, success_output, warning_output
 
 from .core import SecretResolver
+from .core.env_files import resolve_env_file, write_resolved_env_file
 from .core.providers import SecretProviderError
 
 
@@ -131,6 +133,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit only redacted secret output.",
     )
     resolve_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    resolve_env_parser = subparsers.add_parser(
+        "resolve-env",
+        help="Resolve *_REF values from an env file into a local resolved env file",
+    )
+    resolve_env_parser.add_argument("--input", default=".env", help="Path to input env file")
+    resolve_env_parser.add_argument(
+        "--output",
+        default=".env.resolved",
+        help="Path to write resolved env values when --apply is used",
+    )
+    resolve_env_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the resolved env file. Without --apply, only preview the resolution.",
+    )
+    resolve_env_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output file when used with --apply",
+    )
+    resolve_env_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -265,6 +289,47 @@ def main(argv: list[str] | None = None) -> int:
                 return _emit(envelope, json_output=True, command_args=command_args)
             return _emit(payload, json_output=False, command_args=command_args)
 
+        if args.command == "resolve-env":
+            if args.force and not args.apply:
+                raise SecretProviderError("--force can only be used with --apply.")
+            result = resolve_env_file(
+                resolver=resolver,
+                input_path=Path(args.input),
+                output_path=Path(args.output),
+            )
+            if args.apply:
+                write_resolved_env_file(result, force=args.force)
+                payload = result.preview(apply=True, wrote=True)
+                if args.json:
+                    envelope = success_output(
+                        command="resolve-env",
+                        mutation="mutating",
+                        summary="Resolved env references and wrote the output file.",
+                        data=payload,
+                    )
+                    return _emit(envelope, json_output=True, command_args=command_args)
+                for item in result.resolved:
+                    print(f"resolved {item.output_key} from {item.reference}")
+                print(f"wrote {result.output_path}")
+                return 0
+
+            payload = result.preview(apply=False)
+            if args.json:
+                envelope = success_output(
+                    command="resolve-env",
+                    mutation="read-only",
+                    summary="Resolved env references preview completed without writing files.",
+                    data=payload,
+                    next_actions=[
+                        "Re-run wood-secrets resolve-env with --apply to write the output file."
+                    ],
+                )
+                return _emit(envelope, json_output=True, command_args=command_args)
+            for item in result.resolved:
+                print(f"would resolve {item.output_key} from {item.reference}")
+            print("preview complete; no files were written")
+            return 0
+
         if args.command == "exec":
             raw_args = args.command_args
             separator_index = raw_args.index("--") if "--" in raw_args else None
@@ -305,7 +370,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Unknown command")
         return 2
     except SecretProviderError as exc:
-        mutation = "mutating" if args.command in {"unlock", "lock"} else "read-only"
+        mutation = (
+            "mutating"
+            if args.command in {"unlock", "lock"} or (args.command == "resolve-env" and args.apply)
+            else "read-only"
+        )
         if getattr(args, "json", False):
             payload = error_output(
                 command=args.command,

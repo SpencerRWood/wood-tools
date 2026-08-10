@@ -208,6 +208,8 @@ Supported commands:
 - `wood-secrets exec --env <NAME> --ref <reference> -- <command> ...`
 - `wood-secrets exec NAME=<reference> [OTHER_NAME=<reference> ...] -- <command> ...`
 - `wood-secrets resolve --ref <reference> --redacted`
+- `wood-secrets resolve-env`
+- `wood-secrets resolve-env --apply`
 - `wood-secrets doctor`
 
 Supported reference syntax:
@@ -249,6 +251,8 @@ wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-tok
 wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' OTHER_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
 wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
 wood-secrets resolve --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' --redacted
+wood-secrets resolve-env --input .env --output .env.resolved --json
+wood-secrets resolve-env --input .env --output .env.resolved --apply --force
 wood-secrets doctor --json
 ```
 
@@ -266,6 +270,8 @@ Behavior notes:
 - `wood-secrets list --provider vaultwarden ...` lists only item names, field names, and whether a login password exists; it never prints secret values.
 - `wood-secrets exec --env NAME --ref ... -- command ...` resolves a secret locally, injects it only into the child process environment, and does not print the secret value itself.
 - `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
+- `wood-secrets resolve-env` resolves supported `*_REF` entries from an env file into non-`_REF` keys in a local resolved env file; it previews by default and writes only with `--apply`.
+- `wood-secrets resolve-env` reports resolved keys and references only; it never prints resolved secret values.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
 - `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
