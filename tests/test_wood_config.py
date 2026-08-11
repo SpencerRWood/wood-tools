@@ -64,7 +64,7 @@ def test_init_set_get_show_success_path(
     assert "project_root': './projects'" in out
     assert "alias_resolution" in out
     assert str(project_target) in out
-    assert "user_agent': 'wood-tools/0.2.0'" in out
+    assert "user_agent': 'wood-tools/0.3.0'" in out
     assert "'executable': 'bw'" in out
 
     assert (
@@ -225,7 +225,7 @@ def test_json_output_for_supported_commands(
         payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"][
             "user_agent"
         ]
-        == "wood-tools/0.2.0"
+        == "wood-tools/0.3.0"
     )
     assert (
         payload["data"]["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"][
@@ -289,7 +289,7 @@ def test_json_output_for_supported_commands(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "get"
     assert payload["data"]["key"] == "integrations.openproject.user_agent"
-    assert payload["data"]["value"] == "wood-tools/0.2.0"
+    assert payload["data"]["value"] == "wood-tools/0.3.0"
 
     assert (
         main(

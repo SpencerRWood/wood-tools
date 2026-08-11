@@ -8,6 +8,7 @@ import pytest
 
 from wood_project.cli import main as project_main
 from wood_project.commands import implementation as implementation_commands
+from wood_project.implementation import workflows as implementation_workflows
 
 
 @pytest.fixture(autouse=True)
@@ -150,6 +151,77 @@ def test_project_implementation_apply_is_mutating(
     assert payload["mutation"] == "mutating"
     assert payload["data"]["applied"] is True
     assert calls[0]["initiative_id"] is None
+
+
+def test_implementation_workflow_uses_export_library_function(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_export_snapshot(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["root_work_package_id"] == 208
+        return {
+            "ok": True,
+            "output_dir": str(tmp_path),
+            "json": str(tmp_path / "implementation_workbook.json"),
+            "xlsx": str(tmp_path / "implementation_workbook.xlsx"),
+        }
+
+    monkeypatch.setattr(
+        implementation_workflows.export_snapshot_module,
+        "export_snapshot",
+        fake_export_snapshot,
+    )
+
+    payload = implementation_workflows.export_workbook(
+        root_work_package_id=208,
+        env_file=tmp_path / ".env.resolved",
+        output_dir=tmp_path,
+        story_type="Story",
+        epic_type="Epic",
+        closed_statuses=[],
+        story_id_field="",
+        requirement_ids_field="",
+        page_size=500,
+    )
+
+    assert payload["read_only"] is True
+    assert payload["xlsx"] == str(tmp_path / "implementation_workbook.xlsx")
+
+
+def test_implementation_workflow_uses_planner_library_function(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_main(argv: list[str] | None = None) -> int:
+        raise AssertionError("workflow should not call planner.main")
+
+    def fake_plan_payload(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["apply"] is False
+        return {
+            "ok": True,
+            "applied": False,
+            "row_count": 1,
+            "phases": {"epics": [], "stories": [], "relations": []},
+            "plan": [],
+            "applied_openproject": {"epics": [], "stories": [], "relations": []},
+        }
+
+    monkeypatch.setattr(implementation_workflows.planner_module, "main", fail_main)
+    monkeypatch.setattr(
+        implementation_workflows.planner_module,
+        "implementation_plan_payload",
+        fake_plan_payload,
+    )
+
+    payload = implementation_workflows.plan_workbook(
+        workbook=tmp_path / "implementation_workbook.xlsx",
+        env_file=tmp_path / ".env.resolved",
+        sheet_name="Implementation",
+        initiative_id=None,
+    )
+
+    assert payload["read_only"] is True
+    assert payload["row_count"] == 1
 
 
 @pytest.mark.parametrize("command", ["backlog", "story-backlog"])

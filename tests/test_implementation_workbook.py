@@ -5,18 +5,53 @@ from typing import Any
 
 import pytest
 
-from wood_project.implementation import export as export_workbook
-from wood_project.implementation import planner as implementation_workbook
+from wood_project.implementation import apply as implementation_apply
+from wood_project.implementation import openproject as implementation_openproject
+from wood_project.implementation import planning as implementation_planning
+from wood_project.implementation import workbook as implementation_workbook
 
 
-def workbook_row(row_number: int, **values: str) -> implementation_workbook.WorkbookRow:
-    row_values = {column: "" for column in implementation_workbook.IMPLEMENTATION_WORKBOOK_COLUMNS}
+def workbook_row(row_number: int, **values: str) -> implementation_planning.WorkbookRow:
+    row_values = {column: "" for column in implementation_planning.IMPLEMENTATION_WORKBOOK_COLUMNS}
     row_values.update(values)
-    return implementation_workbook.WorkbookRow(row_number=row_number, values=row_values)
+    return implementation_planning.WorkbookRow(row_number=row_number, values=row_values)
 
 
 def named_element(name: str, href: str, element_id: int = 1) -> dict[str, Any]:
     return {"id": element_id, "name": name, "_links": {"self": {"href": href}}}
+
+
+class FakeOpenProjectClient:
+    def __init__(
+        self,
+        *,
+        get_json: Any | None = None,
+        request_json: Any | None = None,
+    ) -> None:
+        self._get_json = get_json
+        self._request_json = request_json
+
+    def get_json(
+        self,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if self._get_json is None:
+            raise AssertionError(path)
+        return self._get_json(path, query=query)
+
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self._request_json is None:
+            raise AssertionError((method, path))
+        return self._request_json(method, path, query=query, body=body)
 
 
 def test_build_implementation_plan_matches_story_without_openproject_id(
@@ -48,19 +83,16 @@ def test_build_implementation_plan_matches_story_without_openproject_id(
         },
     ]
 
-    def fake_get_json(base_url, token, path, *, query=None):
+    def fake_get_json(path, *, query=None):
         if path == "/api/v3/work_packages":
             return {"total": len(descendants), "_embedded": {"elements": descendants}}
         if path == "/api/v3/work_packages/11/relations":
             return {"total": 0, "_embedded": {"elements": []}}
         raise AssertionError(path)
 
-    monkeypatch.setattr(implementation_workbook.op, "api_get_json", fake_get_json)
-
-    plan = implementation_workbook.build_implementation_plan(
+    plan = implementation_planning.build_implementation_plan(
         rows=[row],
-        base_url="https://openproject.example.test",
-        token="token",
+        client=FakeOpenProjectClient(get_json=fake_get_json),
         statuses=[named_element("New", "/api/v3/statuses/1")],
         types=[
             named_element("Story", "/api/v3/types/1"),
@@ -99,11 +131,10 @@ def test_resolve_initiative_plan_creates_when_no_deterministic_match(
         },
     )
 
-    monkeypatch.setattr(implementation_workbook, "project_work_packages", lambda **kwargs: [])
+    monkeypatch.setattr(implementation_planning, "project_work_packages", lambda **kwargs: [])
 
-    initiative = implementation_workbook.resolve_initiative_plan(
-        base_url="https://openproject.example.test",
-        token="token",
+    initiative = implementation_planning.resolve_initiative_plan(
+        client=FakeOpenProjectClient(),
         project={"id": 7, "identifier": "project", "name": "Project"},
         statuses=[named_element("New", "/api/v3/statuses/1")],
         types=[named_element("Initiative", "/api/v3/types/9")],
@@ -132,7 +163,7 @@ def test_resolve_initiative_plan_blocks_conflicting_root_type(
         },
     )
     monkeypatch.setattr(
-        implementation_workbook,
+        implementation_planning,
         "project_work_packages",
         lambda **kwargs: [
             {
@@ -144,12 +175,11 @@ def test_resolve_initiative_plan_blocks_conflicting_root_type(
     )
 
     with pytest.raises(
-        implementation_workbook.op.ScriptError,
+        implementation_openproject.ScriptError,
         match="conflicting types",
     ):
-        implementation_workbook.resolve_initiative_plan(
-            base_url="https://openproject.example.test",
-            token="token",
+        implementation_planning.resolve_initiative_plan(
+            client=FakeOpenProjectClient(),
             project={"id": 7, "identifier": "project", "name": "Project"},
             statuses=[named_element("New", "/api/v3/statuses/1")],
             types=[named_element("Initiative", "/api/v3/types/9")],
@@ -163,13 +193,13 @@ def test_resolve_initiative_plan_blocks_conflicting_root_type(
 def test_apply_writeback_records_openproject_ids(tmp_path: Path) -> None:
     workbook = tmp_path / "implementation_workbook.xlsx"
     story_record = {
-        column: "" for column in implementation_workbook.IMPLEMENTATION_WORKBOOK_COLUMNS
+        column: "" for column in implementation_planning.IMPLEMENTATION_WORKBOOK_COLUMNS
     }
     story_record.update({"Story ID": "S1", "Subject": "Created story", "OpenProject ID": ""})
-    export_workbook.write_xlsx(workbook, [story_record], {"Story Count": 1})
+    implementation_workbook.write_xlsx(workbook, [story_record], {"Story Count": 1})
 
     rows = implementation_workbook.workbook_rows(workbook, "Implementation")
-    result = implementation_workbook.write_openproject_ids_to_workbook(
+    result = implementation_apply.write_openproject_ids_to_workbook(
         workbook,
         sheet_name="Implementation",
         rows=rows,
@@ -209,7 +239,7 @@ def test_build_implementation_plan_blocks_stale_openproject_id(
         },
     )
 
-    def fake_get_json(base_url, token, path, *, query=None):
+    def fake_get_json(path, *, query=None):
         if path == "/api/v3/work_packages":
             return {"total": 0, "_embedded": {"elements": []}}
         if path == "/api/v3/work_packages/99":
@@ -221,16 +251,13 @@ def test_build_implementation_plan_blocks_stale_openproject_id(
             }
         raise AssertionError(path)
 
-    monkeypatch.setattr(implementation_workbook.op, "api_get_json", fake_get_json)
-
     with pytest.raises(
-        implementation_workbook.op.ScriptError,
+        implementation_openproject.ScriptError,
         match="is not a Story beneath the resolved Root Work Package",
     ):
-        implementation_workbook.build_implementation_plan(
+        implementation_planning.build_implementation_plan(
             rows=[row],
-            base_url="https://openproject.example.test",
-            token="token",
+            client=FakeOpenProjectClient(get_json=fake_get_json),
             statuses=[named_element("New", "/api/v3/statuses/1")],
             types=[named_element("Story", "/api/v3/types/1")],
             versions=[],
@@ -266,8 +293,6 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
 
     def fake_request_json(
         method: str,
-        base_url: str,
-        token: str,
         path: str,
         *,
         query: dict[str, str] | None = None,
@@ -285,6 +310,8 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
             if subject == "Epic":
                 return work_package(22, subject, "Epic")
             return work_package(33, subject, "Story")
+        if method == "PATCH" and path == "/api/v3/work_packages/34":
+            return work_package(34, "Updated story", "Story", "In progress")
         if method == "POST" and path == "/api/v3/work_packages/33/relations":
             return {
                 "id": 44,
@@ -296,13 +323,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
             }
         raise AssertionError((method, path))
 
-    def fake_patch_json(base_url, token, path, body):
-        requested.append(("PATCH", path))
-        if path == "/api/v3/work_packages/34":
-            return work_package(34, "Updated story", "Story", "In progress")
-        raise AssertionError(path)
-
-    def fake_get_json(base_url, token, path, query=None):
+    def fake_get_json(path, *, query=None):
         requested.append(("GET", path))
         if path == "/api/v3/work_packages/208":
             return work_package(208, "Root", "Initiative")
@@ -325,13 +346,13 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
             }
         raise AssertionError(path)
 
-    monkeypatch.setattr(implementation_workbook.op, "api_request_json", fake_request_json)
-    monkeypatch.setattr(implementation_workbook.op, "api_patch_json", fake_patch_json)
-    monkeypatch.setattr(implementation_workbook.op, "api_get_json", fake_get_json)
+    client = FakeOpenProjectClient(
+        get_json=fake_get_json,
+        request_json=fake_request_json,
+    )
 
-    applied = implementation_workbook.apply_plan(
-        "https://openproject.example.test",
-        "token",
+    applied = implementation_apply.apply_plan(
+        client,
         "project",
         {
             "initiative": {
@@ -395,26 +416,22 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
 def test_apply_plan_stops_dependent_actions_after_story_failure(monkeypatch) -> None:
     requested: list[tuple[str, str]] = []
 
-    def fake_patch_json(base_url, token, path, body):
-        requested.append(("PATCH", path))
-        raise implementation_workbook.op.ScriptError(
-            "WORKBOOK_UPLOAD_FAILED",
-            "Story update failed.",
-        )
-
     def fake_request_json(
         method: str,
-        base_url: str,
-        token: str,
         path: str,
         *,
         query: dict[str, str] | None = None,
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         requested.append((method, path))
+        if method == "PATCH" and path == "/api/v3/work_packages/33":
+            raise implementation_openproject.ScriptError(
+                "WORKBOOK_UPLOAD_FAILED",
+                "Story update failed.",
+            )
         raise AssertionError("Dependent relation creation should not run.")
 
-    def fake_get_json(base_url, token, path, query=None):
+    def fake_get_json(path, *, query=None):
         requested.append(("GET", path))
         if path == "/api/v3/work_packages/208":
             return {
@@ -424,14 +441,14 @@ def test_apply_plan_stops_dependent_actions_after_story_failure(monkeypatch) -> 
             }
         raise AssertionError(path)
 
-    monkeypatch.setattr(implementation_workbook.op, "api_patch_json", fake_patch_json)
-    monkeypatch.setattr(implementation_workbook.op, "api_request_json", fake_request_json)
-    monkeypatch.setattr(implementation_workbook.op, "api_get_json", fake_get_json)
+    client = FakeOpenProjectClient(
+        get_json=fake_get_json,
+        request_json=fake_request_json,
+    )
 
-    with pytest.raises(implementation_workbook.op.ScriptError, match="Story update failed"):
-        implementation_workbook.apply_plan(
-            "https://openproject.example.test",
-            "token",
+    with pytest.raises(implementation_openproject.ScriptError, match="Story update failed"):
+        implementation_apply.apply_plan(
+            client,
             "project",
             {
                 "initiative": {

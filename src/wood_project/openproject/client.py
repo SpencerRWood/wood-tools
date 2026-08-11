@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
@@ -13,7 +14,7 @@ def embedded_elements(document: dict[str, Any]) -> list[dict[str, Any]]:
     return list(((document.get("_embedded") or {}).get("elements")) or [])
 
 
-def _link_href(document: dict[str, Any], name: str) -> str | None:
+def link_href(document: dict[str, Any], name: str) -> str | None:
     link = (document.get("_links") or {}).get(name)
     if isinstance(link, dict):
         href = link.get("href")
@@ -21,19 +22,24 @@ def _link_href(document: dict[str, Any], name: str) -> str | None:
     return None
 
 
-def _link_title(document: dict[str, Any], name: str) -> str | None:
+def link_title(document: dict[str, Any], name: str) -> str:
     link = (document.get("_links") or {}).get(name)
     if isinstance(link, dict):
         title = link.get("title")
-        return title if isinstance(title, str) else None
-    return None
+        return title if isinstance(title, str) else ""
+    return ""
 
 
-def _id_from_href(href: str | None) -> int | None:
+def extract_id_from_href(href: str | None, resource_name: str) -> int | None:
     if not href:
         return None
-    tail = href.rstrip("/").rsplit("/", 1)[-1]
-    return int(tail) if tail.isdigit() else None
+    parsed_url = parse.urlparse(href)
+    match = re.search(rf"/{re.escape(resource_name)}/(\d+)", parsed_url.path)
+    return int(match.group(1)) if match else None
+
+
+def _id_from_link(document: dict[str, Any], name: str, resource_name: str) -> int | None:
+    return extract_id_from_href(link_href(document, name), resource_name)
 
 
 def summarize_user(document: dict[str, Any]) -> dict[str, Any]:
@@ -76,24 +82,24 @@ def summarize_work_package(document: dict[str, Any]) -> dict[str, Any]:
         "id": document.get("id"),
         "subject": document.get("subject"),
         "description": summarize_description(document),
-        "type": _link_title(document, "type"),
-        "status": _link_title(document, "status"),
-        "priority": _link_title(document, "priority"),
+        "type": link_title(document, "type"),
+        "status": link_title(document, "status"),
+        "priority": link_title(document, "priority"),
         "project": {
-            "id": _id_from_href(_link_href(document, "project")),
-            "title": _link_title(document, "project"),
+            "id": _id_from_link(document, "project", "projects"),
+            "title": link_title(document, "project"),
         },
         "version": {
-            "id": _id_from_href(_link_href(document, "version")),
-            "title": _link_title(document, "version"),
+            "id": _id_from_link(document, "version", "versions"),
+            "title": link_title(document, "version"),
         },
         "parent": {
-            "id": _id_from_href(_link_href(document, "parent")),
-            "title": _link_title(document, "parent"),
+            "id": _id_from_link(document, "parent", "work_packages"),
+            "title": link_title(document, "parent"),
         },
         "assignee": {
-            "id": _id_from_href(_link_href(document, "assignee")),
-            "title": _link_title(document, "assignee"),
+            "id": _id_from_link(document, "assignee", "users"),
+            "title": link_title(document, "assignee"),
         },
         "created_at": document.get("createdAt"),
         "updated_at": document.get("updatedAt"),
@@ -196,12 +202,12 @@ class OpenProjectClient:
                     "id": relation.get("id"),
                     "type": relation.get("type"),
                     "from": {
-                        "id": _id_from_href(_link_href(relation, "from")),
-                        "title": _link_title(relation, "from"),
+                        "id": _id_from_link(relation, "from", "work_packages"),
+                        "title": link_title(relation, "from"),
                     },
                     "to": {
-                        "id": _id_from_href(_link_href(relation, "to")),
-                        "title": _link_title(relation, "to"),
+                        "id": _id_from_link(relation, "to", "work_packages"),
+                        "title": link_title(relation, "to"),
                     },
                 }
                 for relation in embedded_elements(relations)

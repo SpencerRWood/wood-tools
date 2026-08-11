@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import base64
-import json
 import os
-import re
 from pathlib import Path
 from typing import Any
-from urllib import parse, request
-from urllib.error import HTTPError, URLError
+
+from wood_project.openproject import (
+    OpenProjectClient,
+    OpenProjectSettings,
+    extract_id_from_href,
+    link_title,
+)
 
 ROOT_ID_ENV_KEYS = (
     "OPENPROJECT_INITIATIVE_ID",
@@ -57,74 +59,16 @@ def env_value(env: dict[str, str], key: str) -> str:
     return value.strip()
 
 
-def api_request_json(
-    method: str,
-    base_url: str,
-    token: str,
-    path: str,
-    *,
-    query: dict[str, str] | None = None,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    url = f"{base_url.rstrip('/')}{path}"
-    if query:
-        url = f"{url}?{parse.urlencode(query)}"
-
-    credentials = base64.b64encode(f"apikey:{token}".encode()).decode("ascii")
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Basic {credentials}")
-    req.add_header("Accept", "application/hal+json")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-
-    try:
-        with request.urlopen(req, timeout=30) as response:
-            raw = response.read()
-            if not raw:
-                raise ScriptError(
-                    "OPENPROJECT_LOOKUP_FAILED",
-                    f"OpenProject returned an empty response for {path}.",
-                )
-            return json.loads(raw.decode("utf-8"))
-    except HTTPError as err:
-        body_text = err.read().decode("utf-8", errors="replace")
-        raise ScriptError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"OpenProject API error {err.code} for {path}: {body_text[:200]}",
-        ) from err
-    except URLError as err:
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"OpenProject connection failed for {path}: {err.reason}",
-        ) from err
-    except json.JSONDecodeError as err:
-        raise ScriptError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"OpenProject returned invalid JSON for {path}: {err}",
-        ) from err
-
-
-def api_get_json(
-    base_url: str,
-    token: str,
-    path: str,
-    query: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    return api_request_json("GET", base_url, token, path, query=query)
-
-
-def api_patch_json(
-    base_url: str,
-    token: str,
-    path: str,
-    body: dict[str, Any],
-) -> dict[str, Any]:
-    return api_request_json("PATCH", base_url, token, path, body=body)
-
-
-def embedded_elements(document: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(((document.get("_embedded") or {}).get("elements")) or [])
+def client_from_env(base_url: str, token: str, *, project_id: str = "") -> OpenProjectClient:
+    return OpenProjectClient(
+        OpenProjectSettings(
+            base_url=base_url,
+            project_id=project_id,
+            token=token,
+            token_provider="implementation-env",
+            user_agent="wood-project/implementation",
+        )
+    )
 
 
 def find_named_element(elements: list[dict[str, Any]], expected_name: str) -> dict[str, Any]:
@@ -139,27 +83,8 @@ def find_named_element(elements: list[dict[str, Any]], expected_name: str) -> di
     )
 
 
-def extract_id_from_href(href: str | None, resource_name: str) -> int | None:
-    if not href:
-        return None
-
-    parsed_url = parse.urlparse(href)
-    match = re.search(rf"/{re.escape(resource_name)}/(\d+)", parsed_url.path)
-    if not match:
-        return None
-    return int(match.group(1))
-
-
 def extract_wp_id_from_href(href: str | None) -> int | None:
     return extract_id_from_href(href, "work_packages")
-
-
-def link_title(document: dict[str, Any], name: str) -> str:
-    return str(((document.get("_links") or {}).get(name) or {}).get("title") or "")
-
-
-def link_href(document: dict[str, Any], name: str) -> str:
-    return str(((document.get("_links") or {}).get(name) or {}).get("href") or "")
 
 
 def work_package_type_name(work_package: dict[str, Any]) -> str:

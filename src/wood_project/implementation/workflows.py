@@ -1,35 +1,14 @@
 from __future__ import annotations
 
-import contextlib
-import io
-import json
 from pathlib import Path
 from typing import Any
 
-from . import export as export_module
+from wood_project.openproject import OpenProjectError
+
+from . import export_snapshot as export_snapshot_module
+from . import openproject as op
 from . import planner as planner_module
 from .models import ImplementationWorkflowError
-
-
-def _run_json_module(main: Any, args: list[str]) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        return_code = int(main([*args, "--json"]) or 0)
-    raw_stdout = stdout.getvalue()
-    raw_stderr = stderr.getvalue()
-    try:
-        payload = json.loads(raw_stdout)
-    except json.JSONDecodeError as err:
-        message = raw_stderr.strip() or raw_stdout.strip() or "workflow did not emit JSON"
-        raise ImplementationWorkflowError("IMPLEMENTATION_COMMAND_FAILED", message) from err
-
-    if return_code != 0 or not payload.get("ok"):
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        code = str(error.get("code") or "IMPLEMENTATION_COMMAND_FAILED")
-        message = str(error.get("message") or raw_stderr.strip() or "implementation command failed")
-        raise ImplementationWorkflowError(code, message)
-    return payload
 
 
 def export_workbook(
@@ -44,30 +23,20 @@ def export_workbook(
     requirement_ids_field: str,
     page_size: int,
 ) -> dict[str, Any]:
-    args: list[str] = []
-    if root_work_package_id is not None:
-        args.append(str(root_work_package_id))
-    args.extend(
-        [
-            "--env-file",
-            str(env_file),
-            "--output-dir",
-            str(output_dir),
-            "--story-type",
-            story_type,
-            "--epic-type",
-            epic_type,
-            "--story-id-field",
-            story_id_field,
-            "--requirement-ids-field",
-            requirement_ids_field,
-            "--page-size",
-            str(page_size),
-        ]
-    )
-    for status in closed_statuses:
-        args.extend(["--closed-status", status])
-    payload = _run_json_module(export_module.main, args)
+    try:
+        payload = export_snapshot_module.export_snapshot(
+            root_work_package_id=root_work_package_id,
+            env_file=env_file,
+            output_dir=output_dir,
+            story_type=story_type,
+            epic_type=epic_type,
+            closed_statuses=closed_statuses,
+            story_id_field=story_id_field,
+            requirement_ids_field=requirement_ids_field,
+            page_size=page_size,
+        )
+    except (op.ScriptError, OpenProjectError) as err:
+        raise ImplementationWorkflowError(err.code, str(err)) from err
     return {
         "ok": True,
         "read_only": True,
@@ -85,12 +54,16 @@ def implementation_plan(
     initiative_id: int | None,
     apply: bool,
 ) -> dict[str, Any]:
-    args = [str(workbook), "--env-file", str(env_file), "--sheet-name", sheet_name]
-    if initiative_id is not None:
-        args.extend(["--initiative-id", str(initiative_id)])
-    if apply:
-        args.append("--apply")
-    payload = _run_json_module(planner_module.main, args)
+    try:
+        payload = planner_module.implementation_plan_payload(
+            workbook=workbook,
+            env_file=env_file,
+            sheet_name=sheet_name,
+            initiative_id=initiative_id,
+            apply=apply,
+        )
+    except (op.ScriptError, OpenProjectError) as err:
+        raise ImplementationWorkflowError(err.code, str(err)) from err
     return {
         "ok": True,
         "read_only": not apply,
