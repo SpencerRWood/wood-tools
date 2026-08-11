@@ -154,7 +154,7 @@ def implementation_plan_payload(
         "updated_metadata": {"updated": False, "updated_fields": []},
     }
     if apply:
-        applied = apply_plan(client, project_id, phases)
+        applied = apply_plan(client, project, phases)
         story_update = write_openproject_ids_to_workbook(
             workbook,
             sheet_name=sheet_name,

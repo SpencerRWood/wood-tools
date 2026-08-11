@@ -299,7 +299,11 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         requested.append((method, path))
-        if method == "POST" and path == "/api/v3/projects/project/versions":
+        if method == "POST" and path == "/api/v3/versions":
+            assert body == {
+                "name": "V1",
+                "_links": {"definingProject": {"href": "/api/v3/projects/7"}},
+            }
             return {
                 "id": 12,
                 "name": "V1",
@@ -353,7 +357,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
 
     applied = implementation_apply.apply_plan(
         client,
-        "project",
+        {"id": 7, "identifier": "project", "name": "Project"},
         {
             "initiative": {
                 "key": "Root",
@@ -449,7 +453,7 @@ def test_apply_plan_stops_dependent_actions_after_story_failure(monkeypatch) -> 
     with pytest.raises(implementation_openproject.ScriptError, match="Story update failed"):
         implementation_apply.apply_plan(
             client,
-            "project",
+            {"id": 7, "identifier": "project", "name": "Project"},
             {
                 "initiative": {
                     "key": "Root",

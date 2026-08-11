@@ -15,6 +15,20 @@ from .planning import WorkbookRow, link_href, story_key
 read_xlsx_rows = workbook_module.read_xlsx_rows
 
 
+def project_identifier(project: dict[str, Any]) -> str:
+    return str(project.get("identifier") or project.get("id") or "")
+
+
+def project_href(project: dict[str, Any]) -> str:
+    project_id = project.get("id")
+    if not isinstance(project_id, int):
+        raise op.ScriptError(
+            "WORKBOOK_UPLOAD_FAILED",
+            "Resolved OpenProject project did not include a numeric id for Version creation.",
+        )
+    return f"/api/v3/projects/{project_id}"
+
+
 def resolved_patch(
     patch: dict[str, Any],
     initiative_id: int,
@@ -45,7 +59,7 @@ def relation_link_id(relation: dict[str, Any], name: str) -> int | None:
 
 def apply_plan(
     client: OpenProjectClient,
-    project_id: str,
+    project: dict[str, Any],
     phases: dict[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
     applied: dict[str, list[dict[str, Any]]] = {
@@ -59,6 +73,8 @@ def apply_plan(
     version_hrefs: dict[str, str] = {}
     epic_ids: dict[str, int] = {}
     story_ids: dict[str, int] = {}
+    work_package_project_id = project_identifier(project)
+    defining_project_href = project_href(project)
 
     initiative = phases["initiative"]
     if initiative["action"] == "reuse":
@@ -77,7 +93,7 @@ def apply_plan(
     else:
         updated = client.request_json(
             "POST",
-            f"/api/v3/projects/{project_id}/work_packages",
+            f"/api/v3/projects/{work_package_project_id}/work_packages",
             body=initiative["patch"],
         )
         initiative_id = op.work_package_id(updated)
@@ -100,8 +116,14 @@ def apply_plan(
             continue
         updated = client.request_json(
             "POST",
-            f"/api/v3/projects/{project_id}/versions",
-            body=item["patch"],
+            "/api/v3/versions",
+            body={
+                **item["patch"],
+                "_links": {
+                    **((item["patch"].get("_links") or {}) if item.get("patch") else {}),
+                    "definingProject": {"href": defining_project_href},
+                },
+            },
         )
         href = str(((updated.get("_links") or {}).get("self") or {}).get("href") or "")
         if not href:
@@ -130,7 +152,7 @@ def apply_plan(
         patch = resolved_patch(item["patch"], initiative_id, epic_ids, version_hrefs)
         updated = client.request_json(
             "POST",
-            f"/api/v3/projects/{project_id}/work_packages",
+            f"/api/v3/projects/{work_package_project_id}/work_packages",
             body=patch,
         )
         epic_id = op.work_package_id(updated)
@@ -152,7 +174,7 @@ def apply_plan(
         if item["action"] == "create":
             updated = client.request_json(
                 "POST",
-                f"/api/v3/projects/{project_id}/work_packages",
+                f"/api/v3/projects/{work_package_project_id}/work_packages",
                 body=patch,
             )
         else:
