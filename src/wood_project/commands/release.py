@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from ..release import bump_version, create_github_release, create_tag
+from ..release import bump_version, check_release, create_github_release, create_tag
 
 COMMAND = "release"
 
@@ -25,6 +25,21 @@ def _add_pyproject_option(parser: argparse.ArgumentParser) -> None:
 def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("release", help="Manage deterministic release workflows")
     release_subparsers = parser.add_subparsers(dest="release_command", required=True)
+
+    check_parser = release_subparsers.add_parser(
+        "check", help="Run read-only deterministic release readiness checks"
+    )
+    check_parser.add_argument(
+        "--version", help="Explicit X.Y.Z version. Defaults to pyproject.toml."
+    )
+    check_parser.add_argument("--root-work-package-id", type=int)
+    check_parser.add_argument("--openproject-version")
+    check_parser.add_argument("--config-path", type=Path, help="Override wood-config path")
+    check_parser.add_argument("--profile", help="wood-config profile to read")
+    check_parser.add_argument("--type", default="Story")
+    check_parser.add_argument("--page-size", type=int, default=1000)
+    _add_pyproject_option(check_parser)
+    _add_common_options(check_parser)
 
     bump_parser = release_subparsers.add_parser(
         "bump", help="Preview or apply a pyproject.toml version bump"
@@ -60,6 +75,21 @@ def handles(args: argparse.Namespace) -> bool:
 
 def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
     command = f"release-{args.release_command}"
+    if args.release_command == "check":
+        return (
+            command,
+            check_release(
+                version=args.version,
+                pyproject=args.pyproject,
+                root_work_package_id=args.root_work_package_id,
+                openproject_version=args.openproject_version,
+                config_path=args.config_path,
+                profile=args.profile,
+                story_type=args.type,
+                page_size=args.page_size,
+            ),
+            None,
+        )
     if args.release_command == "bump":
         return (
             command,

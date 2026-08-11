@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from . import openproject, project, release, resources, story, story_backlog
+from . import implementation, openproject, project, release, resources, story
 
-COMMAND_MODULES = (project, resources, openproject, story, release, story_backlog)
+COMMAND_MODULES = (story, implementation, release, openproject, resources, project)
 
 __all__ = [
     "COMMAND_MODULES",
+    "implementation",
     "openproject",
     "project",
     "release",
     "resources",
     "story",
-    "story_backlog",
 ]

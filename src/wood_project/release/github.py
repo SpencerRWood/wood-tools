@@ -124,9 +124,7 @@ def categorize_subject(subject: str) -> str:
     normalized = subject.strip().lower()
     if any(token in normalized for token in ("release", "tag", "version bump")):
         return "Release Tooling"
-    if any(
-        token in normalized for token in ("story-loop", "story loop", "next-story", "next story")
-    ):
+    if any(token in normalized for token in ("story", "next-story", "next story")):
         return "Workflow Automation"
     if any(token in normalized for token in ("wood-secrets", "vaultwarden", "secret")):
         return "Secrets and Integrations"
