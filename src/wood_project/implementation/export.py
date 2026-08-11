@@ -4,66 +4,21 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import html
 import json
-import os
 import re
 import sys
-import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib import parse, request
-from urllib.error import HTTPError, URLError
 
-ROOT_ID_ENV_KEYS = (
-    "OPENPROJECT_INITIATIVE_ID",
-    "OPENPROJECT_ROOT_WORK_PACKAGE_ID",
-    "OPENPROJECT_ROOT_ID",
-)
+from . import openproject as op
+from . import workbook
 
-IMPLEMENTATION_WORKBOOK_COLUMNS = [
-    "Project",
-    "Root Work Package",
-    "Version",
-    "Epic",
-    "Parent",
-    "Story ID",
-    "Subject",
-    "Goal",
-    "Acceptance Criteria",
-    "Non-Goals",
-    "Implementation Notes",
-    "Requirement IDs",
-    "Predecessors",
-    "Type",
-    "Status",
-    "Branch Name",
-    "OpenProject ID",
-    "Notes",
-]
-
-SYNC_METADATA_ROWS = [
-    "Configured Root Work Package ID",
-    "Verified Root Work Package ID",
-    "Root Work Package Subject",
-    "Root Work Package Type",
-    "Root Work Package OpenProject URL",
-    "Ancestry Validation Status",
-    "Exported At",
-    "Story Count",
-    "Status Summary",
-]
-
-
-class ScriptError(RuntimeError):
-    """Structured error for safe script output."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+IMPLEMENTATION_WORKBOOK_COLUMNS = workbook.IMPLEMENTATION_WORKBOOK_COLUMNS
+write_json = workbook.write_json
+write_xlsx = workbook.write_xlsx
 
 
 @dataclass(frozen=True)
@@ -123,93 +78,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def parse_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"Environment file not found: {path}. Run wood-secrets resolve-env --apply.",
-        )
-
-    env: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in raw_line:
-            continue
-        key, value = raw_line.split("=", 1)
-        env[key.strip()] = value.strip().strip('"').strip("'")
-    return env
-
-
-def require_env(env: dict[str, str], keys: list[str]) -> None:
-    missing = [key for key in keys if not env.get(key)]
-    if missing:
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"Missing required OpenProject configuration: {', '.join(missing)}.",
-        )
-
-
-def env_value(env: dict[str, str], key: str) -> str:
-    value = os.environ.get(key) or env.get(key) or ""
-    return value.strip()
-
-
 def resolve_root_work_package_id(args: argparse.Namespace, env: dict[str, str]) -> int:
     if args.root_work_package_id is not None:
         return args.root_work_package_id
-    for key in ROOT_ID_ENV_KEYS:
-        raw_value = env_value(env, key)
+    for key in op.ROOT_ID_ENV_KEYS:
+        raw_value = op.env_value(env, key)
         if not raw_value:
             continue
         try:
             return int(raw_value)
         except ValueError as err:
-            raise ScriptError("INVALID_ROOT_WORK_PACKAGE_ID", f"{key} must be an integer.") from err
-    raise ScriptError(
+            raise op.ScriptError(
+                "INVALID_ROOT_WORK_PACKAGE_ID", f"{key} must be an integer."
+            ) from err
+    raise op.ScriptError(
         "MISSING_ROOT_WORK_PACKAGE_ID",
         "Pass <root_work_package_id> or set OPENPROJECT_INITIATIVE_ID in .env.resolved.",
     )
-
-
-def api_get_json(
-    base_url: str,
-    token: str,
-    path: str,
-    *,
-    query: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    url = f"{base_url.rstrip('/')}{path}"
-    if query:
-        url = f"{url}?{parse.urlencode(query)}"
-
-    credentials = base64.b64encode(f"apikey:{token}".encode()).decode("ascii")
-    req = request.Request(url, method="GET")
-    req.add_header("Authorization", f"Basic {credentials}")
-    req.add_header("Accept", "application/hal+json, application/json")
-
-    try:
-        with request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as err:
-        body = err.read().decode("utf-8", errors="replace")
-        raise ScriptError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"OpenProject API error {err.code} for {path}: {body[:200]}",
-        ) from err
-    except URLError as err:
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"OpenProject connection failed for {path}: {err.reason}",
-        ) from err
-    except json.JSONDecodeError as err:
-        raise ScriptError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"OpenProject returned invalid JSON for {path}: {err}",
-        ) from err
-
-
-def embedded_elements(document: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(((document.get("_embedded") or {}).get("elements")) or [])
 
 
 def fetch_collection(
@@ -226,8 +111,8 @@ def fetch_collection(
         page_query = dict(query)
         page_query["pageSize"] = str(page_size)
         page_query["offset"] = str(offset)
-        document = api_get_json(base_url, token, path, query=page_query)
-        page_elements = embedded_elements(document)
+        document = op.api_get_json(base_url, token, path, query=page_query)
+        page_elements = op.embedded_elements(document)
         elements.extend(page_elements)
         total = int(document.get("total") or len(elements))
         count = int(document.get("count") or len(page_elements))
@@ -235,16 +120,6 @@ def fetch_collection(
             break
         offset += count
     return elements
-
-
-def extract_id_from_href(href: str | None, resource_name: str) -> int | None:
-    if not href:
-        return None
-    parsed_url = parse.urlparse(href)
-    match = re.search(rf"/{re.escape(resource_name)}/(\d+)", parsed_url.path)
-    if not match:
-        return None
-    return int(match.group(1))
 
 
 def link_value(wp: dict[str, Any], link_name: str) -> dict[str, Any]:
@@ -257,7 +132,7 @@ def link_title(wp: dict[str, Any], link_name: str) -> str:
 
 
 def link_id(wp: dict[str, Any], link_name: str, resource_name: str) -> int | None:
-    return extract_id_from_href(link_value(wp, link_name).get("href"), resource_name)
+    return op.extract_id_from_href(link_value(wp, link_name).get("href"), resource_name)
 
 
 def work_package_id(wp: dict[str, Any]) -> int:
@@ -433,7 +308,7 @@ def fetch_root_and_descendants(
     root_work_package_id: int,
     page_size: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    root = api_get_json(base_url, token, f"/api/v3/work_packages/{root_work_package_id}")
+    root = op.api_get_json(base_url, token, f"/api/v3/work_packages/{root_work_package_id}")
     filters = [{"ancestor": {"operator": "=", "values": [str(root_work_package_id)]}}]
     descendants = fetch_collection(
         base_url,
@@ -455,7 +330,7 @@ def fetch_work_package(
     existing = work_packages_by_id.get(wp_id)
     if existing is not None:
         return existing
-    fetched = api_get_json(base_url, token, f"/api/v3/work_packages/{wp_id}")
+    fetched = op.api_get_json(base_url, token, f"/api/v3/work_packages/{wp_id}")
     work_packages_by_id[wp_id] = fetched
     return fetched
 
@@ -491,8 +366,8 @@ def fetch_all_relations(
 
 def normalize_relation(relation: dict[str, Any]) -> tuple[int, int, str] | None:
     links = relation.get("_links") or {}
-    from_id = extract_id_from_href((links.get("from") or {}).get("href"), "work_packages")
-    to_id = extract_id_from_href((links.get("to") or {}).get("href"), "work_packages")
+    from_id = op.extract_id_from_href((links.get("from") or {}).get("href"), "work_packages")
+    to_id = op.extract_id_from_href((links.get("to") or {}).get("href"), "work_packages")
     relation_type = str(relation.get("type") or "")
     if from_id is None or to_id is None or not relation_type:
         return None
@@ -546,7 +421,7 @@ def resolve_ancestry(
 
         try:
             current = fetch_work_package(base_url, token, work_packages_by_id, current_id)
-        except ScriptError:
+        except op.ScriptError:
             warnings.append(f"inaccessible parent resource: WP-{current_id}")
             return AncestryResult(
                 None,
@@ -705,126 +580,13 @@ def build_story_records(
     return sorted(records, key=lambda record: int(record["OpenProject ID"]))
 
 
-def cell_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, list):
-        return ", ".join(str(item) for item in value)
-    return str(value)
-
-
-def column_name(index: int) -> str:
-    name = ""
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
-
-
-def sheet_xml(rows: list[list[Any]]) -> str:
-    row_xml: list[str] = []
-    for row_index, row in enumerate(rows, start=1):
-        cells: list[str] = []
-        for col_index, value in enumerate(row, start=1):
-            text = html.escape(cell_value(value))
-            ref = f"{column_name(col_index)}{row_index}"
-            cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>')
-        row_xml.append(f'<row r="{row_index}">{"".join(cells)}</row>')
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        f"<sheetData>{''.join(row_xml)}</sheetData></worksheet>"
-    )
-
-
-def write_xlsx(path: Path, story_records: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
-    story_rows = [IMPLEMENTATION_WORKBOOK_COLUMNS]
-    story_rows.extend(
-        [
-            [record.get(column) for column in IMPLEMENTATION_WORKBOOK_COLUMNS]
-            for record in story_records
-        ]
-    )
-    metadata_rows = [["Field", "Value"]]
-    metadata_rows.extend([[row_name, metadata.get(row_name)] for row_name in SYNC_METADATA_ROWS])
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
-        workbook.writestr("[Content_Types].xml", content_types_xml())
-        workbook.writestr("_rels/.rels", package_relationships_xml())
-        workbook.writestr("xl/_rels/workbook.xml.rels", workbook_relationships_xml())
-        workbook.writestr(
-            "xl/workbook.xml",
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-            "<sheets>"
-            '<sheet name="Implementation" sheetId="1" r:id="rId1"/>'
-            '<sheet name="Sync Metadata" sheetId="2" r:id="rId2"/>'
-            "</sheets></workbook>",
-        )
-        workbook.writestr("xl/worksheets/sheet1.xml", sheet_xml(story_rows))
-        workbook.writestr("xl/worksheets/sheet2.xml", sheet_xml(metadata_rows))
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-
-
-def status_summary(story_records: list[dict[str, Any]]) -> dict[str, int]:
-    summary: dict[str, int] = {}
-    for record in story_records:
-        status = str(record.get("Status") or "(blank)")
-        summary[status] = summary.get(status, 0) + 1
-    return dict(sorted(summary.items()))
-
-
-def workbook_relationships_xml() -> str:
-    worksheet_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        f'<Relationship Id="rId1" Type="{worksheet_type}" Target="worksheets/sheet1.xml"/>'
-        f'<Relationship Id="rId2" Type="{worksheet_type}" Target="worksheets/sheet2.xml"/>'
-        "</Relationships>"
-    )
-
-
-def content_types_xml() -> str:
-    package_relationships = "application/vnd.openxmlformats-package.relationships+xml"
-    workbook_content = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
-    worksheet_content = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-        f'<Default Extension="rels" ContentType="{package_relationships}"/>'
-        '<Default Extension="xml" ContentType="application/xml"/>'
-        f'<Override PartName="/xl/workbook.xml" ContentType="{workbook_content}"/>'
-        f'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="{worksheet_content}"/>'
-        f'<Override PartName="/xl/worksheets/sheet2.xml" ContentType="{worksheet_content}"/>'
-        "</Types>"
-    )
-
-
-def package_relationships_xml() -> str:
-    office_document_type = (
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
-    )
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        f'<Relationship Id="rId1" Type="{office_document_type}" Target="xl/workbook.xml"/>'
-        "</Relationships>"
-    )
-
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        env = parse_env_file(Path(args.env_file))
-        require_env(env, ["OPENPROJECT_URL", "OPENPROJECT_API_TOKEN"])
-        base_url = env_value(env, "OPENPROJECT_URL").rstrip("/")
-        token = env_value(env, "OPENPROJECT_API_TOKEN")
+        env = op.parse_env_file(Path(args.env_file))
+        op.require_env(env, ["OPENPROJECT_URL", "OPENPROJECT_API_TOKEN"])
+        base_url = op.env_value(env, "OPENPROJECT_URL").rstrip("/")
+        token = op.env_value(env, "OPENPROJECT_API_TOKEN")
         root_work_package_id = resolve_root_work_package_id(args, env)
         closed_status_names = set(args.closed_status or ["Closed"])
         output_dir = (Path.cwd() / args.output_dir).resolve()
@@ -869,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
             "Ancestry Validation Status": "Warning" if validation_warnings else "OK",
             "Exported At": datetime.now(UTC).isoformat(),
             "Story Count": len(story_records),
-            "Status Summary": status_summary(story_records),
+            "Status Summary": workbook.status_summary(story_records),
         }
         snapshot = {
             "sync_metadata": metadata,
@@ -882,7 +644,7 @@ def main(argv: list[str] | None = None) -> int:
         xlsx_path = output_dir / "implementation_workbook.xlsx"
         write_json(json_path, snapshot)
         write_xlsx(xlsx_path, story_records, metadata)
-    except ScriptError as err:
+    except op.ScriptError as err:
         payload = {"ok": False, "error": {"code": err.code, "message": str(err)}}
         if args.json:
             print(json.dumps(payload, indent=2))

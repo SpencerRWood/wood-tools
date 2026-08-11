@@ -505,8 +505,11 @@ Implementation workbook behavior:
   predecessor relations are reused when an ID or unique deterministic match exists, and are
   planned for creation otherwise.
 - Ambiguous matches stop planning instead of guessing.
-- Successful apply writes confirmed Story OpenProject IDs back to the `OpenProject ID` workbook
-  column and confirmed root metadata back to the workbook so repeated runs are idempotent.
+- Workbook rows with explicit `OpenProject ID` values must resolve to Stories beneath the resolved
+  Root Work Package; stale IDs outside that tree block planning instead of mutating unrelated work.
+- Successful apply reads OpenProject writes back before reporting them as verified, writes confirmed
+  Story OpenProject IDs back to the `OpenProject ID` workbook column, and writes confirmed root
+  metadata back to the workbook so repeated runs are idempotent.
 - Google Drive synchronization remains outside the `wood-project implementation` command.
 
 Examples:

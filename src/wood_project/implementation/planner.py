@@ -7,26 +7,18 @@ import argparse
 import json
 import re
 import sys
-import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import _next_story as next_story
-from . import export as export_implementation_workbook
+from . import openproject as op
+from . import workbook as workbook_module
 
-REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
-IMPLEMENTATION_WORKBOOK_COLUMNS = export_implementation_workbook.IMPLEMENTATION_WORKBOOK_COLUMNS
-
-
-@dataclass(frozen=True)
-class WorkbookRow:
-    row_number: int
-    values: dict[str, str]
+IMPLEMENTATION_WORKBOOK_COLUMNS = workbook_module.IMPLEMENTATION_WORKBOOK_COLUMNS
+WorkbookRow = workbook_module.WorkbookRow
+read_xlsx_rows = workbook_module.read_xlsx_rows
+workbook_metadata = workbook_module.workbook_metadata
+workbook_rows = workbook_module.workbook_rows
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -60,126 +52,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def column_index(cell_ref: str) -> int:
-    letters = re.sub(r"[^A-Z]", "", cell_ref.upper())
-    index = 0
-    for letter in letters:
-        index = index * 26 + (ord(letter) - 64)
-    return index - 1
-
-
-def xml_text(element: ET.Element | None) -> str:
-    if element is None:
-        return ""
-    return "".join(element.itertext())
-
-
-def read_shared_strings(workbook: zipfile.ZipFile) -> list[str]:
-    try:
-        raw = workbook.read("xl/sharedStrings.xml")
-    except KeyError:
-        return []
-    root = ET.fromstring(raw)
-    return [xml_text(item) for item in root.findall(f"{{{SHEET_NS}}}si")]
-
-
-def workbook_sheet_target(workbook: zipfile.ZipFile, sheet_name: str) -> str:
-    workbook_xml = ET.fromstring(workbook.read("xl/workbook.xml"))
-    rels_xml = ET.fromstring(workbook.read("xl/_rels/workbook.xml.rels"))
-    rels = {
-        rel.attrib["Id"]: rel.attrib["Target"]
-        for rel in rels_xml.findall(f"{{{REL_NS}}}Relationship")
-    }
-    for sheet in workbook_xml.findall(f".//{{{SHEET_NS}}}sheet"):
-        if sheet.attrib.get("name") != sheet_name:
-            continue
-        rel_id = sheet.attrib.get(f"{{{OFFICE_REL_NS}}}id")
-        if not rel_id or rel_id not in rels:
-            break
-        target = rels[rel_id]
-        return f"xl/{target}" if not target.startswith("/") else target.lstrip("/")
-    raise next_story.ScriptError(
-        "WORKBOOK_PARSE_FAILED",
-        f"Sheet not found in workbook: {sheet_name}",
-    )
-
-
-def read_xlsx_rows(path: Path, sheet_name: str) -> list[list[str]]:
-    if not path.is_file():
-        raise next_story.ScriptError("WORKBOOK_PARSE_FAILED", f"Workbook not found: {path}")
-    try:
-        with zipfile.ZipFile(path) as workbook:
-            shared_strings = read_shared_strings(workbook)
-            sheet_path = workbook_sheet_target(workbook, sheet_name)
-            sheet_xml = ET.fromstring(workbook.read(sheet_path))
-    except (KeyError, zipfile.BadZipFile, ET.ParseError) as err:
-        raise next_story.ScriptError(
-            "WORKBOOK_PARSE_FAILED",
-            f"Unable to read workbook {path}: {err}",
-        ) from err
-
-    rows: list[list[str]] = []
-    for row in sheet_xml.findall(f".//{{{SHEET_NS}}}row"):
-        values_by_index: dict[int, str] = {}
-        for cell in row.findall(f"{{{SHEET_NS}}}c"):
-            ref = str(cell.attrib.get("r") or "")
-            index = column_index(ref)
-            cell_type = cell.attrib.get("t")
-            if cell_type == "inlineStr":
-                value = xml_text(cell.find(f"{{{SHEET_NS}}}is"))
-            else:
-                raw_value = xml_text(cell.find(f"{{{SHEET_NS}}}v"))
-                if cell_type == "s" and raw_value:
-                    value = shared_strings[int(raw_value)]
-                else:
-                    value = raw_value
-            values_by_index[index] = value.strip()
-        if values_by_index:
-            rows.append(
-                [values_by_index.get(index, "") for index in range(max(values_by_index) + 1)]
-            )
-    return rows
-
-
-def workbook_rows(path: Path, sheet_name: str) -> list[WorkbookRow]:
-    rows = read_xlsx_rows(path, sheet_name)
-    if not rows:
-        raise next_story.ScriptError("WORKBOOK_PARSE_FAILED", "Workbook sheet has no rows.")
-    headers = rows[0]
-    missing = [column for column in IMPLEMENTATION_WORKBOOK_COLUMNS if column not in headers]
-    if missing:
-        raise next_story.ScriptError(
-            "WORKBOOK_SCHEMA_MISMATCH",
-            f"Workbook is missing required columns: {', '.join(missing)}",
-        )
-    indexed_headers = {column: headers.index(column) for column in IMPLEMENTATION_WORKBOOK_COLUMNS}
-    records: list[WorkbookRow] = []
-    for row_number, row in enumerate(rows[1:], start=2):
-        values = {
-            column: row[indexed_headers[column]] if indexed_headers[column] < len(row) else ""
-            for column in IMPLEMENTATION_WORKBOOK_COLUMNS
-        }
-        if any(values.values()):
-            records.append(WorkbookRow(row_number=row_number, values=values))
-    return records
-
-
-def workbook_metadata(path: Path) -> dict[str, str]:
-    try:
-        rows = read_xlsx_rows(path, "Sync Metadata")
-    except next_story.ScriptError:
-        return {}
-    metadata: dict[str, str] = {}
-    for row in rows[1:]:
-        if len(row) >= 2 and row[0].strip():
-            metadata[row[0].strip()] = row[1].strip()
-    return metadata
-
-
 def unique_workbook_value(rows: list[WorkbookRow], column: str) -> str:
     values = sorted({row.values[column].strip() for row in rows if row.values[column].strip()})
     if len(values) > 1:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Workbook has conflicting {column} values: {', '.join(values)}.",
         )
@@ -190,7 +66,7 @@ def required_int(value: str, *, field_name: str, row_number: int) -> int:
     try:
         return int(value)
     except ValueError as err:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Row {row_number} has invalid {field_name}: {value!r}",
         ) from err
@@ -231,10 +107,10 @@ def compose_description(values: dict[str, str]) -> str:
 
 
 def find_href(elements: list[dict[str, Any]], name: str) -> str:
-    element = next_story.find_named_element(elements, name)
+    element = op.find_named_element(elements, name)
     href = str(((element.get("_links") or {}).get("self") or {}).get("href") or "")
     if not href:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "OPENPROJECT_LOOKUP_FAILED",
             f"OpenProject did not provide a href for {name!r}.",
         )
@@ -263,8 +139,8 @@ def fetch_collection(
         page_query = dict(query)
         page_query["pageSize"] = str(page_size)
         page_query["offset"] = str(offset)
-        document = next_story.api_get_json(base_url, token, path, query=page_query)
-        page = next_story.embedded_elements(document)
+        document = op.api_get_json(base_url, token, path, query=page_query)
+        page = op.embedded_elements(document)
         elements.extend(page)
         total = int(document.get("total") or len(elements))
         if len(elements) >= total or not page:
@@ -324,19 +200,19 @@ def unique_by_key(
         ids = ", ".join(str(match.get("id") or "?") for match in matches)
         conflicts.append(f"{key_name} {value!r} matched multiple OpenProject objects: {ids}")
     if conflicts:
-        raise next_story.ScriptError("AMBIGUOUS_OPENPROJECT_MATCH", "; ".join(conflicts))
+        raise op.ScriptError("AMBIGUOUS_OPENPROJECT_MATCH", "; ".join(conflicts))
     return unique
 
 
 def existing_epics_by_subject(descendants: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     epics: list[dict[str, Any]] = []
     for work_package in descendants:
-        if next_story.work_package_type_name(work_package) != "Epic":
+        if op.work_package_type_name(work_package) != "Epic":
             continue
         epics.append(
             {
-                "id": next_story.work_package_id(work_package),
-                "subject": next_story.work_package_subject(work_package),
+                "id": op.work_package_id(work_package),
+                "subject": op.work_package_subject(work_package),
                 "work_package": work_package,
             }
         )
@@ -351,11 +227,11 @@ def existing_epics_by_subject(descendants: list[dict[str, Any]]) -> dict[str, di
 def existing_stories_by_external_id(descendants: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     stories: list[dict[str, Any]] = []
     for work_package in descendants:
-        if next_story.work_package_type_name(work_package) != "Story":
+        if op.work_package_type_name(work_package) != "Story":
             continue
         stories.append(
             {
-                "id": next_story.work_package_id(work_package),
+                "id": op.work_package_id(work_package),
                 "story_id": external_story_id(work_package),
                 "work_package": work_package,
             }
@@ -371,12 +247,12 @@ def existing_stories_by_external_id(descendants: list[dict[str, Any]]) -> dict[s
 def existing_stories_by_subject(descendants: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     stories: list[dict[str, Any]] = []
     for work_package in descendants:
-        if next_story.work_package_type_name(work_package) != "Story":
+        if op.work_package_type_name(work_package) != "Story":
             continue
         stories.append(
             {
-                "id": next_story.work_package_id(work_package),
-                "subject": next_story.work_package_subject(work_package),
+                "id": op.work_package_id(work_package),
+                "subject": op.work_package_subject(work_package),
                 "work_package": work_package,
             }
         )
@@ -472,7 +348,7 @@ def build_patch_payload(
 ) -> tuple[dict[str, Any], list[str]]:
     lock_version = current.get("lockVersion")
     if not isinstance(lock_version, int):
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_UPLOAD_FAILED",
             f"WP-{current.get('id')} did not include a usable lockVersion.",
         )
@@ -552,7 +428,7 @@ def fetch_projects(base_url: str, token: str) -> list[dict[str, Any]]:
 
 
 def fetch_project(base_url: str, token: str, project_id: str) -> dict[str, Any]:
-    return next_story.api_get_json(base_url, token, f"/api/v3/projects/{project_id}")
+    return op.api_get_json(base_url, token, f"/api/v3/projects/{project_id}")
 
 
 def resolve_project(
@@ -568,7 +444,7 @@ def resolve_project(
             project_identifier(project),
             project_name(project),
         }:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
                 (
                     "Workbook Project does not match configured OpenProject project: "
@@ -578,7 +454,7 @@ def resolve_project(
         return project
 
     if not workbook_project:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             "Workbook metadata must identify Project when OPENPROJECT_PROJECT_ID is not set.",
         )
@@ -591,26 +467,26 @@ def resolve_project(
     if len(matches) == 1:
         return matches[0]
     if not matches:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "OPENPROJECT_LOOKUP_FAILED",
             f"Workbook Project did not match an OpenProject project: {workbook_project!r}.",
         )
     ids = ", ".join(project_identifier(project) for project in matches)
-    raise next_story.ScriptError(
+    raise op.ScriptError(
         "AMBIGUOUS_OPENPROJECT_MATCH",
         f"Workbook Project {workbook_project!r} matched multiple OpenProject projects: {ids}.",
     )
 
 
 def env_initiative_id(env: dict[str, str]) -> int | None:
-    for key in export_implementation_workbook.ROOT_ID_ENV_KEYS:
-        raw_value = export_implementation_workbook.env_value(env, key)
+    for key in op.ROOT_ID_ENV_KEYS:
+        raw_value = op.env_value(env, key)
         if not raw_value:
             continue
         try:
             return int(raw_value)
         except ValueError as err:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "INVALID_ROOT_WORK_PACKAGE_ID",
                 f"{key} must be an integer.",
             ) from err
@@ -628,7 +504,7 @@ def workbook_initiative_id(metadata: dict[str, str]) -> int | None:
     try:
         return int(raw_value)
     except ValueError as err:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Workbook Sync Metadata has invalid Root Work Package ID: {raw_value!r}.",
         ) from err
@@ -655,7 +531,7 @@ def root_type_name(metadata: dict[str, str], types: list[dict[str, Any]]) -> str
         return configured
     if optional_href(types, "Initiative"):
         return "Initiative"
-    raise next_story.ScriptError(
+    raise op.ScriptError(
         "WORKBOOK_SCHEMA_MISMATCH",
         (
             "Workbook Sync Metadata must include Root Work Package Type when no "
@@ -708,18 +584,18 @@ def resolve_initiative_plan(
         "Root Work Package Subject", ""
     ).strip() or unique_workbook_value(rows, "Root Work Package")
     if not workbook_subject:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             "Workbook must identify a Root Work Package in Sync Metadata or workbook rows.",
         )
 
     root_id = explicit_initiative_id or workbook_initiative_id(metadata) or configured_initiative_id
     if root_id is not None:
-        existing = next_story.api_get_json(base_url, token, f"/api/v3/work_packages/{root_id}")
-        existing_subject = next_story.work_package_subject(existing)
+        existing = op.api_get_json(base_url, token, f"/api/v3/work_packages/{root_id}")
+        existing_subject = op.work_package_subject(existing)
         existing_project = link_title(existing, "project")
         if workbook_subject and existing_subject != workbook_subject:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
                 (
                     "Workbook Root Work Package conflicts with resolved OpenProject object: "
@@ -728,7 +604,7 @@ def resolve_initiative_plan(
             )
         expected_project_names = {project_name(project), project_identifier(project)}
         if existing_project and existing_project not in expected_project_names:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
                 (
                     "Resolved Root Work Package belongs to a different project: "
@@ -739,8 +615,8 @@ def resolve_initiative_plan(
             "key": workbook_subject,
             "subject": existing_subject,
             "action": "reuse",
-            "work_package_id": next_story.work_package_id(existing),
-            "type": next_story.work_package_type_name(existing),
+            "work_package_id": op.work_package_id(existing),
+            "type": op.work_package_type_name(existing),
             "patch": None,
             "warnings": ["Existing Root Work Package matched by OpenProject ID."],
         }
@@ -753,19 +629,19 @@ def resolve_initiative_plan(
             token=token,
             project_id=project_filter_id(project),
         )
-        if next_story.work_package_subject(work_package) == workbook_subject
+        if op.work_package_subject(work_package) == workbook_subject
     ]
     type_conflicts = [
         work_package
         for work_package in subject_matches
-        if next_story.work_package_type_name(work_package) != root_type
+        if op.work_package_type_name(work_package) != root_type
     ]
     if type_conflicts:
         conflicts = ", ".join(
-            f"WP-{work_package.get('id')} type={next_story.work_package_type_name(work_package)!r}"
+            f"WP-{work_package.get('id')} type={op.work_package_type_name(work_package)!r}"
             for work_package in type_conflicts
         )
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             (
                 f"Root Work Package {workbook_subject!r} matched OpenProject objects with "
@@ -775,7 +651,7 @@ def resolve_initiative_plan(
     candidates = [
         work_package
         for work_package in subject_matches
-        if next_story.work_package_type_name(work_package) == root_type
+        if op.work_package_type_name(work_package) == root_type
     ]
     if len(candidates) == 1:
         existing = candidates[0]
@@ -783,14 +659,14 @@ def resolve_initiative_plan(
             "key": workbook_subject,
             "subject": workbook_subject,
             "action": "reuse",
-            "work_package_id": next_story.work_package_id(existing),
-            "type": next_story.work_package_type_name(existing),
+            "work_package_id": op.work_package_id(existing),
+            "type": op.work_package_type_name(existing),
             "patch": None,
             "warnings": ["Existing Root Work Package matched by subject and type."],
         }
     if len(candidates) > 1:
         ids = ", ".join(str(candidate.get("id") or "?") for candidate in candidates)
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "AMBIGUOUS_OPENPROJECT_MATCH",
             (
                 f"Root Work Package {workbook_subject!r} matched multiple OpenProject "
@@ -824,7 +700,7 @@ def build_create_payload(
 ) -> tuple[dict[str, Any], list[str]]:
     subject = values["Subject"].strip()
     if not subject:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             "New Story rows require Subject.",
         )
@@ -926,6 +802,7 @@ def resolve_story_match(
     row: WorkbookRow,
     base_url: str,
     token: str,
+    stories_by_id: dict[int, dict[str, Any]],
     stories_by_external_id: dict[str, dict[str, Any]],
     stories_by_subject: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -935,10 +812,25 @@ def resolve_story_match(
         row_number=row.row_number,
     )
     if work_package_id is not None:
-        return (
-            next_story.api_get_json(base_url, token, f"/api/v3/work_packages/{work_package_id}"),
-            ["Existing Story matched by OpenProject ID."],
+        existing = op.api_get_json(
+            base_url,
+            token,
+            f"/api/v3/work_packages/{work_package_id}",
         )
+        if op.work_package_type_name(existing) != "Story":
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                f"Row {row.row_number} OpenProject ID WP-{work_package_id} is not a Story.",
+            )
+        if work_package_id not in stories_by_id:
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                (
+                    f"Row {row.row_number} OpenProject ID WP-{work_package_id} is not a Story "
+                    "beneath the resolved Root Work Package."
+                ),
+            )
+        return (existing, ["Existing Story matched by OpenProject ID."])
 
     story_id = row.values["Story ID"].strip()
     if story_id and story_id in stories_by_external_id:
@@ -968,13 +860,18 @@ def build_implementation_plan(
     for row in rows:
         key = story_key(row)
         if key in rows_by_key:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
                 f"Duplicate Story ID in workbook: {key!r}",
             )
         rows_by_key[key] = row
 
     epics_by_subject = existing_epics_by_subject(descendants)
+    stories_by_id = {
+        op.work_package_id(work_package): work_package
+        for work_package in descendants
+        if op.work_package_type_name(work_package) == "Story"
+    }
     stories_by_external_id = existing_stories_by_external_id(descendants)
     stories_by_subject = existing_stories_by_subject(descendants)
     epics: list[dict[str, Any]] = []
@@ -986,7 +883,7 @@ def build_implementation_plan(
                     "key": epic,
                     "subject": epic,
                     "action": "reuse",
-                    "work_package_id": next_story.work_package_id(existing),
+                    "work_package_id": op.work_package_id(existing),
                     "patch": None,
                     "warnings": ["Existing Epic matched by subject."],
                 }
@@ -1028,6 +925,7 @@ def build_implementation_plan(
             row=row,
             base_url=base_url,
             token=token,
+            stories_by_id=stories_by_id,
             stories_by_external_id=stories_by_external_id,
             stories_by_subject=stories_by_subject,
         )
@@ -1042,7 +940,7 @@ def build_implementation_plan(
                 parent_ref=parent_ref,
             )
         else:
-            work_package_id = next_story.work_package_id(existing_story)
+            work_package_id = op.work_package_id(existing_story)
             patch, warnings = build_patch_payload(
                 values=row.values,
                 current=existing_story,
@@ -1072,7 +970,7 @@ def build_implementation_plan(
         for predecessor in split_predecessors(row.values["Predecessors"]):
             predecessor_row = rows_by_key.get(predecessor)
             if predecessor_row is None:
-                raise next_story.ScriptError(
+                raise op.ScriptError(
                     "WORKBOOK_SCHEMA_MISMATCH",
                     f"Row {row.row_number} predecessor {predecessor!r} does not match a Story ID.",
                 )
@@ -1122,18 +1020,18 @@ def existing_precedes_relations(
     descendants: list[dict[str, Any]],
 ) -> set[tuple[int, int]]:
     story_ids = [
-        next_story.work_package_id(work_package)
+        op.work_package_id(work_package)
         for work_package in descendants
-        if next_story.work_package_type_name(work_package) == "Story"
+        if op.work_package_type_name(work_package) == "Story"
     ]
     relations: set[tuple[int, int]] = set()
     for story_id in story_ids:
-        document = next_story.api_get_json(
+        document = op.api_get_json(
             base_url,
             token,
             f"/api/v3/work_packages/{story_id}/relations",
         )
-        for relation in next_story.embedded_elements(document):
+        for relation in op.embedded_elements(document):
             if relation.get("type") != "precedes":
                 continue
             to_href = str(((relation.get("_links") or {}).get("to") or {}).get("href") or "")
@@ -1179,6 +1077,12 @@ def resolved_patch(
     return copied
 
 
+def relation_link_id(relation: dict[str, Any], name: str) -> int | None:
+    href = link_href(relation, name)
+    match = re.search(r"/work_packages/(\d+)$", href)
+    return int(match.group(1)) if match else None
+
+
 def apply_plan(
     base_url: str,
     token: str,
@@ -1200,38 +1104,34 @@ def apply_plan(
     initiative = phases["initiative"]
     if initiative["action"] == "reuse":
         initiative_id = int(initiative["work_package_id"])
-        verified = next_story.api_get_json(
-            base_url, token, f"/api/v3/work_packages/{initiative_id}"
-        )
+        verified = op.api_get_json(base_url, token, f"/api/v3/work_packages/{initiative_id}")
         applied["initiative"].append(
             {
                 "action": "reuse",
                 "key": initiative["key"],
-                "work_package_id": next_story.work_package_id(verified),
-                "subject": next_story.work_package_subject(verified),
-                "type": next_story.work_package_type_name(verified),
+                "work_package_id": op.work_package_id(verified),
+                "subject": op.work_package_subject(verified),
+                "type": op.work_package_type_name(verified),
                 "verified": True,
             }
         )
     else:
-        updated = next_story.api_request_json(
+        updated = op.api_request_json(
             "POST",
             base_url,
             token,
             f"/api/v3/projects/{project_id}/work_packages",
             body=initiative["patch"],
         )
-        initiative_id = next_story.work_package_id(updated)
-        verified = next_story.api_get_json(
-            base_url, token, f"/api/v3/work_packages/{initiative_id}"
-        )
+        initiative_id = op.work_package_id(updated)
+        verified = op.api_get_json(base_url, token, f"/api/v3/work_packages/{initiative_id}")
         applied["initiative"].append(
             {
                 "action": "create",
                 "key": initiative["key"],
-                "work_package_id": next_story.work_package_id(verified),
-                "subject": next_story.work_package_subject(verified),
-                "type": next_story.work_package_type_name(verified),
+                "work_package_id": op.work_package_id(verified),
+                "subject": op.work_package_subject(verified),
+                "type": op.work_package_type_name(verified),
                 "verified": True,
             }
         )
@@ -1241,7 +1141,7 @@ def apply_plan(
             version_hrefs[item["key"]] = item["href"]
             applied["versions"].append(item)
             continue
-        updated = next_story.api_request_json(
+        updated = op.api_request_json(
             "POST",
             base_url,
             token,
@@ -1250,18 +1150,20 @@ def apply_plan(
         )
         href = str(((updated.get("_links") or {}).get("self") or {}).get("href") or "")
         if not href:
-            raise next_story.ScriptError(
+            raise op.ScriptError(
                 "WORKBOOK_UPLOAD_FAILED",
                 f"Created Version {item['name']!r} did not include a self href.",
             )
+        verified = op.api_get_json(base_url, token, href)
         version_hrefs[item["key"]] = href
         applied["versions"].append(
             {
                 "action": "create",
                 "key": item["key"],
-                "version_id": updated.get("id"),
-                "name": updated.get("name") or item["name"],
+                "version_id": verified.get("id"),
+                "name": verified.get("name") or item["name"],
                 "href": href,
+                "verified": True,
             }
         )
 
@@ -1271,29 +1173,31 @@ def apply_plan(
             applied["epics"].append(item)
             continue
         patch = resolved_patch(item["patch"], initiative_id, epic_ids, version_hrefs)
-        updated = next_story.api_request_json(
+        updated = op.api_request_json(
             "POST",
             base_url,
             token,
             f"/api/v3/projects/{project_id}/work_packages",
             body=patch,
         )
-        epic_id = next_story.work_package_id(updated)
+        epic_id = op.work_package_id(updated)
+        verified = op.api_get_json(base_url, token, f"/api/v3/work_packages/{epic_id}")
         epic_ids[item["key"]] = epic_id
         applied["epics"].append(
             {
                 "action": "create",
                 "key": item["key"],
                 "work_package_id": epic_id,
-                "subject": next_story.work_package_subject(updated),
-                "status": next_story.work_package_status_name(updated),
+                "subject": op.work_package_subject(verified),
+                "status": op.work_package_status_name(verified),
+                "verified": True,
             }
         )
 
     for item in phases["stories"]:
         patch = resolved_patch(item["patch"], initiative_id, epic_ids, version_hrefs)
         if item["action"] == "create":
-            updated = next_story.api_request_json(
+            updated = op.api_request_json(
                 "POST",
                 base_url,
                 token,
@@ -1302,21 +1206,23 @@ def apply_plan(
             )
         else:
             work_package_id = item["work_package_id"]
-            updated = next_story.api_patch_json(
+            updated = op.api_patch_json(
                 base_url,
                 token,
                 f"/api/v3/work_packages/{work_package_id}",
                 patch,
             )
-        story_id = next_story.work_package_id(updated)
+        story_id = op.work_package_id(updated)
+        verified = op.api_get_json(base_url, token, f"/api/v3/work_packages/{story_id}")
         story_ids[item["key"]] = story_id
         applied["stories"].append(
             {
                 "action": item["action"],
                 "key": item["key"],
                 "work_package_id": story_id,
-                "subject": next_story.work_package_subject(updated),
-                "status": next_story.work_package_status_name(updated),
+                "subject": op.work_package_subject(verified),
+                "status": op.work_package_status_name(verified),
+                "verified": True,
             }
         )
 
@@ -1326,7 +1232,7 @@ def apply_plan(
             continue
         from_id = item["from_work_package_id"] or story_ids[item["from_story_key"]]
         to_id = item["to_work_package_id"] or story_ids[item["to_story_key"]]
-        created = next_story.api_request_json(
+        created = op.api_request_json(
             "POST",
             base_url,
             token,
@@ -1336,13 +1242,20 @@ def apply_plan(
                 "_links": {"to": {"href": f"/api/v3/work_packages/{to_id}"}},
             },
         )
+        relation_id = created.get("id")
+        verified = (
+            op.api_get_json(base_url, token, f"/api/v3/relations/{relation_id}")
+            if isinstance(relation_id, int)
+            else created
+        )
         applied["relations"].append(
             {
                 "action": "create",
-                "id": created.get("id"),
-                "from_work_package_id": from_id,
-                "to_work_package_id": to_id,
-                "relation_type": created.get("type") or item["relation_type"],
+                "id": verified.get("id"),
+                "from_work_package_id": relation_link_id(verified, "from") or from_id,
+                "to_work_package_id": relation_link_id(verified, "to") or to_id,
+                "relation_type": verified.get("type") or item["relation_type"],
+                "verified": True,
             }
         )
     return applied
@@ -1376,7 +1289,7 @@ def write_openproject_ids_to_workbook(
     try:
         id_index = headers.index("OpenProject ID")
     except ValueError as err:
-        raise next_story.ScriptError(
+        raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             "Workbook is missing required column: OpenProject ID",
         ) from err
@@ -1405,14 +1318,14 @@ def write_openproject_ids_to_workbook(
         return {"updated": False, "updated_rows": []}
 
     with zipfile.ZipFile(path) as workbook:
-        sheet_path = workbook_sheet_target(workbook, sheet_name)
+        sheet_path = workbook_module.workbook_sheet_target(workbook, sheet_name)
         entries = {name: workbook.read(name) for name in workbook.namelist() if name != sheet_path}
 
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
         for name, content in entries.items():
             workbook.writestr(name, content)
-        workbook.writestr(sheet_path, export_implementation_workbook.sheet_xml(table))
+        workbook.writestr(sheet_path, workbook_module.sheet_xml(table))
     tmp_path.replace(path)
     return {"updated": True, "updated_rows": updated_rows}
 
@@ -1434,7 +1347,7 @@ def write_initiative_metadata_to_workbook(
 
     try:
         table = read_xlsx_rows(path, sheet_name)
-    except next_story.ScriptError:
+    except op.ScriptError:
         return {"updated": False, "updated_fields": []}
     if not table:
         return {"updated": False, "updated_fields": []}
@@ -1468,14 +1381,14 @@ def write_initiative_metadata_to_workbook(
         return {"updated": False, "updated_fields": []}
 
     with zipfile.ZipFile(path) as workbook:
-        sheet_path = workbook_sheet_target(workbook, sheet_name)
+        sheet_path = workbook_module.workbook_sheet_target(workbook, sheet_name)
         entries = {name: workbook.read(name) for name in workbook.namelist() if name != sheet_path}
 
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
         for name, content in entries.items():
             workbook.writestr(name, content)
-        workbook.writestr(sheet_path, export_implementation_workbook.sheet_xml(table))
+        workbook.writestr(sheet_path, workbook_module.sheet_xml(table))
     tmp_path.replace(path)
     return {"updated": True, "updated_fields": updated_fields}
 
@@ -1519,8 +1432,8 @@ def emit_non_json(payload: dict[str, Any]) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        env = next_story.parse_env_file(Path(args.env_file))
-        next_story.require_env(
+        env = op.parse_env_file(Path(args.env_file))
+        op.require_env(
             env,
             ["OPENPROJECT_URL", "OPENPROJECT_API_TOKEN"],
         )
@@ -1538,14 +1451,12 @@ def main(argv: list[str] | None = None) -> int:
             workbook_project=workbook_project,
         )
         project_id = project_identifier(project)
-        statuses = next_story.embedded_elements(
-            next_story.api_get_json(base_url, token, "/api/v3/statuses")
+        statuses = op.embedded_elements(op.api_get_json(base_url, token, "/api/v3/statuses"))
+        types = op.embedded_elements(
+            op.api_get_json(base_url, token, f"/api/v3/projects/{project_id}/types")
         )
-        types = next_story.embedded_elements(
-            next_story.api_get_json(base_url, token, f"/api/v3/projects/{project_id}/types")
-        )
-        versions = next_story.embedded_elements(
-            next_story.api_get_json(base_url, token, f"/api/v3/projects/{project_id}/versions")
+        versions = op.embedded_elements(
+            op.api_get_json(base_url, token, f"/api/v3/projects/{project_id}/versions")
         )
         initiative = resolve_initiative_plan(
             base_url=base_url,
@@ -1611,7 +1522,7 @@ def main(argv: list[str] | None = None) -> int:
             "applied_openproject": applied,
             "workbook_update": workbook_update,
         }
-    except next_story.ScriptError as err:
+    except op.ScriptError as err:
         payload = build_error_payload(err.code, str(err))
 
     if args.json:

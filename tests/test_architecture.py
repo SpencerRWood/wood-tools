@@ -123,6 +123,7 @@ def test_legacy_loop_and_backlog_routes_are_absent() -> None:
         SRC_ROOT / "wood_project" / "backlog",
         SRC_ROOT / "wood_project" / "story_loop",
         SRC_ROOT / "wood_project" / "release_loop",
+        SRC_ROOT / "wood_project" / "implementation" / "_next_story.py",
     ]
 
     assert [path for path in legacy_paths if path.exists()] == []
