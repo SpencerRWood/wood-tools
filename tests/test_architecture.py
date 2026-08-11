@@ -3,6 +3,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from wood_project.cli import build_parser
+from wood_project.commands import COMMAND_MODULES
+
 SRC_ROOT = Path(__file__).parents[1] / "src"
 
 ALLOWED_PACKAGE_DEPENDENCIES = {
@@ -98,3 +101,39 @@ def test_core_modules_do_not_import_cli_layers() -> None:
         if ".cli." in module or module.endswith(".cli")
     ]
     assert violations == []
+
+
+def test_wood_project_canonical_command_modules_are_authoritative() -> None:
+    module_names = tuple(module.__name__.rsplit(".", maxsplit=1)[-1] for module in COMMAND_MODULES)
+
+    assert module_names == (
+        "story",
+        "implementation",
+        "release",
+        "openproject",
+        "resources",
+        "project",
+    )
+
+
+def test_legacy_loop_and_backlog_routes_are_absent() -> None:
+    legacy_paths = [
+        SRC_ROOT / "wood_project" / "commands" / "story_backlog.py",
+        SRC_ROOT / "wood_project" / "story_backlog",
+        SRC_ROOT / "wood_project" / "backlog",
+        SRC_ROOT / "wood_project" / "story_loop",
+        SRC_ROOT / "wood_project" / "release_loop",
+    ]
+
+    assert [path for path in legacy_paths if path.exists()] == []
+
+
+def test_wood_project_help_presents_primary_loop_surface_first() -> None:
+    help_text = build_parser().format_help()
+
+    assert "Deterministic Wood Agents execution surface" in help_text
+    assert "{story,implementation,release,user,project,resource,init,show,validate,link}" in (
+        help_text.replace("\n", "")
+    )
+    assert "story-backlog" not in help_text
+    assert "backlog" not in help_text

@@ -12,10 +12,10 @@ from resources.packages import ResourceError
 
 from .commands import COMMAND_MODULES
 from .core.models import ProjectError
+from .implementation import ImplementationWorkflowError
 from .openproject.models import OpenProjectError
 from .release import ReleaseWorkflowError
 from .story import StoryWorkflowError
-from .story_backlog import StoryBacklogWorkflowError
 
 
 def _command_name(args: argparse.Namespace) -> str:
@@ -27,10 +27,8 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"story-{getattr(args, 'story_command', 'unknown')}"
     if args.command == "release":
         return f"release-{getattr(args, 'release_command', 'unknown')}"
-    if args.command == "story-backlog":
-        return f"story-backlog-{getattr(args, 'story_backlog_command', 'unknown')}"
-    if args.command == "backlog":
-        return f"backlog-{getattr(args, 'story_backlog_command', 'unknown')}"
+    if args.command == "implementation":
+        return f"implementation-{getattr(args, 'implementation_command', 'unknown')}"
     return args.command
 
 
@@ -149,6 +147,17 @@ def _summarize_json_payload(
                 f"Re-run wood-project story {command.removeprefix('story-')} with --apply."
             ],
         )
+    if command == "release-check":
+        return success_output(
+            command=command,
+            mutation="read-only",
+            summary=(
+                "Release readiness check passed."
+                if payload.get("ready")
+                else "Release readiness check found blockers."
+            ),
+            data=payload,
+        )
     if command in {"release-bump", "release-tag", "release-github-create"}:
         if apply:
             return success_output(
@@ -165,25 +174,25 @@ def _summarize_json_payload(
                 f"Re-run wood-project release {command.removeprefix('release-')} with --apply."
             ],
         )
-    if command == "story-backlog-export":
+    if command == "implementation-export":
         return success_output(
             command=command,
             mutation="read-only",
-            summary="Story Backlog snapshot exported.",
+            summary="Implementation workbook exported.",
             data=payload,
         )
-    if command == "backlog-export":
+    if command == "implementation-plan":
         return success_output(
             command=command,
             mutation="read-only",
-            summary="Story Backlog snapshot exported.",
+            summary="Implementation workbook plan built.",
             data=payload,
         )
-    if command in {"story-backlog-upload-plan", "backlog-upload"}:
+    if command == "implementation-apply":
         return success_output(
             command=command,
-            mutation="read-only",
-            summary="Story Backlog upload plan built.",
+            mutation="mutating",
+            summary="Implementation workbook plan applied.",
             data=payload,
         )
     summary = (
@@ -200,7 +209,12 @@ def _summarize_json_payload(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="wood-project", description="Manage workspace metadata")
+    parser = argparse.ArgumentParser(
+        prog="wood-project",
+        description=(
+            "Deterministic Wood Agents execution surface for story, implementation, and release"
+        ),
+    )
     parser.add_argument(
         "--project-root",
         type=Path,
@@ -237,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         OpenProjectError,
         StoryWorkflowError,
         ReleaseWorkflowError,
-        StoryBacklogWorkflowError,
+        ImplementationWorkflowError,
     ) as exc:
         command = _command_name(args)
         message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
@@ -256,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
                         "release-bump",
                         "release-tag",
                         "release-github-create",
+                        "implementation-apply",
                     }
                     else "read-only"
                 ),
@@ -264,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
                     [{"code": exc.code, "message": message}]
                     if isinstance(
                         exc,
-                        OpenProjectError | StoryWorkflowError | StoryBacklogWorkflowError,
+                        OpenProjectError | StoryWorkflowError | ImplementationWorkflowError,
                     )
                     else [{"message": message}]
                 ),

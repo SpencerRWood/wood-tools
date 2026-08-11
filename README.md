@@ -5,21 +5,30 @@ Deterministic Python CLI tooling for project delivery workflows.
 ## What This Repo Includes
 
 - `wood-config` for local config initialization, profile management, validation, and diagnostics
-- `wood-project` for workspace metadata, resources, OpenProject inspection, and Story workflows
+- `wood-project` as the single deterministic execution surface for Wood Agents loops
 - `wood-secrets` for provider health checks and redacted secret reference resolution
 - `wood-template` for planning and applying built-in or installed project templates
 
-### Package Boundaries
+### Architecture Boundaries
 
 - Each public command is implemented by its capability package's `cli.py` module.
 - Domain behavior shared by a package's CLI and other consumers lives in that package's `core/`
   package.
-- `wood_project` owns local project metadata, its command families, and the shared OpenProject
-  client.
+- Wood Agents own orchestration, workflow policy, approval timing, and cross-system coordination.
+- Wood Tools, through `wood-project`, owns deterministic inspection, validation, planning, and
+  mutation.
+- `wood_project` owns local project metadata, the deterministic Wood Agents command surface, and
+  the shared OpenProject client.
+- `wood_project.story`, `wood_project.implementation`, and `wood_project.release` are the three
+  primary loop-specific domains.
+- `wood_project.commands.openproject`, `wood_project.commands.resources`, and
+  `wood_project.commands.project` provide supporting context and precondition commands.
 - `resources.packages` owns generic resource manifests, validation, installation, and lookup as a
   shared library package with no console entry point.
-- `wood_project.story` owns Story Loop discovery, status, and branch behavior and reuses the
+- `wood_project.story` owns Story discovery, status, and branch behavior and reuses the
   project-owned OpenProject client.
+- `wood_project.implementation` owns Implementation Workbook export, planning, and apply behavior.
+- `wood_project.release` owns release readiness, version bump, tag, and GitHub release behavior.
 - `wood_templates` owns the template CLI, template domain API, and all built-in template packs.
 - `resources.cli` owns output envelopes and audit logging shared by every command.
 
@@ -47,6 +56,9 @@ src/
       project.py
       resources.py
       openproject.py
+      story.py
+      implementation.py
+      release.py
     core/
       documents.py
       models.py
@@ -63,6 +75,15 @@ src/
       discovery.py
       status.py
       branches.py
+    implementation/
+      export.py
+      planner.py
+      workflows.py
+    release/
+      check.py
+      github.py
+      tag.py
+      version.py
   wood_templates/
     cli.py
     core/
@@ -281,7 +302,8 @@ Behavior notes:
 
 ### `wood-project`
 
-Workspace metadata manager for canonical `project.json` files.
+Deterministic Wood Agents execution surface for story, implementation, and release, plus
+supporting project context commands.
 
 Default paths:
 
@@ -314,7 +336,41 @@ Optional fields:
 - Mutating `wood-project` commands preflight the required parent directories and fail early with clear errors when the Wood home is unavailable or not writable.
 - No `wood-project` command creates or requires a project-local `.wood/` directory.
 
-Commands:
+Primary loop-specific command groups:
+
+- `wood-project story show <id>` inspect one work package plus description and relation context
+- `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
+- `wood-project story set-status <id> <status>` preview or apply Story status transitions
+- `wood-project story create-branch <id>` preview or apply Story branch preparation
+- `wood-project implementation export <initiative-id>` export a read-only implementation workbook
+  snapshot
+- `wood-project implementation plan <workbook.xlsx>` build a deterministic implementation plan
+  without applying it
+- `wood-project implementation apply <workbook.xlsx>` apply an approved implementation plan to
+  OpenProject
+- `wood-project release check` run read-only release readiness checks
+- `wood-project release bump <patch|minor|major|X.Y.Z>` preview or apply a static
+  `pyproject.toml` version bump
+- `wood-project release tag` preview or create local tag `v<project.version>`
+- `wood-project release github-create` preview or create a GitHub release from an existing tag
+
+Supporting context and precondition command groups:
+
+- `wood-project user` inspect the authenticated OpenProject user
+- `wood-project project [project-id]` inspect an OpenProject project
+- `wood-project resource install <path>` preview or apply resource installation
+- `wood-project resource inspect <kind> <name>` inspect installed resource metadata
+- `wood-project resource path <kind> <name>` resolve an installed resource path
+- `wood-project init`, `show`, `validate`, and `link repo` manage local project metadata
+
+Legacy compatibility policy:
+
+- Keep one authoritative implementation path for each capability.
+- Do not add hidden aliases, deprecated command shims, or duplicate legacy modules.
+- Internal callers should use `story`, `implementation`, and `release` directly.
+- Removed backlog or loop-specific route names are not preserved as CLI wrappers.
+
+All commands:
 
 - `wood-project init` preview the resolved project metadata
 - `wood-project init --apply` write `project.json` and create required directories
@@ -324,17 +380,14 @@ Commands:
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
 - `wood-project resource path <kind> <name>` resolve an installed resource path through the stable CLI contract
-- `wood-template generate <name>` preview rendering a template into the current project directory
-- `wood-template generate <name> --apply` apply the approved template generation
-- `wood-template list` list resolved template pack names
-- `wood-template list <name> --info` show detailed metadata for one resolved template pack
-- `wood-template show <name>` show a resolved template pack contract
 - `wood-project user` inspect the authenticated OpenProject user
 - `wood-project project [project-id]` inspect an OpenProject project, defaulting to the configured project
 - `wood-project story show <id>` inspect one work package plus description and relation context
 - `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
-- `wood-project backlog export <initiative-id>` export a read-only Story Backlog snapshot
-- `wood-project backlog upload <workbook.xlsx> --initiative-id <id>` build a deterministic upload plan without applying it
+- `wood-project implementation export <initiative-id>` export a read-only implementation workbook snapshot
+- `wood-project implementation plan <workbook.xlsx>` build a deterministic implementation plan without applying it
+- `wood-project implementation apply <workbook.xlsx>` apply an approved implementation plan to OpenProject
+- `wood-project release check` run read-only release readiness checks
 - `wood-project release bump <patch|minor|major|X.Y.Z>` preview a static `pyproject.toml` version bump
 - `wood-project release bump <patch|minor|major|X.Y.Z> --apply` apply an approved version bump
 - `wood-project release tag` preview creating local tag `v<project.version>`
@@ -410,46 +463,58 @@ Examples:
 wood-project story next 208 --json
 wood-project story set-status 301 "In progress" --json
 wood-project story set-status 301 "In progress" --apply --json
-wood-project story create-branch 301 --title "Productize Story Loop commands" --json
-wood-project story create-branch 301 --title "Productize Story Loop commands" --apply --json
+wood-project story create-branch 301 --title "Productize Story commands" --json
+wood-project story create-branch 301 --title "Productize Story commands" --apply --json
 ```
 
-#### `wood-project backlog`
+#### `wood-project implementation`
 
-Story Backlog workflow commands for exporting OpenProject snapshots and previewing workbook upload
-plans.
+Implementation workbook commands for exporting OpenProject snapshots, planning workbook publication,
+and applying approved plans.
 
 Commands:
 
-- `wood-project backlog export <initiative-id>` export `story_backlog.json` and `story_backlog.xlsx`
-- `wood-project backlog upload <workbook.xlsx> --initiative-id <id>` build the deterministic OpenProject upload plan without applying it
+- `wood-project implementation export <initiative-id>` export `implementation_workbook.json` and `implementation_workbook.xlsx`
+- `wood-project implementation plan <workbook.xlsx>` build the deterministic OpenProject implementation plan without applying it
+- `wood-project implementation apply <workbook.xlsx>` apply the approved implementation plan to OpenProject
 
 Options:
 
 - `--env-file <path>` read resolved OpenProject settings from a specific file, default `.env.resolved`
-- `--output-dir <path>` write export artifacts to a specific directory, default `/tmp/wood-tools/story-backlog`
+- `--output-dir <path>` write export artifacts to a specific directory, default `/tmp/wood-tools/implementation-workbook`
 - `--story-type <name>` choose the exported story type, default `Story`
 - `--epic-type <name>` choose the hierarchy epic type, default `Epic`
 - `--closed-status <name>` provide a closed status name for export; repeatable
 - `--story-id-field <key>` read an optional OpenProject field into `Story ID`
 - `--requirement-ids-field <key>` read an optional OpenProject field into `Requirement IDs`
 - `--page-size <count>` control OpenProject collection reads for export, default `500`
-- `--sheet-name <name>` choose the workbook tab for upload planning, default `Story Backlog`
-- `--initiative-id <id>` validate and provide the root work-package ID for upload planning
-- `--dry-run` explicitly request the default non-mutating upload plan
+- `--sheet-name <name>` choose the workbook tab for planning or apply, default `Implementation`
+- `--initiative-id <id>` optionally override the workbook-derived root work-package ID for planning or apply
 - `--json` emit deterministic JSON for agent workflows
 
-Story Backlog behavior:
+Implementation workbook behavior:
 
-- `backlog export` is read-only against OpenProject and writes local snapshot artifacts.
-- `backlog upload` defaults to dry-run planning and performs no OpenProject mutations.
-- Applying upload plans remains an explicit external-system operation outside this first-class planning command.
+- `implementation export` is read-only against OpenProject and writes local snapshot artifacts.
+- `implementation export <initiative-id>` still targets an existing OpenProject hierarchy.
+- `implementation plan` performs no OpenProject mutations.
+- `implementation apply` is the only implementation-workbook mode that mutates OpenProject.
+- Planning and apply resolve the target Project and Root Work Package from workbook metadata.
+- Existing root work packages are reused by ID or unique subject/type match; missing root work
+  packages are planned for creation.
+- The workbook is treated as the desired release state: Root Work Package, Versions, Epics, Stories, and
+  predecessor relations are reused when an ID or unique deterministic match exists, and are
+  planned for creation otherwise.
+- Ambiguous matches stop planning instead of guessing.
+- Successful apply writes confirmed Story OpenProject IDs back to the `OpenProject ID` workbook
+  column and confirmed root metadata back to the workbook so repeated runs are idempotent.
+- Google Drive synchronization remains outside the `wood-project implementation` command.
 
 Examples:
 
 ```bash
-wood-project backlog export 208 --output-dir /tmp/wood-tools/story-backlog/current --json
-wood-project backlog upload /tmp/wood-tools/story-backlog/current/story_backlog.xlsx --initiative-id 208 --dry-run --json
+wood-project implementation export 208 --output-dir /tmp/wood-tools/implementation-workbook/current --json
+wood-project implementation plan /tmp/wood-tools/implementation-workbook/current/implementation_workbook.xlsx --json
+wood-project implementation apply /tmp/wood-tools/implementation-workbook/current/implementation_workbook.xlsx --json
 ```
 
 #### `wood-project release`
@@ -458,6 +523,7 @@ Release workflow commands for deterministic version, tag, and GitHub release pre
 
 Commands:
 
+- `wood-project release check` run read-only readiness checks for the current release
 - `wood-project release bump <patch|minor|major|X.Y.Z>` preview a `[project].version` update in `pyproject.toml`
 - `wood-project release bump <patch|minor|major|X.Y.Z> --apply` apply the approved version update
 - `wood-project release tag` preview creating local git tag `v<project.version>`
@@ -468,7 +534,13 @@ Commands:
 Options:
 
 - `--pyproject <path>` read version metadata from a specific `pyproject.toml`, default `pyproject.toml`
-- `--version <X.Y.Z>` use an explicit version for `tag` or `github-create`
+- `--version <X.Y.Z>` use an explicit version for `check`, `tag`, or `github-create`
+- `--root-work-package-id <id>` include OpenProject story readiness under a root work package during `check`
+- `--openproject-version <name>` limit `release check` story readiness to one OpenProject Version
+- `--config-path <path>` override the user-global `wood-config` file for `release check`
+- `--profile <name>` read OpenProject settings from a specific profile for `release check`
+- `--type <name>` choose the story work-package type for `release check`, default `Story`
+- `--page-size <count>` control OpenProject collection reads for `release check`, default `1000`
 - `--allow-dirty` allow `release tag --apply` with a dirty worktree after explicit approval
 - `--generate-notes` pass GitHub's generated release notes flag to `github-create`
 - `--notes-from-history` build release notes from commit history before `github-create`
@@ -476,6 +548,10 @@ Options:
 
 Release workflow behavior:
 
+- `wood-project release check` is read-only and returns structured readiness JSON with
+  pass/block/skip checks for version state, repository state, local tag conflicts, GitHub release
+  conflicts when available, and OpenProject incomplete/blocked stories when a root work package is
+  provided.
 - `wood-project release bump`, `release tag`, and `release github-create` are preview-by-default.
 - Mutation requires `--apply`; use separate approval for version edits, tag creation, and GitHub release creation.
 - `release tag` refuses dirty worktrees unless `--allow-dirty` is set.
@@ -484,6 +560,8 @@ Release workflow behavior:
 Examples:
 
 ```bash
+wood-project release check --json
+wood-project release check --root-work-package-id 208 --openproject-version "V0.3 Deterministic Workflow CLI" --json
 wood-project release bump patch --json
 wood-project release bump patch --apply --json
 wood-project release tag --json
@@ -492,17 +570,17 @@ wood-project release github-create --notes-from-history --json
 wood-project release github-create --notes-from-history --apply --json
 ```
 
-### Story Loop Approval Gates
+### Story Approval Gates
 
-The Story Loop keeps read-only discovery and dry-run previews automatic, including repository
+Story keeps read-only discovery and dry-run previews automatic, including repository
 inspection, next-story lookup, status-change previews, and branch previews. After discovery, one
 explicit start-work approval may cover the normal implementation batch for the current Story:
 setting the OpenProject Story to In Progress, preparing the Story branch, editing scoped local
 files, and running relevant local checks.
 
 Separate approval is still required when the working tree already has unrelated changes and for
-finalization or external side effects such as commit, push, merge, deploy, Story closure, backlog
-sync, Google Drive updates, archival, or notifications.
+finalization or external side effects such as commit, push, merge, deploy, Story closure,
+implementation workbook sync, Google Drive updates, archival, or notifications.
 
 Resource manifest format:
 

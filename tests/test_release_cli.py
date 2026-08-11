@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from wood_project.cli import main as project_main
-from wood_project.release import github, tag
+from wood_project.release import check, github, tag
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +46,54 @@ def test_project_release_bump_is_preview_by_default(
     assert payload["data"]["old_version"] == "0.2.0"
     assert payload["data"]["new_version"] == "0.2.1"
     assert 'version = "0.2.0"' in pyproject.read_text(encoding="utf-8")
+
+
+def test_project_release_check_reports_read_only_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    write_pyproject(pyproject)
+
+    monkeypatch.setattr(
+        check,
+        "inspect_repo_state",
+        lambda: (
+            tmp_path,
+            {
+                "path": str(tmp_path),
+                "current_branch": "main",
+                "working_tree_clean": True,
+                "modified_files": [],
+                "untracked_files": [],
+                "ahead": 0,
+                "behind": 0,
+                "head": "abc1234",
+            },
+        ),
+    )
+    monkeypatch.setattr(check, "tag_exists", lambda repo_root, tag_name: False)
+    monkeypatch.setattr(
+        check,
+        "github_release_status",
+        lambda tag_name: {"checked": True, "exists": False, "reason": ""},
+    )
+
+    assert project_main(["release", "check", "--pyproject", str(pyproject), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "release-check"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["ready"] is True
+    assert payload["data"]["version"] == {"version": "0.2.0", "tag": "v0.2.0"}
+    assert [item["name"] for item in payload["data"]["checks"]] == [
+        "version",
+        "repository",
+        "local-tag",
+        "github-release",
+        "openproject-stories",
+    ]
 
 
 def test_project_release_bump_apply_updates_pyproject(
