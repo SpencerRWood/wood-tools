@@ -6,8 +6,9 @@ from typing import Any
 from .models import ConfigError
 
 REQUIRED_PATH_KEYS = ("project_root", "scheduler_root", "template_search_paths")
+OPTIONAL_PATH_KEYS = ("secrets_root",)
 ALIAS_PATH_FIELDS = ("project_aliases",)
-SUPPORTED_PATH_KEYS = frozenset((*REQUIRED_PATH_KEYS, *ALIAS_PATH_FIELDS))
+SUPPORTED_PATH_KEYS = frozenset((*REQUIRED_PATH_KEYS, *OPTIONAL_PATH_KEYS, *ALIAS_PATH_FIELDS))
 
 
 def _is_non_empty_string(value: Any) -> bool:

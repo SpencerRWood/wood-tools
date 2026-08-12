@@ -231,6 +231,8 @@ Supported commands:
 - `wood-secrets resolve --ref <reference> --redacted`
 - `wood-secrets resolve-env`
 - `wood-secrets resolve-env --apply`
+- `wood-secrets materialize [name]`
+- `wood-secrets materialize [name] --apply`
 - `wood-secrets doctor`
 
 Supported reference syntax:
@@ -274,6 +276,8 @@ wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redac
 wood-secrets resolve --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' --redacted
 wood-secrets resolve-env --input .env --output .env.resolved --json
 wood-secrets resolve-env --input .env --output .env.resolved --apply --force
+wood-secrets materialize --json
+wood-secrets materialize openproject-token --apply --json
 wood-secrets doctor --json
 ```
 
@@ -293,6 +297,10 @@ Behavior notes:
 - `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
 - `wood-secrets resolve-env` resolves supported `*_REF` entries from an env file into non-`_REF` keys in a local resolved env file; it previews by default and writes only with `--apply`.
 - `wood-secrets resolve-env` reports resolved keys and references only; it never prints resolved secret values.
+- `wood-secrets materialize [name]` previews configured local secret files by name, reference, target path, and state without printing secret values.
+- `wood-secrets materialize [name] --apply` writes configured secrets beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
+- Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and relative `target` fields.
+- Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, and skip unchanged files.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
 - `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
