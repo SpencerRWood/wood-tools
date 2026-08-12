@@ -5,6 +5,8 @@ import json
 import pytest
 
 from wood_config.cli import main
+from wood_config.core.document import _default_document
+from wood_config.core.validation import validate_config
 
 
 def test_init_set_get_show_success_path(
@@ -519,6 +521,27 @@ def test_validate_reports_invalid_alias_targets(
         payload["data"]["alias_resolution"]["project_aliases"]["demo"]["resolved_path"]
         == "/mnt/demo"
     )
+
+
+def test_validate_allows_materialized_secret_without_target() -> None:
+    document = _default_document()
+    profile = document["profiles"]["default"]
+    profile["integrations"]["openproject"]["url"] = "https://openproject.example.test"
+    profile["integrations"]["openproject"]["project_id"] = "208"
+    profile["integrations"]["openproject"]["token_ref"] = "env://OPENPROJECT_TOKEN"
+    profile["integrations"]["ntfy"]["url"] = "https://ntfy.example.test"
+    profile["integrations"]["ntfy"]["token_ref"] = "env://NTFY_TOKEN"
+    profile["integrations"]["vaultwarden"]["config_ref"] = "env://VAULTWARDEN_CONFIG"
+    profile["integrations"]["vaultwarden"]["materialized_secrets"] = {
+        "openproject-token": {
+            "ref": "vaultwarden://openproject/wood-tools/api-token#API_TOKEN",
+        }
+    }
+
+    payload = validate_config(document)
+
+    assert payload["valid"] is True
+    assert payload["errors"] == []
 
 
 def test_json_output_for_validate_and_doctor(

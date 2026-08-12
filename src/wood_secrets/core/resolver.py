@@ -18,6 +18,7 @@ from .materialization import (
     materialization_result,
     materialization_status_result,
     materialized_secret_definitions,
+    materialized_secret_target,
     safe_target_path,
     selected_definitions,
     status_state,
@@ -466,7 +467,8 @@ class SecretResolver:
 
         for definition in definitions:
             try:
-                target = safe_target_path(root, definition.target)
+                target_value, identity = materialized_secret_target(definition)
+                target = safe_target_path(root, target_value)
                 resolved = self.resolve(definition.reference)
                 state = current_state(target, resolved.value)
                 changed = state in {"missing", "refresh-needed"}
@@ -483,6 +485,7 @@ class SecretResolver:
                         state=output_state,
                         apply=apply,
                         changed=changed if apply else False,
+                        identity=identity,
                     )
                 )
             except (SecretProviderError, MaterializationError) as exc:
@@ -512,9 +515,11 @@ class SecretResolver:
 
         for definition in definitions:
             try:
-                target = safe_target_path(root, definition.target)
+                target_value, identity = materialized_secret_target(definition)
+                target = safe_target_path(root, target_value)
             except MaterializationError as exc:
-                target = root.expanduser() / definition.target
+                target_value = definition.target or definition.reference
+                target = root.expanduser() / target_value
                 results.append(
                     materialization_status_result(
                         name=definition.name,
@@ -541,6 +546,7 @@ class SecretResolver:
                         state=state,
                         provider=resolved.provider,
                         from_env_fallback=resolved.from_env_fallback,
+                        identity=identity,
                     )
                 )
             except SecretProviderError as exc:
@@ -554,6 +560,7 @@ class SecretResolver:
                         provider=None,
                         from_env_fallback=False,
                         error_type=type(exc).__name__,
+                        identity=identity,
                     )
                 )
 

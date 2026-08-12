@@ -20,7 +20,17 @@ class MaterializationError(SecretProviderError):
 class MaterializedSecretDefinition:
     name: str
     reference: str
-    target: str
+    target: str | None
+
+
+@dataclass(frozen=True)
+class MaterializedSecretIdentity:
+    service: str
+    principal: str
+    credential: str
+
+    def to_relative_target(self) -> str:
+        return f"{self.service}/{self.principal}/{self.credential}"
 
 
 def active_profile_values() -> dict[str, Any]:
@@ -66,15 +76,17 @@ def materialized_secret_definitions(values: dict[str, Any]) -> list[Materialized
         target = definition.get("target")
         if not isinstance(reference, str) or not reference.strip():
             raise MaterializationError(f"Materialized secret {name!r} must include ref.")
-        if not isinstance(target, str) or not target.strip():
-            raise MaterializationError(f"Materialized secret {name!r} must include target.")
+        if target is not None and (not isinstance(target, str) or not target.strip()):
+            raise MaterializationError(
+                f"Materialized secret {name!r} target must be a non-empty string when provided."
+            )
         if parse_reference_scheme(reference) == "vaultwarden":
             parse_vaultwarden_reference(reference)
         materializations.append(
             MaterializedSecretDefinition(
                 name=name.strip(),
                 reference=reference.strip(),
-                target=target.strip(),
+                target=target.strip() if isinstance(target, str) else None,
             )
         )
     return materializations
@@ -91,6 +103,58 @@ def selected_definitions(
         known = ", ".join(definition.name for definition in definitions) or "none configured"
         raise MaterializationError(f"Unknown materialized secret {name!r}. Known: {known}.")
     return selected
+
+
+def _validate_identity_component(value: str) -> str:
+    component = value.strip()
+    if not component or component in {".", ".."}:
+        raise MaterializationError(
+            "Vaultwarden materialization identity must include service, principal, and credential."
+        )
+    if "/" in component or "\\" in component:
+        raise MaterializationError(
+            "Vaultwarden materialization identity components cannot contain path separators."
+        )
+    if Path(component).is_absolute():
+        raise MaterializationError(
+            "Vaultwarden materialization identity components cannot be absolute paths."
+        )
+    return component
+
+
+def vaultwarden_materialization_identity(reference: str) -> MaterializedSecretIdentity:
+    if parse_reference_scheme(reference) != "vaultwarden":
+        raise MaterializationError(
+            "Materialized secrets without explicit targets require vaultwarden:// references."
+        )
+
+    raw_path = reference[len("vaultwarden://") :].partition("#")[0]
+    if raw_path != raw_path.strip("/"):
+        raise MaterializationError(
+            "Vaultwarden materialization identity cannot start or end with '/'."
+        )
+    raw_parts = raw_path.split("/")
+    if len(raw_parts) != 3:
+        raise MaterializationError(
+            "Vaultwarden materialization identity must be service/principal/credential."
+        )
+    service, principal, credential = (
+        _validate_identity_component(part) for part in raw_parts
+    )
+    return MaterializedSecretIdentity(
+        service=service,
+        principal=principal,
+        credential=credential,
+    )
+
+
+def materialized_secret_target(
+    definition: MaterializedSecretDefinition,
+) -> tuple[str, MaterializedSecretIdentity | None]:
+    if definition.target is not None:
+        return definition.target, None
+    identity = vaultwarden_materialization_identity(definition.reference)
+    return identity.to_relative_target(), identity
 
 
 def safe_target_path(root: Path, target: str) -> Path:
@@ -221,8 +285,9 @@ def materialization_result(
     state: str,
     apply: bool,
     changed: bool,
+    identity: MaterializedSecretIdentity | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "name": name,
         "reference": reference,
         "target": str(path),
@@ -231,6 +296,15 @@ def materialization_result(
         "applied": apply,
         "redacted_value": "[REDACTED]",
     }
+    if identity is not None:
+        payload.update(
+            {
+                "service": identity.service,
+                "principal": identity.principal,
+                "credential": identity.credential,
+            }
+        )
+    return payload
 
 
 def materialization_status_result(
@@ -243,9 +317,10 @@ def materialization_status_result(
     provider: str | None,
     from_env_fallback: bool,
     error_type: str | None = None,
+    identity: MaterializedSecretIdentity | None = None,
 ) -> dict[str, Any]:
     metadata = path_metadata(root, path)
-    return {
+    payload = {
         "name": name,
         "reference": reference,
         "target": str(path),
@@ -256,3 +331,12 @@ def materialization_status_result(
         "redacted_value": "[REDACTED]",
         **metadata,
     }
+    if identity is not None:
+        payload.update(
+            {
+                "service": identity.service,
+                "principal": identity.principal,
+                "credential": identity.credential,
+            }
+        )
+    return payload

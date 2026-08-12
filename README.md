@@ -302,10 +302,13 @@ Behavior notes:
 - `wood-secrets materialize [name]` previews configured local secret files by name, reference, target path, and state without printing secret values.
 - `wood-secrets materialize [name] --apply` writes configured secrets beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
 - `wood-secrets materialize-status [name]` inspects configured materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`.
-- Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and relative `target` fields.
+- Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and optional relative `target` fields.
+- When `target` is omitted, `vaultwarden://service/principal/credential#FIELD` references materialize to `paths.secrets_root/service/principal/credential`.
+- Explicit `target` values remain supported as overrides for existing configurations.
 - Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, skip unchanged files, and report unsafe permissions deterministically.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
+- Automatic materialization requires exactly three Vaultwarden identity path segments: service, principal, and credential.
 - `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
 - Vaultwarden runtime session files are restricted to mode `0600`, and command output never prints the session token.
