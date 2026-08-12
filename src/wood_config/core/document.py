@@ -39,6 +39,7 @@ def _default_document() -> dict[str, Any]:
         "paths": {
             "project_root": "./projects",
             "project_aliases": {},
+            "secrets_root": "~/.wood/secrets",
             "scheduler_root": "./scheduler",
             "template_search_paths": ["./templates"],
         },
@@ -60,6 +61,7 @@ def _default_document() -> dict[str, Any]:
                 "cli": {
                     "executable": "bw",
                 },
+                "materialized_secrets": {},
             },
         },
         "wood_agents": {

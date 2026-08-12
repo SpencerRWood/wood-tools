@@ -9,6 +9,18 @@ from typing import Any
 
 from wood_config.core import ConfigError, build_paths, load_config
 
+from .materialization import (
+    MaterializationError,
+    active_profile_values,
+    configured_secrets_root,
+    current_state,
+    ensure_private_directory,
+    materialization_result,
+    materialized_secret_definitions,
+    safe_target_path,
+    selected_definitions,
+    write_secret_atomic,
+)
 from .providers import (
     EnvironmentSecretProvider,
     InvalidSecretReferenceError,
@@ -441,6 +453,53 @@ class SecretResolver:
             "providers": statuses,
             "checks": checks,
             "issues": issues,
+        }
+
+    def materialize(self, name: str | None = None, *, apply: bool = False) -> dict[str, Any]:
+        values = active_profile_values()
+        root = configured_secrets_root(values)
+        definitions = selected_definitions(materialized_secret_definitions(values), name)
+        results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+
+        for definition in definitions:
+            try:
+                target = safe_target_path(root, definition.target)
+                resolved = self.resolve(definition.reference)
+                state = current_state(target, resolved.value)
+                changed = state in {"missing", "refresh-needed"}
+                output_state = state
+                if apply and changed:
+                    ensure_private_directory(root)
+                    write_secret_atomic(target, resolved.value)
+                    output_state = "created" if state == "missing" else "updated"
+                results.append(
+                    materialization_result(
+                        name=definition.name,
+                        reference=definition.reference,
+                        path=target,
+                        state=output_state,
+                        apply=apply,
+                        changed=changed if apply else False,
+                    )
+                )
+            except (SecretProviderError, MaterializationError) as exc:
+                errors.append(
+                    {
+                        "name": definition.name,
+                        "reference": definition.reference,
+                        "error_type": type(exc).__name__,
+                        "message": "Materialized secret was not changed.",
+                    }
+                )
+
+        return {
+            "ok": not errors,
+            "apply": apply,
+            "secrets_root": str(root.expanduser()),
+            "selected_count": len(definitions),
+            "materialized": results,
+            "errors": errors,
         }
 
 

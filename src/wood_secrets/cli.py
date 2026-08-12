@@ -156,6 +156,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_env_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    materialize_parser = subparsers.add_parser(
+        "materialize",
+        help="Preview or apply configured local secret materialization",
+    )
+    materialize_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
+    materialize_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write configured materialized secrets. Without --apply, only preview.",
+    )
+    materialize_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
@@ -329,6 +341,36 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"would resolve {item.output_key} from {item.reference}")
             print("preview complete; no files were written")
             return 0
+
+        if args.command == "materialize":
+            payload = resolver.materialize(args.name, apply=args.apply)
+            if args.json:
+                envelope_builder = success_output if payload["ok"] else warning_output
+                envelope = envelope_builder(
+                    command="materialize",
+                    mutation="mutating" if args.apply else "read-only",
+                    summary=(
+                        "Materialized secret apply completed."
+                        if args.apply and payload["ok"]
+                        else "Materialized secret preview completed."
+                        if payload["ok"]
+                        else "One or more materialized secrets were not changed."
+                    ),
+                    data=payload,
+                    warnings=payload["errors"] if not payload["ok"] else None,
+                    next_actions=(
+                        ["Re-run wood-secrets materialize with --apply to write files."]
+                        if not args.apply and payload["ok"]
+                        else None
+                    ),
+                )
+                return _emit(envelope, json_output=True, command_args=command_args)
+            for item in payload["materialized"]:
+                verb = "applied" if args.apply else "would materialize"
+                print(f"{verb} {item['name']} -> {item['target']} ({item['state']})")
+            for item in payload["errors"]:
+                print(f"skipped {item['name']}: {item['message']}", file=sys.stderr)
+            return 0 if payload["ok"] else 1
 
         if args.command == "exec":
             raw_args = args.command_args

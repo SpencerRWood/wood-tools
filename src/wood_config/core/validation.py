@@ -94,6 +94,57 @@ def _validate_enabled_toggle(value: Any, *, field: str) -> list[dict[str, str]]:
     ]
 
 
+def _validate_materialized_secrets(value: Any, *, field: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    if value is None:
+        return findings
+    if not isinstance(value, dict):
+        return [
+            {
+                "code": "invalid_object",
+                "field": field,
+                "message": "Materialized secrets must be an object keyed by secret name.",
+                "remediation": (
+                    f'Set {field} like '
+                    '{"name": {"ref": "env://TOKEN", "target": "file"}}.'
+                ),
+            }
+        ]
+
+    for name, definition in value.items():
+        entry_field = f"{field}.{name}"
+        if not _is_non_empty_string(name):
+            findings.append(
+                {
+                    "code": "invalid_materialized_secret_name",
+                    "field": field,
+                    "message": "Materialized secret names must be non-empty strings.",
+                    "remediation": "Rename empty materialized secret keys.",
+                }
+            )
+            continue
+        if not isinstance(definition, dict):
+            findings.append(
+                {
+                    "code": "invalid_materialized_secret_definition",
+                    "field": entry_field,
+                    "message": "Materialized secret definitions must be objects.",
+                    "remediation": (
+                        f'Set {entry_field} like '
+                        '{"ref": "env://TOKEN", "target": "file"}.'
+                    ),
+                }
+            )
+            continue
+        findings.extend(
+            _validate_reference(definition.get("ref"), field=f"{entry_field}.ref", required=True)
+        )
+        findings.extend(
+            _validate_required_string(definition.get("target"), field=f"{entry_field}.target")
+        )
+    return findings
+
+
 def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
 
@@ -152,6 +203,9 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
             }
         )
 
+    findings.extend(
+        _validate_optional_string(paths.get("secrets_root"), field="paths.secrets_root")
+    )
     findings.extend(
         _validate_path_aliases(paths.get("project_aliases"), field_name="project_aliases")
     )
@@ -228,6 +282,12 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
             _validate_optional_string(
                 vaultwarden_cli.get("executable"),
                 field="integrations.vaultwarden.cli.executable",
+            )
+        )
+        findings.extend(
+            _validate_materialized_secrets(
+                vaultwarden.get("materialized_secrets"),
+                field="integrations.vaultwarden.materialized_secrets",
             )
         )
 
