@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -106,6 +107,8 @@ def safe_target_path(root: Path, target: str) -> Path:
         current = current / part
         if current.exists() and current.is_symlink():
             raise MaterializationError("Materialized secret target parent cannot be a symlink.")
+    if candidate.exists() and candidate.is_symlink():
+        raise MaterializationError("Materialized secret target cannot be a symlink.")
 
     resolved_parent = candidate.parent.resolve(strict=False)
     if root_resolved != resolved_parent and root_resolved not in resolved_parent.parents:
@@ -113,6 +116,51 @@ def safe_target_path(root: Path, target: str) -> Path:
             "Materialized secret target escapes the configured secrets root."
         )
     return candidate
+
+
+def file_mode(path: Path) -> str | None:
+    try:
+        return oct(stat.S_IMODE(path.stat().st_mode))
+    except OSError:
+        return None
+
+
+def owner_only_permissions(path: Path, *, directory: bool) -> bool | None:
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return None
+    allowed = 0o700 if directory else 0o600
+    return mode & ~allowed == 0
+
+
+def path_metadata(root: Path, path: Path) -> dict[str, Any]:
+    root_expanded = root.expanduser()
+    target_exists = path.exists()
+    parent_exists = path.parent.exists()
+    file_safe = owner_only_permissions(path, directory=False) if target_exists else None
+    parent_safe = owner_only_permissions(path.parent, directory=True) if parent_exists else None
+    root_safe = (
+        owner_only_permissions(root_expanded, directory=True)
+        if root_expanded.exists()
+        else None
+    )
+    permission_safe = all(
+        item is not False for item in (root_safe, parent_safe, file_safe)
+    )
+    return {
+        "exists": target_exists,
+        "parent_exists": parent_exists,
+        "is_file": path.is_file() if target_exists else False,
+        "is_symlink": path.is_symlink(),
+        "mode": file_mode(path) if target_exists else None,
+        "parent_mode": file_mode(path.parent) if parent_exists else None,
+        "root_mode": file_mode(root_expanded) if root_expanded.exists() else None,
+        "permissions_safe": permission_safe,
+        "root_permissions_safe": root_safe,
+        "parent_permissions_safe": parent_safe,
+        "file_permissions_safe": file_safe,
+    }
 
 
 def ensure_private_directory(path: Path) -> None:
@@ -129,6 +177,18 @@ def current_state(path: Path, value: str) -> str:
         current = path.read_text(encoding="utf-8")
     except OSError:
         return "unreadable"
+    return "current" if current == value else "refresh-needed"
+
+
+def status_state(path: Path, value: str) -> str:
+    if not path.exists():
+        return "missing"
+    if path.is_symlink() or not path.is_file():
+        return "invalid"
+    try:
+        current = path.read_text(encoding="utf-8")
+    except OSError:
+        return "present-unverified"
     return "current" if current == value else "refresh-needed"
 
 
@@ -170,4 +230,29 @@ def materialization_result(
         "changed": changed,
         "applied": apply,
         "redacted_value": "[REDACTED]",
+    }
+
+
+def materialization_status_result(
+    *,
+    name: str,
+    reference: str,
+    path: Path,
+    root: Path,
+    state: str,
+    provider: str | None,
+    from_env_fallback: bool,
+    error_type: str | None = None,
+) -> dict[str, Any]:
+    metadata = path_metadata(root, path)
+    return {
+        "name": name,
+        "reference": reference,
+        "target": str(path),
+        "state": state,
+        "provider": provider,
+        "from_env_fallback": from_env_fallback,
+        "error_type": error_type,
+        "redacted_value": "[REDACTED]",
+        **metadata,
     }

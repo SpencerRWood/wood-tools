@@ -16,9 +16,11 @@ from .materialization import (
     current_state,
     ensure_private_directory,
     materialization_result,
+    materialization_status_result,
     materialized_secret_definitions,
     safe_target_path,
     selected_definitions,
+    status_state,
     write_secret_atomic,
 )
 from .providers import (
@@ -500,6 +502,78 @@ class SecretResolver:
             "selected_count": len(definitions),
             "materialized": results,
             "errors": errors,
+        }
+
+    def materialize_status(self, name: str | None = None) -> dict[str, Any]:
+        values = active_profile_values()
+        root = configured_secrets_root(values)
+        definitions = selected_definitions(materialized_secret_definitions(values), name)
+        results: list[dict[str, Any]] = []
+
+        for definition in definitions:
+            try:
+                target = safe_target_path(root, definition.target)
+            except MaterializationError as exc:
+                target = root.expanduser() / definition.target
+                results.append(
+                    materialization_status_result(
+                        name=definition.name,
+                        reference=definition.reference,
+                        path=target,
+                        root=root,
+                        state="invalid",
+                        provider=None,
+                        from_env_fallback=False,
+                        error_type=type(exc).__name__,
+                    )
+                )
+                continue
+
+            try:
+                resolved = self.resolve(definition.reference)
+                state = status_state(target, resolved.value)
+                results.append(
+                    materialization_status_result(
+                        name=definition.name,
+                        reference=definition.reference,
+                        path=target,
+                        root=root,
+                        state=state,
+                        provider=resolved.provider,
+                        from_env_fallback=resolved.from_env_fallback,
+                    )
+                )
+            except SecretProviderError as exc:
+                results.append(
+                    materialization_status_result(
+                        name=definition.name,
+                        reference=definition.reference,
+                        path=target,
+                        root=root,
+                        state="provider-error",
+                        provider=None,
+                        from_env_fallback=False,
+                        error_type=type(exc).__name__,
+                    )
+                )
+
+        unhealthy_states = {
+            "invalid",
+            "provider-error",
+            "present-unverified",
+            "refresh-needed",
+        }
+        needs_attention = [
+            item
+            for item in results
+            if item["state"] in unhealthy_states or item["permissions_safe"] is False
+        ]
+        return {
+            "ok": not needs_attention,
+            "secrets_root": str(root.expanduser()),
+            "selected_count": len(definitions),
+            "materialized": results,
+            "needs_attention": needs_attention,
         }
 
 

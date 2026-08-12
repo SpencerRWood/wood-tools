@@ -168,6 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     materialize_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    materialize_status_parser = subparsers.add_parser(
+        "materialize-status",
+        help="Inspect configured materialized secret status without writing files",
+    )
+    materialize_status_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Optional materialized secret name",
+    )
+    materialize_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
@@ -370,6 +381,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{verb} {item['name']} -> {item['target']} ({item['state']})")
             for item in payload["errors"]:
                 print(f"skipped {item['name']}: {item['message']}", file=sys.stderr)
+            return 0 if payload["ok"] else 1
+
+        if args.command == "materialize-status":
+            payload = resolver.materialize_status(args.name)
+            if args.json:
+                envelope_builder = success_output if payload["ok"] else warning_output
+                envelope = envelope_builder(
+                    command="materialize-status",
+                    mutation="read-only",
+                    summary=(
+                        "Materialized secret status completed."
+                        if payload["ok"]
+                        else "One or more materialized secrets need attention."
+                    ),
+                    data=payload,
+                    warnings=payload["needs_attention"] if not payload["ok"] else None,
+                )
+                return _emit(envelope, json_output=True, command_args=command_args)
+            for item in payload["materialized"]:
+                print(f"{item['name']} -> {item['target']} ({item['state']})")
             return 0 if payload["ok"] else 1
 
         if args.command == "exec":

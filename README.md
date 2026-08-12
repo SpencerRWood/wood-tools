@@ -233,6 +233,7 @@ Supported commands:
 - `wood-secrets resolve-env --apply`
 - `wood-secrets materialize [name]`
 - `wood-secrets materialize [name] --apply`
+- `wood-secrets materialize-status [name]`
 - `wood-secrets doctor`
 
 Supported reference syntax:
@@ -278,6 +279,7 @@ wood-secrets resolve-env --input .env --output .env.resolved --json
 wood-secrets resolve-env --input .env --output .env.resolved --apply --force
 wood-secrets materialize --json
 wood-secrets materialize openproject-token --apply --json
+wood-secrets materialize-status --json
 wood-secrets doctor --json
 ```
 
@@ -299,8 +301,9 @@ Behavior notes:
 - `wood-secrets resolve-env` reports resolved keys and references only; it never prints resolved secret values.
 - `wood-secrets materialize [name]` previews configured local secret files by name, reference, target path, and state without printing secret values.
 - `wood-secrets materialize [name] --apply` writes configured secrets beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
+- `wood-secrets materialize-status [name]` inspects configured materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`.
 - Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and relative `target` fields.
-- Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, and skip unchanged files.
+- Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, skip unchanged files, and report unsafe permissions deterministically.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
 - `vaultwarden://` references require at least two path segments after the scheme.
 - `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
