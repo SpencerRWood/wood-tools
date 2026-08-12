@@ -10,6 +10,7 @@ import pytest
 from wood_secrets.cli import main
 from wood_secrets.core import SecretResolver
 from wood_secrets.core.providers import (
+    CreatedSecret,
     EnvironmentSecretProvider,
     MissingSecretError,
     ProviderLockedError,
@@ -38,6 +39,8 @@ class StubProvider(SecretProvider):
         status: ProviderStatus | None = None,
         value: str | None = None,
         error: Exception | None = None,
+        canonical_item_exists: bool = False,
+        create_error: Exception | None = None,
     ) -> None:
         self._status = status or ProviderStatus(
             name="vaultwarden",
@@ -50,7 +53,11 @@ class StubProvider(SecretProvider):
         )
         self._value = value
         self._error = error
+        self._canonical_item_exists = canonical_item_exists
+        self._create_error = create_error
         self.unlock_calls: list[dict[str, bool]] = []
+        self.exists_checks: list[dict[str, str]] = []
+        self.create_calls: list[dict[str, object]] = []
         self._session = {
             "provider": "vaultwarden",
             "path": str(Path.home() / ".wood" / "runtime" / "secrets" / "vaultwarden-session.json"),
@@ -103,12 +110,42 @@ class StubProvider(SecretProvider):
             "count": 1,
             "items": [
                 {
-                    "name": "wood / openproject / prod",
+                    "name": "openproject / wood-tools",
                     "field_names": ["api-token", "username"],
                     "has_login_password": True,
                 }
             ],
         }
+
+    def canonical_item_exists(self, *, item_name: str, search: str) -> bool:
+        if self._error is not None:
+            raise self._error
+        self.exists_checks.append({"item_name": item_name, "search": search})
+        return self._canonical_item_exists
+
+    def create_canonical_secret(
+        self,
+        *,
+        item_name: str,
+        field_name: str,
+        value: str,
+        metadata: dict[str, str],
+    ) -> CreatedSecret:
+        if self._create_error is not None:
+            raise self._create_error
+        self.create_calls.append(
+            {
+                "item_name": item_name,
+                "field_name": field_name,
+                "value_length": len(value),
+                "metadata": metadata,
+            }
+        )
+        return CreatedSecret(
+            provider="vaultwarden",
+            item_id="vaultwarden-item-id",
+            item_name=item_name,
+        )
 
 
 def make_config_document(
@@ -193,7 +230,9 @@ def test_resolve_redacted_success_path(
 ) -> None:
     install_stub_resolver()
 
-    code = main(["resolve", "--ref", "vaultwarden://wood/prod/api-token", "--redacted"])
+    code = main(
+        ["resolve", "--ref", "vaultwarden://openproject/wood-tools/api-token", "--redacted"]
+    )
 
     assert code == 0
     out = capsys.readouterr().out
@@ -210,7 +249,7 @@ def test_resolve_redacted_success_path_with_explicit_field_selector(
         [
             "resolve",
             "--ref",
-            "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
             "--redacted",
         ]
     )
@@ -224,7 +263,7 @@ def test_resolve_redacted_success_path_with_explicit_field_selector(
 def test_resolve_uses_environment_fallback_without_printing_secret(
     install_stub_resolver, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    reference = "vaultwarden://wood/prod/api-token"
+    reference = "vaultwarden://openproject/wood-tools/api-token"
     fallback_name = normalize_env_fallback_name(reference)
     install_stub_resolver(
         provider=StubProvider(error=MissingSecretError("provider unavailable")),
@@ -356,7 +395,7 @@ def test_resolve_env_json_previews_without_writing_or_leaking_secret(
         "\n".join(
             [
                 "# local development",
-                "OPENPROJECT_TOKEN_REF=vaultwarden://wood/openproject/prod/api-token",
+                "OPENPROJECT_TOKEN_REF=vaultwarden://openproject/wood-tools/api-token",
                 "PLAIN_VALUE=kept",
             ]
         ),
@@ -397,7 +436,7 @@ def test_resolve_env_apply_writes_file_without_printing_secret(
     env_file.write_text(
         "\n".join(
             [
-                "OPENPROJECT_TOKEN_REF=vaultwarden://wood/openproject/prod/api-token",
+                "OPENPROJECT_TOKEN_REF=vaultwarden://openproject/wood-tools/api-token",
                 "NTFY_TOKEN_REF=env://NTFY_TOKEN",
             ]
         ),
@@ -433,7 +472,10 @@ def test_resolve_env_force_requires_apply(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("TOKEN_REF=vaultwarden://wood/prod/api-token\n", encoding="utf-8")
+    env_file.write_text(
+        "TOKEN_REF=vaultwarden://openproject/wood-tools/api-token\n",
+        encoding="utf-8",
+    )
     install_stub_resolver()
 
     code = main(["resolve-env", "--input", str(env_file), "--force", "--json"])
@@ -457,7 +499,7 @@ def test_materialize_json_previews_without_writing_or_leaking_secret(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -526,7 +568,7 @@ def test_materialize_apply_writes_protected_file_without_printing_secret(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -632,7 +674,7 @@ def test_materialize_apply_skips_unchanged_file(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -665,7 +707,7 @@ def test_materialize_provider_failure_preserves_existing_file_without_leak(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -698,7 +740,7 @@ def test_materialize_rejects_unsafe_target_without_writing(
             secrets_root=secrets_root,
             definitions={
                 "bad-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "../outside",
                 }
             },
@@ -763,7 +805,7 @@ def test_materialize_rejects_symlink_parent_escape(
             secrets_root=secrets_root,
             definitions={
                 "bad-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "linked/api-token",
                 }
             },
@@ -795,7 +837,7 @@ def test_materialize_atomic_write_failure_preserves_existing_file(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -829,7 +871,7 @@ def test_materialize_status_reports_missing_without_writing(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -902,11 +944,11 @@ def test_materialize_status_reports_current_and_refresh_needed(
             secrets_root=secrets_root,
             definitions={
                 "current-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "current",
                 },
                 "stale-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "stale",
                 },
             },
@@ -944,7 +986,7 @@ def test_materialize_status_reports_provider_error_without_leaking_existing_file
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -981,7 +1023,7 @@ def test_materialize_status_reports_invalid_unsafe_path_and_symlink_target(
             secrets_root=secrets_root,
             definitions={
                 "bad-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "linked",
                 }
             },
@@ -1014,7 +1056,7 @@ def test_materialize_status_reports_unsafe_permissions(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -1049,7 +1091,7 @@ def test_materialize_status_reports_present_unverified_when_file_cannot_be_read(
             secrets_root=secrets_root,
             definitions={
                 "openproject-token": {
-                    "ref": "vaultwarden://wood/openproject/prod/api-token",
+                    "ref": "vaultwarden://openproject/wood-tools/api-token",
                     "target": "openproject/api-token",
                 }
             },
@@ -1069,6 +1111,310 @@ def test_materialize_status_reports_present_unverified_when_file_cannot_be_read(
     assert payload["data"]["materialized"][0]["state"] == "present-unverified"
     assert "super-secret-token" not in rendered
     assert "denied" not in rendered
+
+
+def test_add_requires_service_before_prompt(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "wood_secrets.cli.getpass",
+        lambda _: (_ for _ in ()).throw(AssertionError("prompted")),
+    )
+    install_stub_resolver()
+
+    with pytest.raises(SystemExit) as exc:
+        main(["add", "--principal", "wood-events", "--credential", "password", "--json"])
+
+    assert exc.value.code == 2
+    rendered = capsys.readouterr().err
+    assert "super-secret-token" not in rendered
+
+
+def test_add_rejects_invalid_identity_before_prompt(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "wood_secrets.cli.getpass",
+        lambda _: (_ for _ in ()).throw(AssertionError("prompted")),
+    )
+    install_stub_resolver()
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "../wood-events",
+            "--credential",
+            "password",
+            "--json",
+        ]
+    )
+
+    assert code == 2
+    rendered = capsys.readouterr().out
+    assert "super-secret-token" not in rendered
+
+
+def test_add_prompt_preview_does_not_create_or_leak_secret(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider()
+    prompts: list[str] = []
+    secrets_root = tmp_path / "secrets"
+    monkeypatch.setattr(
+        "wood_secrets.core.materialization.load_config",
+        lambda _: make_materialization_config(secrets_root=secrets_root, definitions={}),
+    )
+    monkeypatch.setattr(
+        "wood_secrets.cli.getpass",
+        lambda prompt: prompts.append(prompt) or "new-secret-token",
+    )
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    assert prompts == ["Enter secret value: ", "Confirm secret value: "]
+    assert provider.exists_checks == [
+        {"item_name": "postgres / wood-events / password", "search": "password"}
+    ]
+    assert provider.create_calls == []
+    assert not (secrets_root / "postgres" / "wood-events" / "password").exists()
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    item = payload["data"]["secret"]
+    assert payload["command"] == "add"
+    assert payload["mutation"] == "read-only"
+    assert item["canonical_identity"] == "postgres / wood-events / password"
+    assert item["reference"] == "vaultwarden://postgres/wood-events/password#PASSWORD"
+    assert item["target"] == str(secrets_root / "postgres" / "wood-events" / "password")
+    assert item["target_source"] == "identity-derived"
+    assert item["redacted_value"] == "[REDACTED]"
+    assert "new-secret-token" not in rendered
+
+
+def test_add_apply_creates_vaultwarden_item_without_leaking_secret(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider()
+    secrets_root = tmp_path / "secrets"
+    monkeypatch.setattr(
+        "wood_secrets.core.materialization.load_config",
+        lambda _: make_materialization_config(secrets_root=secrets_root, definitions={}),
+    )
+    monkeypatch.setattr("wood_secrets.cli.getpass", lambda _: "new-secret-token")
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "openproject",
+            "--principal",
+            "wood-tools",
+            "--credential",
+            "api-token",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    assert provider.create_calls == [
+        {
+            "item_name": "openproject / wood-tools / api-token",
+            "field_name": "API_TOKEN",
+            "value_length": len("new-secret-token"),
+            "metadata": {
+                "wood.credential": "api-token",
+                "wood.managed": "true",
+                "wood.principal": "wood-tools",
+                "wood.reference": "vaultwarden://openproject/wood-tools/api-token#API_TOKEN",
+                "wood.service": "openproject",
+            },
+        }
+    ]
+    assert not (secrets_root / "openproject" / "wood-tools" / "api-token").exists()
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload)
+    item = payload["data"]["secret"]
+    assert payload["mutation"] == "mutating"
+    assert item["outcome"] == "created"
+    assert item["vaultwarden_item_id"] == "vaultwarden-item-id"
+    assert "new-secret-token" not in rendered
+
+
+def test_add_confirmation_mismatch_fails_without_mutation(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider()
+    values = iter(["first-secret", "second-secret"])
+    monkeypatch.setattr("wood_secrets.cli.getpass", lambda _: next(values))
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 2
+    assert provider.exists_checks == []
+    assert provider.create_calls == []
+    rendered = capsys.readouterr().out
+    assert "first-secret" not in rendered
+    assert "second-secret" not in rendered
+
+
+def test_add_empty_secret_rejected_without_mutation(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = StubProvider()
+    monkeypatch.setattr("wood_secrets.cli.getpass", lambda _: "")
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+        ]
+    )
+
+    assert code == 2
+    assert provider.exists_checks == []
+    assert provider.create_calls == []
+
+
+def test_add_stdin_apply_reads_secret_without_confirmation(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider()
+    monkeypatch.setattr("wood_secrets.cli.sys.stdin.read", lambda: "stdin-secret\n")
+    monkeypatch.setattr(
+        "wood_secrets.cli.getpass",
+        lambda _: (_ for _ in ()).throw(AssertionError("prompted")),
+    )
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+            "--stdin",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    assert provider.create_calls[0]["value_length"] == len("stdin-secret")
+    rendered = capsys.readouterr().out
+    assert "stdin-secret" not in rendered
+
+
+def test_add_duplicate_identity_rejected_without_create(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider(canonical_item_exists=True)
+    monkeypatch.setattr("wood_secrets.cli.getpass", lambda _: "new-secret-token")
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 2
+    assert provider.create_calls == []
+    rendered = capsys.readouterr().out
+    assert "already exists" in rendered
+    assert "new-secret-token" not in rendered
+
+
+def test_add_provider_error_is_redacted(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = StubProvider(error=ProviderLockedError("locked with secret text"))
+    monkeypatch.setattr("wood_secrets.cli.getpass", lambda _: "new-secret-token")
+    install_stub_resolver(provider=provider)
+
+    code = main(
+        [
+            "add",
+            "--service",
+            "postgres",
+            "--principal",
+            "wood-events",
+            "--credential",
+            "password",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 2
+    rendered = capsys.readouterr().out
+    assert "new-secret-token" not in rendered
+    assert "locked with secret text" not in rendered
 
 
 def test_doctor_reports_locked_provider(
@@ -1249,7 +1595,7 @@ def test_exec_injects_secret_into_child_process_without_printing_secret(
             "--env",
             "OPENPROJECT_TOKEN",
             "--ref",
-            "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
             "--",
             "env",
         ]
@@ -1275,7 +1621,7 @@ def test_exec_supports_inline_binding_syntax(
     code = main(
         [
             "exec",
-            "OPENPROJECT_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "OPENPROJECT_TOKEN=vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
             "--",
             "env",
         ]
@@ -1301,8 +1647,8 @@ def test_exec_supports_multiple_inline_bindings(
     code = main(
         [
             "exec",
-            "OPENPROJECT_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
-            "SECOND_TOKEN=vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN",
+            "OPENPROJECT_TOKEN=vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
+            "SECOND_TOKEN=vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
             "--",
             "env",
         ]
@@ -1320,7 +1666,7 @@ def test_resolver_resolves_configured_integration_reference_in_memory(
     monkeypatch.setattr(
         "wood_secrets.core.resolver.load_config",
         lambda _: make_config_document(
-            openproject_ref="vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
+            openproject_ref="vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
         ),
     )
     resolver = SecretResolver(
@@ -1335,7 +1681,7 @@ def test_resolver_resolves_configured_integration_reference_in_memory(
 
     assert resolved.value == "super-secret-token"
     assert resolved.reference == (
-        "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
+        "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
     )
 
 
@@ -1345,7 +1691,7 @@ def test_resolver_reports_configured_integration_status_without_leaking_secret(
     monkeypatch.setattr(
         "wood_secrets.core.resolver.load_config",
         lambda _: make_config_document(
-            openproject_ref="vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
+            openproject_ref="vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
         ),
     )
     resolver = SecretResolver(
@@ -1730,7 +2076,7 @@ def test_vaultwarden_resolve_uses_protected_session_file_from_new_process(
             return json.dumps(
                 [
                     {
-                        "name": "wood / openproject / prod / api-token",
+                        "name": "openproject / wood-tools / api-token",
                         "fields": [
                             {"name": "OPENPROJECT_API_TOKEN", "value": "secret-token"},
                         ],
@@ -1748,7 +2094,7 @@ def test_vaultwarden_resolve_uses_protected_session_file_from_new_process(
     )
 
     assert (
-        provider.resolve("vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN")
+        provider.resolve("vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN")
         == "secret-token"
     )
 
@@ -1791,7 +2137,7 @@ def test_vaultwarden_resolve_fails_closed_when_locked_and_reference_missing_sess
     )
 
     with pytest.raises(ProviderLockedError, match="not unlocked"):
-        provider.resolve("vaultwarden://wood/prod/api-token")
+        provider.resolve("vaultwarden://openproject/wood-tools/api-token")
 
 
 def test_vaultwarden_resolve_fails_closed_when_configured_server_mismatches(tmp_path: Path) -> None:
@@ -1813,7 +2159,7 @@ def test_vaultwarden_resolve_fails_closed_when_configured_server_mismatches(tmp_
     )
 
     with pytest.raises(ProviderUnavailableError, match="does not match wood-config"):
-        provider.resolve("vaultwarden://wood/prod/api-token")
+        provider.resolve("vaultwarden://openproject/wood-tools/api-token")
 
 
 def test_vaultwarden_resolve_supports_explicit_field_selector(tmp_path: Path) -> None:
@@ -1828,7 +2174,7 @@ def test_vaultwarden_resolve_supports_explicit_field_selector(tmp_path: Path) ->
             return json.dumps(
                 [
                     {
-                        "name": "wood / openproject / prod / api-token",
+                        "name": "openproject / wood-tools / api-token",
                         "fields": [
                             {"name": "OPENPROJECT_API_TOKEN", "value": "secret-token"},
                             {"name": "username", "value": "spencer"},
@@ -1847,7 +2193,7 @@ def test_vaultwarden_resolve_supports_explicit_field_selector(tmp_path: Path) ->
     )
 
     resolved = provider.resolve(
-        "vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN"
+        "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
     )
 
     assert resolved == "secret-token"
@@ -1865,7 +2211,7 @@ def test_vaultwarden_list_entries_returns_names_only(tmp_path: Path) -> None:
             return json.dumps(
                 [
                     {
-                        "name": "wood / openproject / prod",
+                        "name": "openproject / wood-tools",
                         "fields": [
                             {"name": "api-token", "value": "secret-token"},
                             {"name": "username", "value": "spencer"},
@@ -1888,8 +2234,125 @@ def test_vaultwarden_list_entries_returns_names_only(tmp_path: Path) -> None:
     assert payload["count"] == 1
     assert payload["items"] == [
         {
-            "name": "wood / openproject / prod",
+            "name": "openproject / wood-tools",
             "field_names": ["api-token", "username"],
             "has_login_password": True,
         }
     ]
+
+
+def test_vaultwarden_canonical_item_exists_checks_exact_identity(tmp_path: Path) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["list", "items", "--search", "__wood_tools_session_probe__"]:
+            return "[]"
+        if args == ["list", "items", "--search", "password"]:
+            assert session_token == "active-session"
+            return json.dumps(
+                [
+                    {"name": "postgres / other / password"},
+                    {"name": "postgres / wood-events / password"},
+                ]
+            )
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={"BW_SESSION": "active-session"},
+    )
+
+    assert provider.canonical_item_exists(
+        item_name="postgres / wood-events / password",
+        search="password",
+    )
+
+
+def test_vaultwarden_create_canonical_secret_uses_redactable_item_payload(tmp_path: Path) -> None:
+    calls: list[tuple[list[str], str | None, str | None]] = []
+
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        calls.append((args, input_text, session_token))
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["list", "items", "--search", "__wood_tools_session_probe__"]:
+            return "[]"
+        if args == ["get", "template", "item"]:
+            return json.dumps({"type": 1, "name": "", "notes": "", "fields": []})
+        if args == ["encode"]:
+            assert input_text is not None
+            item = json.loads(input_text)
+            assert item["name"] == "postgres / wood-events / password"
+            assert item["fields"] == [
+                {"name": "PASSWORD", "value": "new-secret-token", "type": 1}
+            ]
+            assert "wood.service: postgres" in item["notes"]
+            return "encoded-item"
+        if args == ["create", "item", "encoded-item"]:
+            return json.dumps({"id": "created-id", "name": "postgres / wood-events / password"})
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={"BW_SESSION": "active-session"},
+    )
+
+    created = provider.create_canonical_secret(
+        item_name="postgres / wood-events / password",
+        field_name="PASSWORD",
+        value="new-secret-token",
+        metadata={
+            "wood.credential": "password",
+            "wood.managed": "true",
+            "wood.principal": "wood-events",
+            "wood.reference": "vaultwarden://postgres/wood-events/password#PASSWORD",
+            "wood.service": "postgres",
+        },
+    )
+
+    assert created.item_id == "created-id"
+    assert calls[-1] == (["create", "item", "encoded-item"], None, "active-session")
+
+
+def test_vaultwarden_create_canonical_secret_reports_malformed_response_safely(
+    tmp_path: Path,
+) -> None:
+    def runner(
+        args: list[str], *, input_text: str | None = None, session_token: str | None = None
+    ) -> str:
+        if args == ["status"]:
+            return json.dumps({"status": "unlocked"})
+        if args == ["list", "items", "--search", "__wood_tools_session_probe__"]:
+            return "[]"
+        if args == ["get", "template", "item"]:
+            return json.dumps({"type": 1, "name": "", "fields": []})
+        if args == ["encode"]:
+            return "encoded-secret"
+        if args == ["create", "item", "encoded-secret"]:
+            return json.dumps({"name": "postgres / wood-events / password"})
+        raise AssertionError(f"Unexpected command: {args}")
+
+    provider = VaultwardenSecretProvider(
+        runner=runner,
+        which=lambda _: "/usr/bin/bw",
+        session_store=VaultwardenSessionStore(path=tmp_path / "runtime" / "session.json"),
+        environ={"BW_SESSION": "active-session"},
+    )
+
+    with pytest.raises(SecretProviderError, match="Vaultwarden item creation failed") as exc:
+        provider.create_canonical_secret(
+            item_name="postgres / wood-events / password",
+            field_name="PASSWORD",
+            value="new-secret-token",
+            metadata={"wood.service": "postgres"},
+        )
+
+    assert "new-secret-token" not in str(exc.value)

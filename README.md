@@ -226,6 +226,8 @@ Supported commands:
 - `wood-secrets lock --provider vaultwarden`
 - `wood-secrets session --provider vaultwarden`
 - `wood-secrets list --provider vaultwarden`
+- `wood-secrets add --service <service> --principal <principal> --credential <credential>`
+- `wood-secrets add --service <service> --principal <principal> --credential <credential> --apply`
 - `wood-secrets exec --env <NAME> --ref <reference> -- <command> ...`
 - `wood-secrets exec NAME=<reference> [OTHER_NAME=<reference> ...] -- <command> ...`
 - `wood-secrets resolve --ref <reference> --redacted`
@@ -250,11 +252,11 @@ Environment fallback behavior:
 - For any reference, Wood-tools also recognizes an override environment variable named
   `WOOD_SECRETS_REF_<NORMALIZED_REFERENCE>`.
 - Example:
-  `vaultwarden://wood/openproject/prod/api-token` maps to
+  `vaultwarden://openproject/wood-tools/api-token` maps to
   `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN`.
 - Explicit field selectors remain part of the normalized fallback name.
 - Example:
-  `vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN` maps to
+  `vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN` maps to
   `WOOD_SECRETS_REF_VAULTWARDEN_WOOD_OPENPROJECT_PROD_API_TOKEN_OPENPROJECT_API_TOKEN`.
 - Fallback values are resolved in memory only and are still emitted as `[REDACTED]`.
 
@@ -270,11 +272,13 @@ wood-secrets unlock --gui
 wood-secrets lock --provider vaultwarden
 wood-secrets session --provider vaultwarden --json
 wood-secrets list --provider vaultwarden --search openproject --json
-wood-secrets exec --env OPENPROJECT_TOKEN --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
-wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
-wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' OTHER_TOKEN='vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' -- env
-wood-secrets resolve --ref vaultwarden://wood/openproject/prod/api-token --redacted
-wood-secrets resolve --ref 'vaultwarden://wood/openproject/prod/api-token#OPENPROJECT_API_TOKEN' --redacted
+wood-secrets add --service postgres --principal wood-events --credential password
+wood-secrets add --service postgres --principal wood-events --credential password --apply
+wood-secrets exec --env OPENPROJECT_TOKEN --ref 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets exec OPENPROJECT_TOKEN='vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' OTHER_TOKEN='vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' -- env
+wood-secrets resolve --ref vaultwarden://openproject/wood-tools/api-token --redacted
+wood-secrets resolve --ref 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' --redacted
 wood-secrets resolve-env --input .env --output .env.resolved --json
 wood-secrets resolve-env --input .env --output .env.resolved --apply --force
 wood-secrets materialize --json
@@ -295,6 +299,12 @@ Behavior notes:
 - `wood-secrets unlock --provider vaultwarden ...` uses `bw unlock --passwordenv ...` for compatibility with current Bitwarden CLI releases.
 - Interactive unlock fails closed when no local terminal TTY is available.
 - `wood-secrets list --provider vaultwarden ...` lists only item names, field names, and whether a login password exists; it never prints secret values.
+- `wood-secrets add --service postgres --principal wood-events --credential password` prompts securely for `Enter secret value:` and `Confirm secret value:`, then previews a Wood-managed Vaultwarden item without mutating unless `--apply` is present.
+- `wood-secrets add --stdin ...` reads the secret value from stdin for automation and skips the confirmation prompt; there is no plaintext `--value` argument.
+- `wood-secrets add` uses the canonical identity `service / principal / credential`, where `service` owns or issues the credential, `principal` is the consuming service account or application, and `credential` is the credential purpose.
+- Newly added Vaultwarden items use flat service-centric identities such as `postgres / wood-events / password`; environment names such as `prod` are not part of the canonical identity.
+- Secret field names do not need to be globally unique because resolution is based on the item identity plus the selected field.
+- `wood-secrets add` refuses to create an item when the canonical identity already exists; rotation or replacement remains a separate explicit workflow.
 - `wood-secrets exec --env NAME --ref ... -- command ...` resolves a secret locally, injects it only into the child process environment, and does not print the secret value itself.
 - `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
 - `wood-secrets resolve-env` resolves supported `*_REF` entries from an env file into non-`_REF` keys in a local resolved env file; it previews by default and writes only with `--apply`.

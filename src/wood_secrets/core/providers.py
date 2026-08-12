@@ -59,6 +59,13 @@ class VaultwardenReference:
         return self.field_name or self.parts[-1]
 
 
+@dataclass(frozen=True)
+class CreatedSecret:
+    provider: str
+    item_id: str
+    item_name: str
+
+
 def normalize_env_fallback_name(reference: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", reference).strip("_").upper()
     return f"{ENV_FALLBACK_PREFIX}{normalized}"
@@ -174,6 +181,23 @@ class SecretProvider(ABC):
     @abstractmethod
     def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
         raise NotImplementedError
+
+    def canonical_item_exists(self, *, item_name: str, search: str) -> bool:
+        raise ProviderUnavailableError(
+            f"Provider '{self.name}' does not support creating Wood-managed secrets."
+        )
+
+    def create_canonical_secret(
+        self,
+        *,
+        item_name: str,
+        field_name: str,
+        value: str,
+        metadata: dict[str, str],
+    ) -> CreatedSecret:
+        raise ProviderUnavailableError(
+            f"Provider '{self.name}' does not support creating Wood-managed secrets."
+        )
 
 
 class EnvironmentSecretProvider(SecretProvider):

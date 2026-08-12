@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from getpass import getpass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,9 @@ from resources.cli.output import error_output, success_output, warning_output
 
 from .core import SecretResolver
 from .core.env_files import resolve_env_file, write_resolved_env_file
+from .core.materialization import materialized_secret_identity
 from .core.providers import SecretProviderError
+from .core.vaultwarden_layout_migration import VaultwardenLayoutMigration
 
 
 def _emit(
@@ -113,6 +116,25 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--search", help="Optional provider-native search term")
     list_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    add_parser = subparsers.add_parser(
+        "add",
+        help="Preview or create a Wood-managed Vaultwarden secret",
+    )
+    add_parser.add_argument("--service", required=True, help="Credential-owning service")
+    add_parser.add_argument("--principal", required=True, help="Credential consumer")
+    add_parser.add_argument("--credential", required=True, help="Credential purpose")
+    add_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read the secret value from stdin instead of prompting interactively",
+    )
+    add_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Create the Vaultwarden item. Without --apply, only preview.",
+    )
+    add_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     exec_parser = subparsers.add_parser(
         "exec",
         help="Run a command with resolved secrets injected as environment variables",
@@ -179,9 +201,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     materialize_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    migrate_parser = subparsers.add_parser(
+        "migrate-vaultwarden-layout",
+        help="Preview or apply the Wood Vaultwarden service-centric layout migration",
+    )
+    migrate_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Rename/update Vaultwarden items. Without --apply, only preview.",
+    )
+    migrate_parser.add_argument(
+        "--rollback-manifest",
+        help="Redacted rollback manifest path to write when --apply is used",
+    )
+    migrate_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
+
+
+def _read_add_secret_value(*, stdin: bool) -> str:
+    if stdin:
+        value = sys.stdin.read().rstrip("\r\n")
+        if not value:
+            raise SecretProviderError("Secret value must be non-empty.")
+        return value
+
+    value = getpass("Enter secret value: ")
+    if not value:
+        raise SecretProviderError("Secret value must be non-empty.")
+    confirmation = getpass("Confirm secret value: ")
+    if value != confirmation:
+        raise SecretProviderError("Secret confirmation did not match.")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -297,6 +350,48 @@ def main(argv: list[str] | None = None) -> int:
                 return _emit(envelope, json_output=True, command_args=command_args)
             return _emit(payload, json_output=False, command_args=command_args)
 
+        if args.command == "add":
+            materialized_secret_identity(
+                service=args.service,
+                principal=args.principal,
+                credential=args.credential,
+            )
+            secret_value = _read_add_secret_value(stdin=args.stdin)
+            try:
+                payload = resolver.add_secret(
+                    service=args.service,
+                    principal=args.principal,
+                    credential=args.credential,
+                    value=secret_value,
+                    apply=args.apply,
+                )
+            finally:
+                secret_value = ""
+            if args.json:
+                envelope = success_output(
+                    command="add",
+                    mutation="mutating" if args.apply else "read-only",
+                    summary=(
+                        "Wood-managed Vaultwarden secret created."
+                        if args.apply
+                        else "Wood-managed Vaultwarden secret preview completed."
+                    ),
+                    data=payload,
+                    next_actions=(
+                        ["Re-run wood-secrets add with --apply to create the Vaultwarden item."]
+                        if not args.apply
+                        else None
+                    ),
+                )
+                return _emit(envelope, json_output=True, command_args=command_args)
+            item = payload["secret"]
+            verb = "created" if args.apply else "would create"
+            print(
+                f"{verb} {item['canonical_identity']} -> "
+                f"{item['target']} ({item['target_source']})"
+            )
+            return 0
+
         if args.command == "resolve":
             resolved = resolver.resolve(args.ref)
             payload = resolved.to_dict()
@@ -403,6 +498,56 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{item['name']} -> {item['target']} ({item['state']})")
             return 0 if payload["ok"] else 1
 
+        if args.command == "migrate-vaultwarden-layout":
+            if args.rollback_manifest and not args.apply:
+                raise SecretProviderError("--rollback-manifest can only be used with --apply.")
+            migration = VaultwardenLayoutMigration(resolver.get_provider("vaultwarden"))
+            rollback_path = Path(args.rollback_manifest) if args.rollback_manifest else None
+            payload = (
+                migration.apply(rollback_path=rollback_path) if args.apply else migration.plan()
+            )
+            if args.json:
+                envelope_builder = success_output if payload["ok"] else warning_output
+                envelope = envelope_builder(
+                    command="migrate-vaultwarden-layout",
+                    mutation="mutating" if args.apply else "read-only",
+                    summary=(
+                        "Vaultwarden layout migration applied."
+                        if args.apply and payload["ok"]
+                        else "Vaultwarden layout migration dry-run completed."
+                        if not args.apply
+                        else "Vaultwarden layout migration was not fully applied."
+                    ),
+                    data=payload,
+                    warnings=(
+                        [
+                            item
+                            for item in payload["items"]
+                            if item["status"] == "BLOCKED_FOR_REVIEW"
+                        ]
+                        if not payload["ok"]
+                        else None
+                    ),
+                    next_actions=(
+                        ["Review blocked mappings before running with --apply."]
+                        if payload["blocked_count"]
+                        else ["Re-run with --apply to mutate Vaultwarden items."]
+                        if not args.apply
+                        else None
+                    ),
+                )
+                return _emit(envelope, json_output=True, command_args=command_args)
+            for item in payload["items"]:
+                if item["status"] == "READY":
+                    print(
+                        "would migrate "
+                        f"{item['current_item']} -> {item['proposed_item']} "
+                        f"#{item['current_secret_field']}"
+                    )
+                elif item["status"] == "BLOCKED_FOR_REVIEW":
+                    print(f"blocked {item['current_item']}: {item['blocked_reason']}")
+            return 0 if payload["ok"] else 1
+
         if args.command == "exec":
             raw_args = args.command_args
             separator_index = raw_args.index("--") if "--" in raw_args else None
@@ -445,7 +590,10 @@ def main(argv: list[str] | None = None) -> int:
     except SecretProviderError as exc:
         mutation = (
             "mutating"
-            if args.command in {"unlock", "lock"} or (args.command == "resolve-env" and args.apply)
+            if args.command in {"unlock", "lock"}
+            or (args.command == "resolve-env" and args.apply)
+            or (args.command == "add" and args.apply)
+            or (args.command == "migrate-vaultwarden-layout" and args.apply)
             else "read-only"
         )
         if getattr(args, "json", False):

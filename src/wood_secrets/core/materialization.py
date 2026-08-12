@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,21 @@ class MaterializedSecretIdentity:
 
     def to_relative_target(self) -> str:
         return f"{self.service}/{self.principal}/{self.credential}"
+
+    @property
+    def canonical_identity(self) -> str:
+        return f"{self.service} / {self.principal} / {self.credential}"
+
+    @property
+    def field_name(self) -> str:
+        return re.sub(r"[^A-Za-z0-9]+", "_", self.credential).strip("_").upper()
+
+    @property
+    def reference(self) -> str:
+        return (
+            f"vaultwarden://{self.service}/{self.principal}/"
+            f"{self.credential}#{self.field_name}"
+        )
 
 
 def active_profile_values() -> dict[str, Any]:
@@ -111,6 +127,11 @@ def _validate_identity_component(value: str) -> str:
         raise MaterializationError(
             "Vaultwarden materialization identity must include service, principal, and credential."
         )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", component):
+        raise MaterializationError(
+            "Vaultwarden materialization identity components must contain only "
+            "letters, numbers, '.', '_', and '-'."
+        )
     if "/" in component or "\\" in component:
         raise MaterializationError(
             "Vaultwarden materialization identity components cannot contain path separators."
@@ -145,6 +166,19 @@ def vaultwarden_materialization_identity(reference: str) -> MaterializedSecretId
         service=service,
         principal=principal,
         credential=credential,
+    )
+
+
+def materialized_secret_identity(
+    *,
+    service: str,
+    principal: str,
+    credential: str,
+) -> MaterializedSecretIdentity:
+    return MaterializedSecretIdentity(
+        service=_validate_identity_component(service),
+        principal=_validate_identity_component(principal),
+        credential=_validate_identity_component(credential),
     )
 
 

@@ -18,6 +18,7 @@ from .materialization import (
     materialization_result,
     materialization_status_result,
     materialized_secret_definitions,
+    materialized_secret_identity,
     materialized_secret_target,
     safe_target_path,
     selected_definitions,
@@ -581,6 +582,95 @@ class SecretResolver:
             "selected_count": len(definitions),
             "materialized": results,
             "needs_attention": needs_attention,
+        }
+
+    def add_secret(
+        self,
+        *,
+        service: str,
+        principal: str,
+        credential: str,
+        value: str,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        if not value:
+            raise SecretProviderError("Secret value must be non-empty.")
+
+        values = active_profile_values()
+        root = configured_secrets_root(values)
+        identity = materialized_secret_identity(
+            service=service,
+            principal=principal,
+            credential=credential,
+        )
+        target = safe_target_path(root, identity.to_relative_target())
+        provider = self.get_provider("vaultwarden")
+        try:
+            exists = provider.canonical_item_exists(
+                item_name=identity.canonical_identity,
+                search=identity.credential,
+            )
+        except ProviderLockedError as exc:
+            raise ProviderLockedError(
+                "Vaultwarden is not unlocked. Unlock it before creating secrets."
+            ) from exc
+        except ProviderUnavailableError as exc:
+            raise ProviderUnavailableError(
+                "Vaultwarden is unavailable or misconfigured for secret creation."
+            ) from exc
+        except SecretProviderError as exc:
+            raise SecretProviderError("Vaultwarden duplicate check failed.") from exc
+        if exists:
+            raise SecretProviderError(
+                "A Vaultwarden item already exists for this canonical identity."
+            )
+
+        secret = {
+            "service": identity.service,
+            "principal": identity.principal,
+            "credential": identity.credential,
+            "canonical_identity": identity.canonical_identity,
+            "reference": identity.reference,
+            "target": str(target),
+            "target_source": "identity-derived",
+            "provider": "vaultwarden",
+            "outcome": "planned" if not apply else "created",
+            "applied": apply,
+            "redacted_value": "[REDACTED]",
+        }
+
+        if apply:
+            try:
+                created = provider.create_canonical_secret(
+                    item_name=identity.canonical_identity,
+                    field_name=identity.field_name,
+                    value=value,
+                    metadata={
+                        "wood.credential": identity.credential,
+                        "wood.managed": "true",
+                        "wood.principal": identity.principal,
+                        "wood.reference": identity.reference,
+                        "wood.service": identity.service,
+                    },
+                )
+            except ProviderLockedError as exc:
+                raise ProviderLockedError(
+                    "Vaultwarden is not unlocked. Unlock it before creating secrets."
+                ) from exc
+            except ProviderUnavailableError as exc:
+                raise ProviderUnavailableError(
+                    "Vaultwarden is unavailable or misconfigured for secret creation."
+                ) from exc
+            except SecretProviderError as exc:
+                raise SecretProviderError("Vaultwarden item creation failed.") from exc
+            secret["vaultwarden_item_id"] = created.item_id
+            secret["vaultwarden_item_name"] = created.item_name
+
+        return {
+            "ok": True,
+            "apply": apply,
+            "secrets_root": str(root.expanduser()),
+            "secret": secret,
         }
 
 

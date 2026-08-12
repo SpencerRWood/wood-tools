@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .providers import (
+    CreatedSecret,
     MissingSecretError,
     ProviderLockedError,
     ProviderStatus,
@@ -560,6 +561,74 @@ class VaultwardenSecretProvider(SecretProvider):
 
         raise MissingSecretError(
             "Vaultwarden item did not contain a matching custom field or login.password."
+        )
+
+    def _ready_session_token(self, *, action: str) -> str | None:
+        status = self.status()
+        if not status.available:
+            raise ProviderUnavailableError(status.detail)
+        if not status.configured:
+            raise ProviderUnavailableError(status.detail)
+        if not status.unlocked:
+            raise ProviderLockedError(f"Vaultwarden is not unlocked. Unlock it before {action}.")
+        return self._current_session_token()
+
+    def canonical_item_exists(self, *, item_name: str, search: str) -> bool:
+        session_token = self._ready_session_token(action="creating secrets")
+        payload = self._run_json(
+            ["list", "items", "--search", search],
+            session_token=session_token,
+        )
+        if not isinstance(payload, list):
+            raise SecretProviderError(
+                "Unexpected Vaultwarden CLI output while checking for existing secret."
+            )
+        return any(str(item.get("name") or "").strip() == item_name for item in payload)
+
+    def create_canonical_secret(
+        self,
+        *,
+        item_name: str,
+        field_name: str,
+        value: str,
+        metadata: dict[str, str],
+    ) -> CreatedSecret:
+        session_token = self._ready_session_token(action="creating secrets")
+        try:
+            item = self._run_json(["get", "template", "item"], session_token=session_token)
+            if not isinstance(item, dict):
+                raise SecretProviderError("Vaultwarden item template was not an object.")
+
+            item["type"] = 2
+            item["name"] = item_name
+            item["notes"] = "\n".join(f"{key}: {metadata[key]}" for key in sorted(metadata))
+            item["fields"] = [
+                {
+                    "name": field_name,
+                    "value": value,
+                    "type": 1,
+                }
+            ]
+            encoded = self._runner(
+                ["encode"],
+                input_text=json.dumps(item, separators=(",", ":")),
+                session_token=session_token,
+            ).strip()
+            if not encoded:
+                raise SecretProviderError("Vaultwarden CLI did not encode the item.")
+            created = self._run_json(["create", "item", encoded], session_token=session_token)
+            if not isinstance(created, dict):
+                raise SecretProviderError("Vaultwarden create response was not an object.")
+            item_id = created.get("id")
+            if not isinstance(item_id, str) or not item_id.strip():
+                raise SecretProviderError("Vaultwarden create response did not include item id.")
+        except SecretProviderError as exc:
+            raise SecretProviderError("Vaultwarden item creation failed.") from exc
+
+        return CreatedSecret(
+            provider=self.name,
+            item_id=item_id.strip(),
+            item_name=item_name,
         )
 
     def list_entries(self, *, search: str | None = None) -> dict[str, Any]:
