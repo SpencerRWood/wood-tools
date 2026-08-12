@@ -1268,7 +1268,7 @@ def test_wood_template_renders_python_cli_in_current_directory(
         "reference_packs": [],
         "schema_version": 1,
         "template": payload["data"]["template"],
-        "wood_tools_version": "0.2.0",
+        "wood_tools_version": "0.3.0",
     }
     assert not (project_root / ".wood").exists()
     assert str(Path.home() / ".wood") not in json.dumps(lock)
