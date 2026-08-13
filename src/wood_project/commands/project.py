@@ -4,7 +4,13 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from ..core.project import init_project, link_repository, show_project, validate_project
+from ..core.project import (
+    init_project,
+    link_openproject,
+    link_repository,
+    show_project,
+    validate_project,
+)
 
 COMMANDS = {"init", "show", "validate", "link"}
 
@@ -35,6 +41,24 @@ def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
     link_repo_parser.add_argument("--role", help="Optional repository role")
     link_repo_parser.add_argument("--apply", action="store_true", help="Write project.json")
     link_repo_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    link_openproject_parser = link_subparsers.add_parser(
+        "openproject",
+        help="Register the current repository with the global OpenProject registry",
+    )
+    link_openproject_parser.add_argument(
+        "--registry-path",
+        help="Global Wood config path. Default: ~/.config/wood-tools/config.json",
+    )
+    link_openproject_parser.add_argument("--url", help="OpenProject base URL")
+    link_openproject_parser.add_argument(
+        "--initiative",
+        help="OpenProject initiative work package ID",
+    )
+    link_openproject_parser.add_argument("--token-ref", help="Secret reference for the API token")
+    link_openproject_parser.add_argument("--user-agent", help="Optional OpenProject user agent")
+    link_openproject_parser.add_argument("--apply", action="store_true", help="Write config files")
+    link_openproject_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
 
 def handles(args: argparse.Namespace) -> bool:
@@ -70,14 +94,28 @@ def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
             validate_project(project_file=args.project_file, project_root=args.project_root),
             None,
         )
+    if args.link_command == "repo":
+        return (
+            "link-repo",
+            link_repository(
+                repo_path=args.repo_path,
+                repo_name=args.name,
+                repo_role=args.role,
+                project_file=args.project_file,
+                project_root=args.project_root,
+                apply=args.apply,
+            ),
+            args.apply,
+        )
     return (
-        "link-repo",
-        link_repository(
-            repo_path=args.repo_path,
-            repo_name=args.name,
-            repo_role=args.role,
-            project_file=args.project_file,
+        "link-openproject",
+        link_openproject(
             project_root=args.project_root,
+            registry_path=args.registry_path,
+            url=args.url,
+            initiative_id=args.initiative,
+            token_ref=args.token_ref,
+            user_agent=args.user_agent,
             apply=args.apply,
         ),
         args.apply,

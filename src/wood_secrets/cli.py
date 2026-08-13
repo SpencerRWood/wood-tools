@@ -7,12 +7,18 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from resources.cli.audit import write_audit_event
 from resources.cli.output import error_output, success_output, warning_output
+from wood_config.core import ConfigError, build_paths, load_config, save_config
 
 from .core import SecretResolver
 from .core.env_files import resolve_env_file, write_resolved_env_file
-from .core.materialization import materialized_secret_identity
+from .core.materialization import (
+    materialized_secret_definitions,
+    materialized_secret_identity,
+)
 from .core.providers import SecretProviderError
 
 
@@ -177,28 +183,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_env_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
-    materialize_parser = subparsers.add_parser(
-        "materialize",
-        help="Preview or apply configured local secret materialization",
+    file_parser = subparsers.add_parser(
+        "file",
+        help="Register, inspect, or write materialized secret files",
     )
-    materialize_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
-    materialize_parser.add_argument(
+    file_subparsers = file_parser.add_subparsers(dest="file_command", required=True)
+
+    file_add_parser = file_subparsers.add_parser(
+        "add",
+        help="Preview or register one Vaultwarden reference for file materialization",
+    )
+    file_add_parser.add_argument("name", help="Materialized secret name")
+    file_add_parser.add_argument("ref", help="Secret reference to write to a file")
+    file_add_parser.add_argument("--target", help="Optional relative target under secrets_root")
+    file_add_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist the registration. Without --apply, only preview.",
+    )
+    file_add_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    file_import_parser = file_subparsers.add_parser(
+        "import",
+        help="Preview or import materialized secret file registrations from JSON/YAML",
+    )
+    file_import_parser.add_argument("path", help="Path to a JSON or YAML secret file manifest")
+    file_import_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist imported registrations. Without --apply, only preview.",
+    )
+    file_import_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    file_write_parser = file_subparsers.add_parser(
+        "write",
+        help="Preview or write configured materialized secret files",
+    )
+    file_write_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
+    file_write_parser.add_argument(
         "--apply",
         action="store_true",
         help="Write configured materialized secrets. Without --apply, only preview.",
     )
-    materialize_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    file_write_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
-    materialize_status_parser = subparsers.add_parser(
-        "materialize-status",
-        help="Inspect configured materialized secret status without writing files",
+    file_status_parser = file_subparsers.add_parser(
+        "status",
+        help="Inspect configured materialized secret file status without writing files",
     )
-    materialize_status_parser.add_argument(
-        "name",
-        nargs="?",
-        help="Optional materialized secret name",
-    )
-    materialize_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    file_status_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
+    file_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -219,6 +253,169 @@ def _read_add_secret_value(*, stdin: bool) -> str:
     if value != confirmation:
         raise SecretProviderError("Secret confirmation did not match.")
     return value
+
+
+def _register_materialized_file(
+    *,
+    name: str,
+    reference: str,
+    target: str | None,
+    apply: bool,
+) -> dict[str, Any]:
+    if not name.strip():
+        raise SecretProviderError("Materialized secret name must be non-empty.")
+    definition = {"ref": reference.strip()}
+    if not definition["ref"]:
+        raise SecretProviderError("Secret reference must be non-empty.")
+    if target is not None:
+        if not target.strip():
+            raise SecretProviderError("Materialized secret target must be non-empty.")
+        definition["target"] = target.strip()
+
+    try:
+        paths = build_paths()
+        document = load_config(paths)
+        active_profile = str(document["active_profile"])
+        profile = document["profiles"].setdefault(active_profile, {})
+        integrations = profile.setdefault("integrations", {})
+        vaultwarden = integrations.setdefault("vaultwarden", {})
+        materialized = vaultwarden.setdefault("materialized_secrets", {})
+        if not isinstance(materialized, dict):
+            raise SecretProviderError(
+                "integrations.vaultwarden.materialized_secrets must be an object."
+            )
+        previous = materialized.get(name)
+        materialized[name] = definition
+        materialized_secret_definitions(profile)
+        changed = previous != definition
+        if apply:
+            save_config(paths, document)
+    except ConfigError as exc:
+        raise SecretProviderError(f"Unable to update wood-config: {exc}") from exc
+    except OSError as exc:
+        raise SecretProviderError(f"Unable to update wood-config: {exc}") from exc
+
+    return {
+        "ok": True,
+        "apply": apply,
+        "changed": changed if apply else False,
+        "path": str(paths.file_path),
+        "file": {
+            "name": name,
+            "ref": definition["ref"],
+            "target": definition.get("target"),
+        },
+    }
+
+
+def _load_materialized_file_manifest(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SecretProviderError(f"Unable to read materialized secret manifest: {exc}") from exc
+
+    try:
+        if path.suffix.lower() == ".json":
+            payload = json.loads(raw)
+        elif path.suffix.lower() in {".yaml", ".yml"}:
+            payload = yaml.safe_load(raw)
+        else:
+            raise SecretProviderError(
+                "Materialized secret manifest must use .json, .yaml, or .yml."
+            )
+    except json.JSONDecodeError as exc:
+        raise SecretProviderError(f"Invalid JSON in materialized secret manifest: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise SecretProviderError(f"Invalid YAML in materialized secret manifest: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise SecretProviderError("Materialized secret manifest root must be an object.")
+
+    secrets = payload.get("secrets", payload)
+    if not isinstance(secrets, dict):
+        raise SecretProviderError("Materialized secret manifest 'secrets' must be an object.")
+
+    definitions: dict[str, Any] = {}
+    for raw_name, raw_definition in secrets.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise SecretProviderError("Materialized secret names must be non-empty strings.")
+        name = raw_name.strip()
+        if not isinstance(raw_definition, dict):
+            raise SecretProviderError(f"Materialized secret {name!r} must be an object.")
+        raw_ref = raw_definition.get("ref")
+        if not isinstance(raw_ref, str) or not raw_ref.strip():
+            raise SecretProviderError(f"Materialized secret {name!r} must include a non-empty ref.")
+        definition = {"ref": raw_ref.strip()}
+        if "target" in raw_definition:
+            raw_target = raw_definition["target"]
+            if raw_target is not None:
+                if not isinstance(raw_target, str) or not raw_target.strip():
+                    raise SecretProviderError(
+                        f"Materialized secret {name!r} target must be a non-empty string."
+                    )
+                definition["target"] = raw_target.strip()
+        definitions[name] = definition
+
+    return definitions
+
+
+def _import_materialized_files(*, path: Path, apply: bool) -> dict[str, Any]:
+    definitions = _load_materialized_file_manifest(path)
+
+    try:
+        paths = build_paths()
+        document = load_config(paths)
+        active_profile = str(document["active_profile"])
+        profile = document["profiles"].setdefault(active_profile, {})
+        integrations = profile.setdefault("integrations", {})
+        vaultwarden = integrations.setdefault("vaultwarden", {})
+        materialized = vaultwarden.setdefault("materialized_secrets", {})
+        if not isinstance(materialized, dict):
+            raise SecretProviderError(
+                "integrations.vaultwarden.materialized_secrets must be an object."
+            )
+
+        imported = []
+        for name, definition in definitions.items():
+            previous = materialized.get(name)
+            state = (
+                "added"
+                if previous is None
+                else "unchanged"
+                if previous == definition
+                else "updated"
+            )
+            materialized[name] = definition
+            imported.append(
+                {
+                    "name": name,
+                    "ref": definition["ref"],
+                    "target": definition.get("target"),
+                    "state": state,
+                }
+            )
+
+        materialized_secret_definitions(profile)
+        if apply:
+            save_config(paths, document)
+    except ConfigError as exc:
+        raise SecretProviderError(f"Unable to update wood-config: {exc}") from exc
+    except OSError as exc:
+        raise SecretProviderError(f"Unable to update wood-config: {exc}") from exc
+
+    states = [item["state"] for item in imported]
+    return {
+        "ok": True,
+        "apply": apply,
+        "path": str(paths.file_path),
+        "manifest_path": str(path),
+        "selected_count": len(imported),
+        "added_count": states.count("added"),
+        "updated_count": states.count("updated"),
+        "unchanged_count": states.count("unchanged"),
+        "changed": apply and any(state != "unchanged" for state in states),
+        "imported": imported,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -371,8 +568,7 @@ def main(argv: list[str] | None = None) -> int:
             item = payload["secret"]
             verb = "created" if args.apply else "would create"
             print(
-                f"{verb} {item['canonical_identity']} -> "
-                f"{item['target']} ({item['target_source']})"
+                f"{verb} {item['canonical_identity']} -> {item['target']} ({item['target_source']})"
             )
             return 0
 
@@ -432,55 +628,115 @@ def main(argv: list[str] | None = None) -> int:
             print("preview complete; no files were written")
             return 0
 
-        if args.command == "materialize":
-            payload = resolver.materialize(args.name, apply=args.apply)
-            if args.json:
-                envelope_builder = success_output if payload["ok"] else warning_output
-                envelope = envelope_builder(
-                    command="materialize",
-                    mutation="mutating" if args.apply else "read-only",
-                    summary=(
-                        "Materialized secret apply completed."
-                        if args.apply and payload["ok"]
-                        else "Materialized secret preview completed."
-                        if payload["ok"]
-                        else "One or more materialized secrets were not changed."
-                    ),
-                    data=payload,
-                    warnings=payload["errors"] if not payload["ok"] else None,
-                    next_actions=(
-                        ["Re-run wood-secrets materialize with --apply to write files."]
-                        if not args.apply and payload["ok"]
-                        else None
-                    ),
+        if args.command == "file":
+            if args.file_command == "add":
+                payload = _register_materialized_file(
+                    name=args.name,
+                    reference=args.ref,
+                    target=args.target,
+                    apply=args.apply,
                 )
-                return _emit(envelope, json_output=True, command_args=command_args)
-            for item in payload["materialized"]:
-                verb = "applied" if args.apply else "would materialize"
-                print(f"{verb} {item['name']} -> {item['target']} ({item['state']})")
-            for item in payload["errors"]:
-                print(f"skipped {item['name']}: {item['message']}", file=sys.stderr)
-            return 0 if payload["ok"] else 1
+                if args.json:
+                    envelope_builder = success_output if args.apply else warning_output
+                    envelope = envelope_builder(
+                        command="file-add",
+                        mutation="mutating" if args.apply else "read-only",
+                        summary=(
+                            "Materialized secret file registration saved."
+                            if args.apply
+                            else "Materialized secret file registration preview completed."
+                        ),
+                        data=payload,
+                        next_actions=(
+                            ["Re-run wood-secrets file add with --apply to save this registration."]
+                            if not args.apply
+                            else None
+                        ),
+                    )
+                    return _emit(envelope, json_output=True, command_args=command_args)
+                verb = "registered" if args.apply else "would register"
+                target = payload["file"].get("target") or "(derived)"
+                print(f"{verb} {payload['file']['name']} -> {target}")
+                return 0
 
-        if args.command == "materialize-status":
-            payload = resolver.materialize_status(args.name)
-            if args.json:
-                envelope_builder = success_output if payload["ok"] else warning_output
-                envelope = envelope_builder(
-                    command="materialize-status",
-                    mutation="read-only",
-                    summary=(
-                        "Materialized secret status completed."
-                        if payload["ok"]
-                        else "One or more materialized secrets need attention."
-                    ),
-                    data=payload,
-                    warnings=payload["needs_attention"] if not payload["ok"] else None,
-                )
-                return _emit(envelope, json_output=True, command_args=command_args)
-            for item in payload["materialized"]:
-                print(f"{item['name']} -> {item['target']} ({item['state']})")
-            return 0 if payload["ok"] else 1
+            if args.file_command == "import":
+                payload = _import_materialized_files(path=Path(args.path), apply=args.apply)
+                if args.json:
+                    envelope_builder = success_output if args.apply else warning_output
+                    envelope = envelope_builder(
+                        command="file-import",
+                        mutation="mutating" if args.apply else "read-only",
+                        summary=(
+                            "Materialized secret file registrations imported."
+                            if args.apply
+                            else "Materialized secret file import preview completed."
+                        ),
+                        data=payload,
+                        next_actions=(
+                            [
+                                "Re-run wood-secrets file import with --apply to save "
+                                "these registrations."
+                            ]
+                            if not args.apply
+                            else None
+                        ),
+                    )
+                    return _emit(envelope, json_output=True, command_args=command_args)
+                verb = "imported" if args.apply else "would import"
+                for item in payload["imported"]:
+                    target = item.get("target") or "(derived)"
+                    print(f"{verb} {item['name']} -> {target} ({item['state']})")
+                return 0
+
+            if args.file_command == "write":
+                payload = resolver.materialize(args.name, apply=args.apply)
+                if args.json:
+                    envelope_builder = success_output if payload["ok"] else warning_output
+                    envelope = envelope_builder(
+                        command="file-write",
+                        mutation="mutating" if args.apply else "read-only",
+                        summary=(
+                            "Materialized secret file write completed."
+                            if args.apply and payload["ok"]
+                            else "Materialized secret file write preview completed."
+                            if payload["ok"]
+                            else "One or more materialized secret files were not changed."
+                        ),
+                        data=payload,
+                        warnings=payload["errors"] if not payload["ok"] else None,
+                        next_actions=(
+                            ["Re-run wood-secrets file write with --apply to write files."]
+                            if not args.apply and payload["ok"]
+                            else None
+                        ),
+                    )
+                    return _emit(envelope, json_output=True, command_args=command_args)
+                for item in payload["materialized"]:
+                    verb = "wrote" if args.apply else "would write"
+                    print(f"{verb} {item['name']} -> {item['target']} ({item['state']})")
+                for item in payload["errors"]:
+                    print(f"skipped {item['name']}: {item['message']}", file=sys.stderr)
+                return 0 if payload["ok"] else 1
+
+            if args.file_command == "status":
+                payload = resolver.materialize_status(args.name)
+                if args.json:
+                    envelope_builder = success_output if payload["ok"] else warning_output
+                    envelope = envelope_builder(
+                        command="file-status",
+                        mutation="read-only",
+                        summary=(
+                            "Materialized secret file status completed."
+                            if payload["ok"]
+                            else "One or more materialized secret files need attention."
+                        ),
+                        data=payload,
+                        warnings=payload["needs_attention"] if not payload["ok"] else None,
+                    )
+                    return _emit(envelope, json_output=True, command_args=command_args)
+                for item in payload["materialized"]:
+                    print(f"{item['name']} -> {item['target']} ({item['state']})")
+                return 0 if payload["ok"] else 1
 
         if args.command == "exec":
             raw_args = args.command_args
@@ -527,6 +783,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.command in {"unlock", "lock"}
             or (args.command == "resolve-env" and args.apply)
             or (args.command == "add" and args.apply)
+            or (
+                args.command == "file"
+                and getattr(args, "file_command", None) in {"add", "import", "write"}
+                and args.apply
+            )
             else "read-only"
         )
         if getattr(args, "json", False):

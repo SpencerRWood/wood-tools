@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from wood_config.core import ConfigPaths, save_config
 from wood_secrets.cli import main
 from wood_secrets.core import SecretResolver
 from wood_secrets.core.providers import (
@@ -492,7 +493,7 @@ def test_resolve_env_force_requires_apply(
     assert "--force can only be used with --apply" in payload["summary"]
 
 
-def test_materialize_json_previews_without_writing_or_leaking_secret(
+def test_file_write_json_previews_without_writing_or_leaking_secret(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -513,20 +514,20 @@ def test_materialize_json_previews_without_writing_or_leaking_secret(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "--json"])
+    code = main(["file", "write", "--json"])
 
     assert code == 0
     assert not (secrets_root / "openproject" / "api-token").exists()
     payload = json.loads(capsys.readouterr().out)
     rendered = json.dumps(payload)
-    assert payload["command"] == "materialize"
+    assert payload["command"] == "file-write"
     assert payload["mutation"] == "read-only"
     assert payload["data"]["materialized"][0]["state"] == "missing"
     assert payload["data"]["materialized"][0]["redacted_value"] == "[REDACTED]"
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_json_derives_target_from_vaultwarden_identity(
+def test_file_write_json_derives_target_from_vaultwarden_identity(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -546,7 +547,7 @@ def test_materialize_json_derives_target_from_vaultwarden_identity(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "openproject-token", "--json"])
+    code = main(["file", "write", "openproject-token", "--json"])
 
     assert code == 0
     assert not (secrets_root / "openproject" / "wood-tools" / "api-token").exists()
@@ -561,7 +562,226 @@ def test_materialize_json_derives_target_from_vaultwarden_identity(
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_apply_writes_protected_file_without_printing_secret(
+def test_file_add_registers_materialized_secret_with_short_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(secrets_root=tmp_path / "secrets", definitions={}),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(
+        [
+            "file",
+            "add",
+            "openproject-token",
+            "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN",
+            "--apply",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "file-add"
+    assert payload["mutation"] == "mutating"
+    assert payload["data"]["changed"] is True
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    materialized = document["profiles"]["default"]["integrations"]["vaultwarden"][
+        "materialized_secrets"
+    ]
+    assert materialized == {
+        "openproject-token": {
+            "ref": "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
+        }
+    }
+
+
+def test_file_import_yaml_previews_materialized_secret_registrations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(secrets_root=tmp_path / "secrets", definitions={}),
+    )
+    manifest = tmp_path / "secrets.yaml"
+    manifest.write_text(
+        """
+secrets:
+  openproject-token:
+    ref: vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN
+  postgres-password:
+    ref: vaultwarden://postgres/wood-events/password#PASSWORD
+    target: postgres/wood-events/password
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["file", "import", str(manifest), "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "file-import"
+    assert payload["mutation"] == "read-only"
+    assert payload["data"]["selected_count"] == 2
+    assert payload["data"]["added_count"] == 2
+    assert payload["data"]["changed"] is False
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        document["profiles"]["default"]["integrations"]["vaultwarden"]["materialized_secrets"] == {}
+    )
+
+
+def test_file_import_json_applies_and_merges_materialized_secret_registrations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(
+            secrets_root=tmp_path / "secrets",
+            definitions={
+                "openproject-token": {
+                    "ref": "vaultwarden://openproject/wood-tools/old-token#OPENPROJECT_API_TOKEN"
+                },
+                "unchanged-token": {"ref": "vaultwarden://github/wood-tools/pat#GITHUB_TOKEN"},
+            },
+        ),
+    )
+    manifest = tmp_path / "secrets.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "openproject-token": {
+                    "ref": ("vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN")
+                },
+                "unchanged-token": {"ref": "vaultwarden://github/wood-tools/pat#GITHUB_TOKEN"},
+                "postgres-password": {
+                    "ref": "vaultwarden://postgres/wood-events/password#PASSWORD",
+                    "target": "postgres/wood-events/password",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["file", "import", str(manifest), "--apply", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "file-import"
+    assert payload["mutation"] == "mutating"
+    assert payload["data"]["selected_count"] == 3
+    assert payload["data"]["added_count"] == 1
+    assert payload["data"]["updated_count"] == 1
+    assert payload["data"]["unchanged_count"] == 1
+    assert payload["data"]["changed"] is True
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    materialized = document["profiles"]["default"]["integrations"]["vaultwarden"][
+        "materialized_secrets"
+    ]
+    assert materialized["openproject-token"] == {
+        "ref": "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
+    }
+    assert materialized["postgres-password"] == {
+        "ref": "vaultwarden://postgres/wood-events/password#PASSWORD",
+        "target": "postgres/wood-events/password",
+    }
+
+
+def test_file_import_rejects_invalid_manifest_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(secrets_root=tmp_path / "secrets", definitions={}),
+    )
+    before = config_path.read_text(encoding="utf-8")
+    manifest = tmp_path / "secrets.yaml"
+    manifest.write_text(
+        """
+secrets:
+  bad-token:
+    target: missing/ref
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["file", "import", str(manifest), "--apply", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert "must include a non-empty ref" in payload["summary"]
+    assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_file_write_applies_materialized_secret_file(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    secrets_root = tmp_path / "secrets"
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(
+            secrets_root=secrets_root,
+            definitions={
+                "openproject-token": {
+                    "ref": "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
+                }
+            },
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+    install_stub_resolver()
+
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
+
+    assert code == 0
+    target = secrets_root / "openproject" / "wood-tools" / "api-token"
+    assert target.read_text(encoding="utf-8") == "super-secret-token"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "file-write"
+    assert payload["mutation"] == "mutating"
+    assert payload["data"]["materialized"][0]["state"] == "created"
+
+
+@pytest.mark.parametrize("command", ["materialize", "materialize-status"])
+def test_legacy_materialized_file_commands_are_removed(
+    command: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main([command, "--json"])
+
+    assert exc.value.code == 2
+    assert command in capsys.readouterr().err
+
+
+def test_file_write_apply_writes_protected_file_without_printing_secret(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -582,7 +802,7 @@ def test_materialize_apply_writes_protected_file_without_printing_secret(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "openproject-token", "--apply", "--json"])
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
 
     assert code == 0
     target = secrets_root / "openproject" / "api-token"
@@ -596,7 +816,7 @@ def test_materialize_apply_writes_protected_file_without_printing_secret(
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_apply_writes_derived_target_without_printing_secret(
+def test_file_write_apply_writes_derived_target_without_printing_secret(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -616,7 +836,7 @@ def test_materialize_apply_writes_derived_target_without_printing_secret(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "postgres-password", "--apply", "--json"])
+    code = main(["file", "write", "postgres-password", "--apply", "--json"])
 
     assert code == 0
     target = secrets_root / "postgres" / "wood-events" / "password"
@@ -629,7 +849,7 @@ def test_materialize_apply_writes_derived_target_without_printing_secret(
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_explicit_target_overrides_vaultwarden_identity(
+def test_file_write_explicit_target_overrides_vaultwarden_identity(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -650,7 +870,7 @@ def test_materialize_explicit_target_overrides_vaultwarden_identity(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "openproject-token", "--apply", "--json"])
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
 
     assert code == 0
     explicit_target = secrets_root / "custom" / "openproject-token"
@@ -663,7 +883,7 @@ def test_materialize_explicit_target_overrides_vaultwarden_identity(
     assert "service" not in item
 
 
-def test_materialize_apply_skips_unchanged_file(
+def test_file_write_apply_skips_unchanged_file(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -688,7 +908,7 @@ def test_materialize_apply_skips_unchanged_file(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "openproject-token", "--apply", "--json"])
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
 
     assert code == 0
     assert target.stat().st_mtime_ns == before
@@ -697,7 +917,7 @@ def test_materialize_apply_skips_unchanged_file(
     assert payload["data"]["materialized"][0]["changed"] is False
 
 
-def test_materialize_provider_failure_preserves_existing_file_without_leak(
+def test_file_write_provider_failure_preserves_existing_file_without_leak(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -721,7 +941,7 @@ def test_materialize_provider_failure_preserves_existing_file_without_leak(
     )
     install_stub_resolver(provider=StubProvider(error=ProviderUnavailableError("secret boom")))
 
-    code = main(["materialize", "openproject-token", "--apply", "--json"])
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
 
     assert code == 0
     assert target.read_text(encoding="utf-8") == "previous-valid-value"
@@ -733,7 +953,7 @@ def test_materialize_provider_failure_preserves_existing_file_without_leak(
     assert "previous-valid-value" not in rendered
 
 
-def test_materialize_rejects_unsafe_target_without_writing(
+def test_file_write_rejects_unsafe_target_without_writing(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -754,7 +974,7 @@ def test_materialize_rejects_unsafe_target_without_writing(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "bad-token", "--apply", "--json"])
+    code = main(["file", "write", "bad-token", "--apply", "--json"])
 
     assert code == 0
     assert not (tmp_path / "outside").exists()
@@ -763,7 +983,7 @@ def test_materialize_rejects_unsafe_target_without_writing(
     assert payload["data"]["errors"][0]["error_type"] == "MaterializationError"
 
 
-def test_materialize_rejects_malformed_derived_identity_without_writing(
+def test_file_write_rejects_malformed_derived_identity_without_writing(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -783,7 +1003,7 @@ def test_materialize_rejects_malformed_derived_identity_without_writing(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "bad-token", "--apply", "--json"])
+    code = main(["file", "write", "bad-token", "--apply", "--json"])
 
     assert code == 0
     assert not secrets_root.exists()
@@ -794,7 +1014,7 @@ def test_materialize_rejects_malformed_derived_identity_without_writing(
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_rejects_symlink_parent_escape(
+def test_file_write_rejects_symlink_parent_escape(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -819,7 +1039,7 @@ def test_materialize_rejects_symlink_parent_escape(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "bad-token", "--apply", "--json"])
+    code = main(["file", "write", "bad-token", "--apply", "--json"])
 
     assert code == 0
     assert not (outside / "api-token").exists()
@@ -827,7 +1047,7 @@ def test_materialize_rejects_symlink_parent_escape(
     assert payload["status"] == "warning"
 
 
-def test_materialize_atomic_write_failure_preserves_existing_file(
+def test_file_write_atomic_write_failure_preserves_existing_file(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -855,7 +1075,7 @@ def test_materialize_atomic_write_failure_preserves_existing_file(
     )
     install_stub_resolver()
 
-    code = main(["materialize", "openproject-token", "--apply", "--json"])
+    code = main(["file", "write", "openproject-token", "--apply", "--json"])
 
     assert code == 0
     assert target.read_text(encoding="utf-8") == "previous-valid-value"
@@ -864,7 +1084,7 @@ def test_materialize_atomic_write_failure_preserves_existing_file(
     assert "previous-valid-value" not in rendered
 
 
-def test_materialize_status_reports_missing_without_writing(
+def test_file_status_reports_missing_without_writing(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -885,20 +1105,20 @@ def test_materialize_status_reports_missing_without_writing(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "openproject-token", "--json"])
+    code = main(["file", "status", "openproject-token", "--json"])
 
     assert code == 0
     assert not secrets_root.exists()
     payload = json.loads(capsys.readouterr().out)
     rendered = json.dumps(payload)
-    assert payload["command"] == "materialize-status"
+    assert payload["command"] == "file-status"
     assert payload["mutation"] == "read-only"
     assert payload["data"]["materialized"][0]["state"] == "missing"
     assert payload["data"]["materialized"][0]["exists"] is False
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_status_reports_derived_identity_metadata(
+def test_file_status_reports_derived_identity_metadata(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -918,7 +1138,7 @@ def test_materialize_status_reports_derived_identity_metadata(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "cloudflare-token", "--json"])
+    code = main(["file", "status", "cloudflare-token", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -932,7 +1152,7 @@ def test_materialize_status_reports_derived_identity_metadata(
     assert "super-secret-token" not in rendered
 
 
-def test_materialize_status_reports_current_and_refresh_needed(
+def test_file_status_reports_current_and_refresh_needed(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -962,7 +1182,7 @@ def test_materialize_status_reports_current_and_refresh_needed(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "--json"])
+    code = main(["file", "status", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -976,7 +1196,7 @@ def test_materialize_status_reports_current_and_refresh_needed(
     assert "old-secret-token" not in rendered
 
 
-def test_materialize_status_reports_provider_error_without_leaking_existing_file(
+def test_file_status_reports_provider_error_without_leaking_existing_file(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1000,7 +1220,7 @@ def test_materialize_status_reports_provider_error_without_leaking_existing_file
     )
     install_stub_resolver(provider=StubProvider(error=ProviderLockedError("locked secret value")))
 
-    code = main(["materialize-status", "openproject-token", "--json"])
+    code = main(["file", "status", "openproject-token", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -1012,7 +1232,7 @@ def test_materialize_status_reports_provider_error_without_leaking_existing_file
     assert "previous-valid-value" not in rendered
 
 
-def test_materialize_status_reports_invalid_unsafe_path_and_symlink_target(
+def test_file_status_reports_invalid_unsafe_path_and_symlink_target(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1037,7 +1257,7 @@ def test_materialize_status_reports_invalid_unsafe_path_and_symlink_target(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "bad-token", "--json"])
+    code = main(["file", "status", "bad-token", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -1045,7 +1265,7 @@ def test_materialize_status_reports_invalid_unsafe_path_and_symlink_target(
     assert payload["data"]["materialized"][0]["is_symlink"] is True
 
 
-def test_materialize_status_reports_unsafe_permissions(
+def test_file_status_reports_unsafe_permissions(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1070,7 +1290,7 @@ def test_materialize_status_reports_unsafe_permissions(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "openproject-token", "--json"])
+    code = main(["file", "status", "openproject-token", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -1081,7 +1301,7 @@ def test_materialize_status_reports_unsafe_permissions(
     assert item["mode"] == "0o644"
 
 
-def test_materialize_status_reports_present_unverified_when_file_cannot_be_read(
+def test_file_status_reports_present_unverified_when_file_cannot_be_read(
     install_stub_resolver,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1109,7 +1329,7 @@ def test_materialize_status_reports_present_unverified_when_file_cannot_be_read(
     )
     install_stub_resolver()
 
-    code = main(["materialize-status", "openproject-token", "--json"])
+    code = main(["file", "status", "openproject-token", "--json"])
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -2295,9 +2515,7 @@ def test_vaultwarden_create_canonical_secret_uses_redactable_item_payload(tmp_pa
             assert input_text is not None
             item = json.loads(input_text)
             assert item["name"] == "postgres / wood-events / password"
-            assert item["fields"] == [
-                {"name": "PASSWORD", "value": "new-secret-token", "type": 1}
-            ]
+            assert item["fields"] == [{"name": "PASSWORD", "value": "new-secret-token", "type": 1}]
             assert "wood.service: postgres" in item["notes"]
             return "encoded-item"
         if args == ["create", "item", "encoded-item"]:

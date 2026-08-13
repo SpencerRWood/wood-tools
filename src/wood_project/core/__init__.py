@@ -12,6 +12,7 @@ from .models import LinkedRepository, ProjectError, ProjectPaths
 from .paths import build_paths, resolve_project_root, resolve_wood_home
 from .project import (
     init_project,
+    link_openproject,
     link_repository,
     show_project,
     validate_project,
@@ -26,6 +27,7 @@ __all__ = [
     "create_project_document",
     "generate_project_id",
     "init_project",
+    "link_openproject",
     "link_repository",
     "load_project_document",
     "resolve_project_root",

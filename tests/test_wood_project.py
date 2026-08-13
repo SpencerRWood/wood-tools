@@ -9,6 +9,7 @@ import pytest
 
 import wood_templates
 from resources.packages import compute_resource_digest
+from wood_config.core import ConfigPaths, save_config
 from wood_project.cli import main
 from wood_project.core import ProjectError, resolve_wood_home
 from wood_project.core import paths as project_paths
@@ -626,6 +627,172 @@ def test_link_repo_rejects_missing_repository_path(
     assert payload["status"] == "error"
     assert payload["mutation"] == "mutating"
     assert payload["summary"] == f"Repository path does not exist: {missing_repo.resolve()}"
+
+
+def test_link_openproject_without_apply_is_approval_gated(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "openproject-preview-app"
+    registry_path = tmp_path / "global" / "config.json"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert (
+        main(
+            [
+                "link",
+                "openproject",
+                "--registry-path",
+                str(registry_path),
+                "--url",
+                "https://projects.example.test",
+                "--initiative",
+                "208",
+                "--token-ref",
+                "vaultwarden://wood/openproject/prod/api-token",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "link-openproject"
+    assert payload["status"] == "blocked"
+    assert payload["requires_approval"] is True
+    assert payload["data"]["changed"] is False
+    assert not (project_root / ".wood" / "config" / "config.json").exists()
+    assert not registry_path.exists()
+
+
+def test_link_openproject_apply_registers_repo_and_global_metadata(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "openproject-app"
+    registry_path = tmp_path / "global" / "config.json"
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+
+    assert (
+        main(
+            [
+                "link",
+                "openproject",
+                "--registry-path",
+                str(registry_path),
+                "--url",
+                "https://projects.example.test",
+                "--initiative",
+                "208",
+                "--token-ref",
+                "vaultwarden://wood/openproject/prod/api-token",
+                "--user-agent",
+                "wood-tools/test",
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "link-openproject"
+    assert payload["status"] == "success"
+    assert payload["data"]["changed"] is True
+    assert payload["data"]["local_changed"] is True
+    assert payload["data"]["registry_changed"] is True
+
+    local_config = json.loads(
+        (project_root / ".wood" / "config" / "config.json").read_text(encoding="utf-8")
+    )
+    assert local_config["profiles"]["default"]["integrations"]["openproject"] == {
+        "registry_path": str(registry_path)
+    }
+
+    registry_config = json.loads(registry_path.read_text(encoding="utf-8"))
+    projects = registry_config["profiles"]["default"]["integrations"]["openproject"]["projects"]
+    assert projects[str(project_root.resolve())] == {
+        "initiative_id": 208,
+        "token_ref": "vaultwarden://wood/openproject/prod/api-token",
+        "url": "https://projects.example.test",
+        "user_agent": "wood-tools/test",
+    }
+
+
+def test_link_openproject_uses_existing_registry_metadata_defaults(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "openproject-default-app"
+    registry_path = tmp_path / "global" / "config.json"
+    project_root.mkdir()
+    save_config(
+        ConfigPaths(file_path=registry_path),
+        {
+            "version": 1,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "paths": {
+                        "project_root": "./projects",
+                        "project_aliases": {},
+                        "secrets_root": "~/.wood/secrets",
+                        "scheduler_root": "./scheduler",
+                        "template_search_paths": ["./templates"],
+                    },
+                    "integrations": {
+                        "openproject": {
+                            "projects": {
+                                str(project_root): {
+                                    "url": "https://projects.example.test",
+                                    "initiative_id": 208,
+                                    "token_ref": "vaultwarden://wood/openproject/prod/api-token",
+                                }
+                            }
+                        },
+                        "ntfy": {"url": None, "token_ref": None},
+                        "vaultwarden": {
+                            "url": None,
+                            "config_ref": None,
+                            "session_file": None,
+                            "cli": {"executable": "bw"},
+                            "materialized_secrets": {},
+                        },
+                    },
+                    "wood_agents": {"boundary_ref": None, "adapters_ref": None},
+                    "diagnostics": {"agent_readiness": {"enabled": True}},
+                    "output": {"json_envelope": {"enabled": True}},
+                }
+            },
+        },
+    )
+    monkeypatch.chdir(project_root)
+
+    assert (
+        main(
+            [
+                "link",
+                "openproject",
+                "--registry-path",
+                str(registry_path),
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success"
+    assert payload["data"]["openproject"]["initiative_id"] == 208
+    assert payload["data"]["openproject"]["token_ref"] == (
+        "vaultwarden://wood/openproject/prod/api-token"
+    )
 
 
 def test_resource_install_preview_apply_reinstall_inspect_and_path_contract(

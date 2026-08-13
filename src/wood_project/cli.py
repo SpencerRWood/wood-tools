@@ -19,8 +19,8 @@ from .story import StoryWorkflowError
 
 
 def _command_name(args: argparse.Namespace) -> str:
-    if args.command == "link" and getattr(args, "link_command", None) == "repo":
-        return "link-repo"
+    if args.command == "link":
+        return f"link-{getattr(args, 'link_command', 'unknown')}"
     if args.command == "resource":
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
     if args.command == "story":
@@ -80,6 +80,20 @@ def _summarize_json_payload(
             summary=f"Linking repository {payload['repository']['name']} requires approval.",
             data=payload,
             next_actions=["Re-run with --apply to update project.json."],
+        )
+    if command == "link-openproject":
+        if apply:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary=("Registered this repository with the global OpenProject registry."),
+                data=payload,
+            )
+        return blocked_output(
+            command=command,
+            summary="OpenProject project registration requires approval.",
+            data=payload,
+            next_actions=["Re-run wood-project link openproject with --apply."],
         )
     if command == "resource-install":
         resource = payload["resource"]
@@ -263,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
                     if command
                     in {
                         "init",
+                        "link-openproject",
                         "link-repo",
                         "resource-install",
                         "story-set-status",

@@ -229,9 +229,13 @@ Supported commands:
 - `wood-secrets resolve --ref <reference> --redacted`
 - `wood-secrets resolve-env`
 - `wood-secrets resolve-env --apply`
-- `wood-secrets materialize [name]`
-- `wood-secrets materialize [name] --apply`
-- `wood-secrets materialize-status [name]`
+- `wood-secrets file add <name> <ref>`
+- `wood-secrets file add <name> <ref> --apply`
+- `wood-secrets file import <path>`
+- `wood-secrets file import <path> --apply`
+- `wood-secrets file write [name]`
+- `wood-secrets file write [name] --apply`
+- `wood-secrets file status [name]`
 - `wood-secrets doctor`
 
 Supported reference syntax:
@@ -277,9 +281,12 @@ wood-secrets resolve --ref vaultwarden://openproject/wood-tools/api-token --reda
 wood-secrets resolve --ref 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' --redacted
 wood-secrets resolve-env --input .env --output .env.resolved --json
 wood-secrets resolve-env --input .env --output .env.resolved --apply --force
-wood-secrets materialize --json
-wood-secrets materialize openproject-token --apply --json
-wood-secrets materialize-status --json
+wood-secrets file add openproject-token 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN'
+wood-secrets file add openproject-token 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' --apply
+wood-secrets file import .wood/secrets.yaml
+wood-secrets file import .wood/secrets.yaml --apply
+wood-secrets file status --json
+wood-secrets file write openproject-token --apply --json
 wood-secrets doctor --json
 ```
 
@@ -305,10 +312,20 @@ Behavior notes:
 - `wood-secrets exec NAME=reference OTHER_NAME=reference -- command ...` is a shorthand form that also supports multiple secret-backed environment variables.
 - `wood-secrets resolve-env` resolves supported `*_REF` entries from an env file into non-`_REF` keys in a local resolved env file; it previews by default and writes only with `--apply`.
 - `wood-secrets resolve-env` reports resolved keys and references only; it never prints resolved secret values.
-- `wood-secrets materialize [name]` previews configured local secret files by name, reference, target path, and state without printing secret values.
-- `wood-secrets materialize [name] --apply` writes configured secrets beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
-- `wood-secrets materialize-status [name]` inspects configured materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`.
+- `wood-secrets file add <name> <ref>` previews registering one Vaultwarden reference for materialization; `--apply` saves it under `integrations.vaultwarden.materialized_secrets`.
+- `wood-secrets file import <path>` previews importing materialized secret registrations from a JSON or YAML manifest; `--apply` merges them into `integrations.vaultwarden.materialized_secrets`.
+- `wood-secrets file write [name]` previews configured local secret files by name, reference, target path, and state without printing secret values; `--apply` writes files beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
+- `wood-secrets file status [name]` inspects configured materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`.
 - Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and optional relative `target` fields.
+- Materialized secret import manifests may use either a root object or a `secrets` object:
+  ```yaml
+  secrets:
+    openproject-token:
+      ref: vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN
+    postgres-password:
+      ref: vaultwarden://postgres/wood-events/password#PASSWORD
+      target: postgres/wood-events/password
+  ```
 - When `target` is omitted, `vaultwarden://service/principal/credential#FIELD` references materialize to `paths.secrets_root/service/principal/credential`.
 - Explicit `target` values remain supported as overrides for existing configurations.
 - Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, skip unchanged files, and report unsafe permissions deterministically.
@@ -381,7 +398,7 @@ Supporting context and precondition command groups:
 - `wood-project resource install <path>` preview or apply resource installation
 - `wood-project resource inspect <kind> <name>` inspect installed resource metadata
 - `wood-project resource path <kind> <name>` resolve an installed resource path
-- `wood-project init`, `show`, `validate`, and `link repo` manage local project metadata
+- `wood-project init`, `show`, `validate`, `link repo`, and `link openproject` manage local project metadata and registry links
 
 Legacy compatibility policy:
 
@@ -396,6 +413,8 @@ All commands:
 - `wood-project init --apply` write `project.json` and create required directories
 - `wood-project link repo <path>` preview linking an implementation repository to the project
 - `wood-project link repo <path> --apply` persist a linked repository entry in `project.json`
+- `wood-project link openproject --initiative <id>` preview registering this repository with OpenProject
+- `wood-project link openproject --initiative <id> --apply` write the repo-local config pointer and global OpenProject registry entry
 - `wood-project resource install <path>` preview installing a versioned global resource
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
@@ -432,18 +451,38 @@ Options for `link repo`:
 - `--apply` write the updated `project.json`
 - `--json` emit JSON envelope output
 
+Options for `link openproject`:
+
+- `--initiative <id>` OpenProject initiative work package ID, defaulting from existing registry metadata or `OPENPROJECT_INITIATIVE_ID`
+- `--url <value>` OpenProject base URL, defaulting from existing registry metadata or `OPENPROJECT_URL`
+- `--token-ref <ref>` API token secret reference, defaulting from existing registry metadata or `OPENPROJECT_API_TOKEN_REF`
+- `--registry-path <path>` global Wood config path, defaulting to `~/.config/wood-tools/config.json`
+- `--user-agent <value>` optional OpenProject API user agent
+- `--apply` write `.wood/config/config.json` and the global registry config
+- `--json` emit JSON envelope output
+
+Example:
+
+```bash
+wood-project link openproject \
+  --initiative 208 \
+  --url https://projects.woodhost.cloud \
+  --token-ref vaultwarden://wood/openproject/prod/api-token \
+  --apply
+```
+
 Options for OpenProject inspection commands:
 
 - `--config-path <path>` override the project-local `wood-config` file
 - `--profile <name>` read OpenProject settings from a specific profile
 - `--json` emit the shared JSON envelope for each inspection command
 
-OpenProject inspection reads the repo-local `integrations.openproject.registry_path`, then selects
-metadata from the referenced global config's `integrations.openproject.projects` dictionary by
-matching the current repository path. Each global project entry contains `url`, `token_ref`,
-optional `initiative_id`, optional deprecated `project_id`, and optional `user_agent`. The token
-reference is resolved in memory through `wood-secrets`; commands perform only `GET` requests and
-never print the resolved token.
+OpenProject inspection reads the repo-local OpenProject registry pointer written by
+`wood-project link openproject`, then selects metadata from the referenced global config's
+path-keyed project dictionary by matching the current repository path. Each global project entry
+contains `url`, `token_ref`, optional `initiative_id`, optional deprecated `project_id`, and
+optional `user_agent`. The token reference is resolved in memory through `wood-secrets`; commands
+perform only `GET` requests and never print the resolved token.
 
 Global registry example:
 
@@ -856,7 +895,6 @@ Examples:
 ```bash
 wood-config set paths.project_root '"./projects"' --apply
 wood-config set paths.project_aliases '{"demo":{"path":"//nas/projects/demo","targets":["/Volumes/Projects/demo","/mnt/projects/demo"]}}' --profile dev --apply
-wood-config set integrations.openproject.registry_path '"~/.config/wood-tools/config.json"' --apply
 wood-config set wood_agents.boundary_ref '"docs://wood-agents/boundary"' --profile dev --apply
 wood-config set env.name dev --profile dev --activate-profile --apply
 wood-config set diagnostics.agent_readiness '{"enabled":true}' --apply --json
