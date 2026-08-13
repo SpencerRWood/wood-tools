@@ -25,9 +25,7 @@ def _default_user_agent() -> str:
 
 
 def default_config_path() -> Path:
-    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config_home).expanduser() if xdg_config_home else Path.home() / ".config"
-    return base / "wood-tools" / "config.json"
+    return Path.cwd() / ".wood" / "config" / "config.json"
 
 
 def build_paths(path: Path | None = None) -> ConfigPaths:
@@ -45,10 +43,7 @@ def _default_document() -> dict[str, Any]:
         },
         "integrations": {
             "openproject": {
-                "url": None,
-                "project_id": None,
-                "token_ref": None,
-                "user_agent": _default_user_agent(),
+                "registry_path": "~/.config/wood-tools/config.json",
             },
             "ntfy": {
                 "url": None,

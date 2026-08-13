@@ -27,7 +27,7 @@ def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
     next_parser = story_subparsers.add_parser(
         "next", help="Discover the next dependency-ready Story"
     )
-    next_parser.add_argument("root_work_package_id", type=int)
+    next_parser.add_argument("root_work_package_id", nargs="?", type=int)
     next_parser.add_argument("--status", default="New")
     next_parser.add_argument("--type", default="Story")
     next_parser.add_argument("--page-size", type=int, default=1000)
@@ -64,9 +64,19 @@ def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
         return command, payload, None
 
     if args.story_command == "next":
+        client = _client(args.config_path, args.profile)
+        root_work_package_id = args.root_work_package_id or client.settings.initiative_id
+        if root_work_package_id is None:
+            raise StoryWorkflowError(
+                "OPENPROJECT_INITIATIVE_UNAVAILABLE",
+                (
+                    "Pass <root-work-package-id> or set "
+                    "initiative_id in the selected integrations.openproject.projects entry."
+                ),
+            )
         payload = discover_next_story(
-            client=_client(args.config_path, args.profile),
-            root_work_package_id=args.root_work_package_id,
+            client=client,
+            root_work_package_id=root_work_package_id,
             target_status=args.status,
             story_type=args.type,
             page_size=args.page_size,

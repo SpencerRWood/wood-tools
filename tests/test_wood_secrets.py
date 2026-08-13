@@ -161,7 +161,13 @@ def make_config_document(
             "default": {
                 "integrations": {
                     "openproject": {
-                        "token_ref": openproject_ref,
+                        "projects": {
+                            ".": {
+                                "url": "https://openproject.example.test",
+                                "initiative_id": 208,
+                                "token_ref": openproject_ref,
+                            }
+                        },
                     },
                     "ntfy": {
                         "token_ref": ntfy_ref,

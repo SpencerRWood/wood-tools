@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from urllib import parse
 
@@ -33,11 +34,8 @@ class FakeResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
-def test_load_settings_resolves_configured_token_ref_without_leaking_value(
-    tmp_path: pytest.TempPathFactory,
-) -> None:
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
+def write_config(path: object, openproject: dict[str, Any]) -> None:
+    Path(path).write_text(
         json.dumps(
             {
                 "version": 1,
@@ -45,12 +43,7 @@ def test_load_settings_resolves_configured_token_ref_without_leaking_value(
                 "profiles": {
                     "default": {
                         "integrations": {
-                            "openproject": {
-                                "url": "https://openproject.example.test",
-                                "project_id": "wood",
-                                "token_ref": "env://OPENPROJECT_TOKEN",
-                                "user_agent": "wood-tools-test/1",
-                            }
+                            "openproject": openproject,
                         }
                     }
                 },
@@ -58,15 +51,74 @@ def test_load_settings_resolves_configured_token_ref_without_leaking_value(
         ),
         encoding="utf-8",
     )
+
+
+def test_load_settings_resolves_configured_token_ref_without_leaking_value(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    config_path = repo_path / ".wood" / "config" / "config.json"
+    registry_path = tmp_path / "global-config.json"
+    config_path.parent.mkdir(parents=True)
+    write_config(config_path, {"registry_path": str(registry_path)})
+    write_config(
+        registry_path,
+        {
+            "projects": {
+                str(repo_path): {
+                    "url": "https://openproject.example.test",
+                    "project_id": "wood",
+                    "initiative_id": 208,
+                    "token_ref": "env://OPENPROJECT_TOKEN",
+                    "user_agent": "wood-tools-test/1",
+                },
+            }
+        },
+    )
     resolver = SecretResolver(environ={"OPENPROJECT_TOKEN": "super-secret-token"})
 
     settings = load_settings(config_path=config_path, resolver=resolver)
 
     assert settings.base_url == "https://openproject.example.test"
     assert settings.project_id == "wood"
+    assert settings.initiative_id == 208
     assert settings.token == "super-secret-token"
     assert settings.user_agent == "wood-tools-test/1"
     assert "super-secret-token" not in repr(settings)
+
+
+def test_load_settings_allows_deprecated_project_id_to_be_omitted(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    config_path = repo_path / ".wood" / "config" / "config.json"
+    registry_path = tmp_path / "global-config.json"
+    config_path.parent.mkdir(parents=True)
+    write_config(config_path, {"registry_path": str(registry_path)})
+    write_config(
+        registry_path,
+        {
+            "projects": {
+                str(repo_path): {
+                    "url": "https://openproject.example.test",
+                    "initiative_id": 208,
+                    "token_ref": "env://OPENPROJECT_TOKEN",
+                },
+            },
+        },
+    )
+    resolver = SecretResolver(environ={"OPENPROJECT_TOKEN": "super-secret-token"})
+
+    settings = load_settings(config_path=config_path, resolver=resolver)
+
+    assert settings.project_id is None
+    assert settings.initiative_id == 208
 
 
 def test_load_settings_reports_provider_failure(tmp_path: pytest.TempPathFactory) -> None:
@@ -75,25 +127,17 @@ def test_load_settings_reports_provider_failure(tmp_path: pytest.TempPathFactory
             raise SecretProviderError(f"provider failed for {reference}")
 
     config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "active_profile": "default",
-                "profiles": {
-                    "default": {
-                        "integrations": {
-                            "openproject": {
-                                "url": "https://openproject.example.test",
-                                "project_id": "wood",
-                                "token_ref": "env://OPENPROJECT_TOKEN",
-                            }
-                        }
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+    write_config(
+        config_path,
+        {
+            "projects": {
+                ".": {
+                    "url": "https://openproject.example.test",
+                    "project_id": "wood",
+                    "token_ref": "env://OPENPROJECT_TOKEN",
+                }
+            },
+        },
     )
 
     with pytest.raises(OpenProjectError) as excinfo:
@@ -195,6 +239,40 @@ def test_client_request_json_supports_mutations() -> None:
         "timeout": 30,
     }
     assert payload == {"id": 301, "lockVersion": 5}
+
+
+def test_client_project_derives_project_from_configured_initiative() -> None:
+    seen_paths: list[str] = []
+
+    def transport(req: Any, *, timeout: int) -> FakeResponse:
+        parsed = parse.urlparse(req.full_url)
+        seen_paths.append(parsed.path)
+        if parsed.path.endswith("/work_packages/208"):
+            return FakeResponse(
+                {
+                    "id": 208,
+                    "subject": "Initiative",
+                    "_links": {"project": {"href": "/api/v3/projects/3"}},
+                }
+            )
+        assert parsed.path.endswith("/projects/3")
+        return FakeResponse({"id": 3, "identifier": "wood-tools", "name": "Wood Tools"})
+
+    client = OpenProjectClient(
+        OpenProjectSettings(
+            base_url="https://openproject.example.test",
+            token="super-secret-token",
+            token_provider="env",
+            user_agent="wood-tools-test/1",
+            initiative_id=208,
+        ),
+        transport=transport,
+    )
+
+    payload = client.project()
+
+    assert seen_paths == ["/api/v3/work_packages/208", "/api/v3/projects/3"]
+    assert payload["identifier"] == "wood-tools"
 
 
 def test_client_story_context_fetches_relation_fixture() -> None:

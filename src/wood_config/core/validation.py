@@ -69,6 +69,23 @@ def _validate_required_string(value: Any, *, field: str) -> list[dict[str, str]]
     ]
 
 
+def _validate_optional_positive_int(value: Any, *, field: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if isinstance(value, int) and value > 0:
+        return []
+    if isinstance(value, str) and value.isdecimal() and int(value) > 0:
+        return []
+    return [
+        {
+            "code": "invalid_positive_integer",
+            "field": field,
+            "message": "Setting must be a positive integer when provided.",
+            "remediation": f"Set {field} to a positive integer or null.",
+        }
+    ]
+
+
 def _validate_enabled_toggle(value: Any, *, field: str) -> list[dict[str, str]]:
     if value is None:
         return []
@@ -141,6 +158,117 @@ def _validate_materialized_secrets(value: Any, *, field: str) -> list[dict[str, 
         )
         findings.extend(
             _validate_optional_string(definition.get("target"), field=f"{entry_field}.target")
+        )
+    return findings
+
+
+def _validate_openproject_metadata(value: Any, *, field: str) -> list[dict[str, str]]:
+    if not isinstance(value, dict):
+        return [
+            {
+                "code": "invalid_object",
+                "field": field,
+                "message": "OpenProject project metadata must be an object.",
+                "remediation": (
+                    f'Set {field} like '
+                    '{"url": "https://openproject.example.test", '
+                    '"token_ref": "env://OPENPROJECT_TOKEN", "initiative_id": 208}.'
+                ),
+            }
+        ]
+
+    findings: list[dict[str, str]] = []
+    findings.extend(
+        _validate_reference(
+            value.get("token_ref"),
+            field=f"{field}.token_ref",
+            required=True,
+        )
+    )
+    findings.extend(
+        _validate_required_string(
+            value.get("url"),
+            field=f"{field}.url",
+        )
+    )
+    findings.extend(
+        _validate_optional_string(
+            value.get("project_id"),
+            field=f"{field}.project_id",
+        )
+    )
+    findings.extend(
+        _validate_optional_positive_int(
+            value.get("initiative_id"),
+            field=f"{field}.initiative_id",
+        )
+    )
+    findings.extend(
+        _validate_optional_string(
+            value.get("user_agent"),
+            field=f"{field}.user_agent",
+        )
+    )
+    return findings
+
+
+def _validate_openproject_projects(value: Any, *, field: str) -> list[dict[str, str]]:
+    if not isinstance(value, dict) or not value:
+        return [
+            {
+                "code": "invalid_openproject_projects",
+                "field": field,
+                "message": "OpenProject projects must be a non-empty object keyed by project path.",
+                "remediation": (
+                    f'Set {field} like '
+                    '{".": {"url": "https://openproject.example.test", '
+                    '"token_ref": "env://OPENPROJECT_TOKEN", "initiative_id": 208}}.'
+                ),
+            }
+        ]
+
+    findings: list[dict[str, str]] = []
+    for project_path, metadata in value.items():
+        if not _is_non_empty_string(project_path):
+            findings.append(
+                {
+                    "code": "invalid_openproject_project_path",
+                    "field": field,
+                    "message": "OpenProject project path keys must be non-empty strings.",
+                    "remediation": "Use project path keys such as '.' or an absolute project path.",
+                }
+            )
+            continue
+        findings.extend(
+            _validate_openproject_metadata(
+                metadata,
+                field=f'{field}["{project_path}"]',
+            )
+        )
+    return findings
+
+
+def _validate_openproject(value: Any, *, field: str) -> list[dict[str, str]]:
+    value = value if isinstance(value, dict) else {}
+    registry_path = value.get("registry_path")
+    projects = value.get("projects")
+
+    findings: list[dict[str, str]] = []
+    if registry_path is not None:
+        findings.extend(_validate_optional_string(registry_path, field=f"{field}.registry_path"))
+    if projects is not None:
+        findings.extend(_validate_openproject_projects(projects, field=f"{field}.projects"))
+    if registry_path is None and projects is None:
+        findings.append(
+            {
+                "code": "missing_openproject_registry",
+                "field": field,
+                "message": "OpenProject config must define registry_path or projects.",
+                "remediation": (
+                    f'Set {field}.registry_path to a global config path or '
+                    f"set {field}.projects to a path-keyed metadata registry."
+                ),
+            }
         )
     return findings
 
@@ -234,22 +362,9 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
         vaultwarden_cli = vaultwarden_cli if isinstance(vaultwarden_cli, dict) else {}
 
         findings.extend(
-            _validate_reference(
-                openproject.get("token_ref"),
-                field="integrations.openproject.token_ref",
-                required=True,
-            )
-        )
-        findings.extend(
-            _validate_required_string(
-                openproject.get("url"),
-                field="integrations.openproject.url",
-            )
-        )
-        findings.extend(
-            _validate_required_string(
-                openproject.get("project_id"),
-                field="integrations.openproject.project_id",
+            _validate_openproject(
+                openproject,
+                field="integrations.openproject",
             )
         )
         findings.extend(
@@ -264,12 +379,6 @@ def validate_profile(profile: dict[str, Any], *, profile_name: str) -> list[dict
                 vaultwarden.get("config_ref"),
                 field="integrations.vaultwarden.config_ref",
                 required=True,
-            )
-        )
-        findings.extend(
-            _validate_optional_string(
-                openproject.get("user_agent"),
-                field="integrations.openproject.user_agent",
             )
         )
         findings.extend(

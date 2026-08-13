@@ -9,6 +9,21 @@ from wood_config.core.document import _default_document
 from wood_config.core.validation import validate_config
 
 
+def test_init_without_config_path_writes_project_local_config(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+
+    assert main(["init", "--apply", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["path"] == str(config_path)
+    assert config_path.exists()
+
+
 def test_init_set_get_show_success_path(
     tmp_path: pytest.TempPathFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -66,7 +81,7 @@ def test_init_set_get_show_success_path(
     assert "project_root': './projects'" in out
     assert "alias_resolution" in out
     assert str(project_target) in out
-    assert "user_agent': 'wood-tools/0.3.0'" in out
+    assert "registry_path': '~/.config/wood-tools/config.json'" in out
     assert "'executable': 'bw'" in out
 
     assert (
@@ -219,16 +234,8 @@ def test_json_output_for_supported_commands(
     assert payload["requires_approval"] is False
     assert payload["data"]["changed"] is True
     assert payload["data"]["config"]["profiles"]["default"]["paths"]["project_root"] == "./projects"
-    assert (
-        payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"]["token_ref"]
-        is None
-    )
-    assert (
-        payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"][
-            "user_agent"
-        ]
-        == "wood-tools/0.3.0"
-    )
+    openproject = payload["data"]["config"]["profiles"]["default"]["integrations"]["openproject"]
+    assert openproject == {"registry_path": "~/.config/wood-tools/config.json"}
     assert (
         payload["data"]["config"]["profiles"]["default"]["integrations"]["vaultwarden"]["cli"][
             "executable"
@@ -256,8 +263,17 @@ def test_json_output_for_supported_commands(
                 "--config-path",
                 str(config_path),
                 "set",
-                "integrations.openproject.token_ref",
-                '"env://OPENPROJECT_TOKEN"',
+                "integrations.openproject.projects",
+                json.dumps(
+                    {
+                        ".": {
+                            "url": "https://openproject.example.test",
+                            "initiative_id": 208,
+                            "token_ref": "env://OPENPROJECT_TOKEN",
+                            "user_agent": "wood-tools-test/1",
+                        }
+                    }
+                ),
                 "--apply",
                 "--json",
             ]
@@ -267,7 +283,7 @@ def test_json_output_for_supported_commands(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "set"
     assert payload["status"] == "success"
-    assert payload["data"]["value"] == "env://OPENPROJECT_TOKEN"
+    assert payload["data"]["value"]["."]["token_ref"] == "env://OPENPROJECT_TOKEN"
 
     assert main(["--config-path", str(config_path), "show", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -282,7 +298,7 @@ def test_json_output_for_supported_commands(
                 "--config-path",
                 str(config_path),
                 "get",
-                "integrations.openproject.user_agent",
+                "integrations.openproject.projects",
                 "--json",
             ]
         )
@@ -290,8 +306,8 @@ def test_json_output_for_supported_commands(
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "get"
-    assert payload["data"]["key"] == "integrations.openproject.user_agent"
-    assert payload["data"]["value"] == "wood-tools/0.3.0"
+    assert payload["data"]["key"] == "integrations.openproject.projects"
+    assert payload["data"]["value"]["."]["user_agent"] == "wood-tools-test/1"
 
     assert (
         main(
@@ -378,34 +394,17 @@ def test_validate_success_path(tmp_path: pytest.TempPathFactory) -> None:
                 "--config-path",
                 str(config_path),
                 "set",
-                "integrations.openproject.url",
-                '"https://openproject.example.test"',
-                "--apply",
-            ]
-        )
-        == 0
-    )
-    assert (
-        main(
-            [
-                "--config-path",
-                str(config_path),
-                "set",
-                "integrations.openproject.project_id",
-                '"wood"',
-                "--apply",
-            ]
-        )
-        == 0
-    )
-    assert (
-        main(
-            [
-                "--config-path",
-                str(config_path),
-                "set",
-                "integrations.openproject.token_ref",
-                '"env://OPENPROJECT_TOKEN"',
+                "integrations.openproject.projects",
+                json.dumps(
+                    {
+                        ".": {
+                            "url": "https://openproject.example.test",
+                            "project_id": "wood",
+                            "initiative_id": 208,
+                            "token_ref": "env://OPENPROJECT_TOKEN",
+                        }
+                    }
+                ),
                 "--apply",
             ]
         )
@@ -480,16 +479,15 @@ def test_validate_invalid_config_reports_actionable_errors(
     assert code == 2
     out = capsys.readouterr().out
     assert "status: invalid" in out
-    assert "integrations.openproject.token_ref" in out
-    assert "integrations.openproject.url" in out
-    assert "integrations.openproject.project_id" in out
+    assert "integrations.openproject" not in out
+    assert "integrations.openproject.project_id" not in out
     assert "remediation:" in out
     assert "YOUR_ENV_VAR" in out
 
     assert main(["--config-path", str(config_path), "doctor"]) == 0
     out = capsys.readouterr().out
     assert "issues:" in out
-    assert "token_ref" in out
+    assert "config_ref" in out
     assert "env://" in out
 
 
@@ -526,9 +524,15 @@ def test_validate_reports_invalid_alias_targets(
 def test_validate_allows_materialized_secret_without_target() -> None:
     document = _default_document()
     profile = document["profiles"]["default"]
-    profile["integrations"]["openproject"]["url"] = "https://openproject.example.test"
-    profile["integrations"]["openproject"]["project_id"] = "208"
-    profile["integrations"]["openproject"]["token_ref"] = "env://OPENPROJECT_TOKEN"
+    profile["integrations"]["openproject"]["projects"] = {
+        ".": {
+            "url": "https://openproject.example.test",
+            "project_id": "208",
+            "initiative_id": 208,
+            "token_ref": "env://OPENPROJECT_TOKEN",
+        }
+    }
+    profile["integrations"]["openproject"].pop("registry_path", None)
     profile["integrations"]["ntfy"]["url"] = "https://ntfy.example.test"
     profile["integrations"]["ntfy"]["token_ref"] = "env://NTFY_TOKEN"
     profile["integrations"]["vaultwarden"]["config_ref"] = "env://VAULTWARDEN_CONFIG"
@@ -619,8 +623,17 @@ def test_validate_reports_invalid_follow_up_fields(
                 "--config-path",
                 str(config_path),
                 "set",
-                "integrations.openproject.user_agent",
-                '""',
+                "integrations.openproject.projects",
+                json.dumps(
+                    {
+                        ".": {
+                            "url": "",
+                            "initiative_id": 0,
+                            "token_ref": "env://OPENPROJECT_TOKEN",
+                            "user_agent": "",
+                        }
+                    }
+                ),
                 "--apply",
             ]
         )
@@ -671,9 +684,10 @@ def test_validate_reports_invalid_follow_up_fields(
     assert code == 2
     payload = json.loads(capsys.readouterr().out)
     fields = {issue["field"] for issue in payload["errors"]}
-    assert "integrations.openproject.user_agent" in fields
-    assert "integrations.openproject.url" in fields
-    assert "integrations.openproject.project_id" in fields
+    assert 'integrations.openproject.projects["."].user_agent' in fields
+    assert 'integrations.openproject.projects["."].url' in fields
+    assert 'integrations.openproject.projects["."].initiative_id' in fields
+    assert "integrations.openproject.project_id" not in fields
     assert "integrations.vaultwarden.cli.executable" in fields
     assert "wood_agents.boundary_ref" in fields
     assert "diagnostics.agent_readiness.enabled" in fields
@@ -722,16 +736,13 @@ def test_doctor_check_filters_to_requested_area(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "warning"
+    assert payload["status"] == "success"
     assert payload["data"]["summary"]["selected_checks"] == ["openproject"]
-    assert payload["data"]["status"] == "issues-found"
+    assert payload["data"]["status"] == "ok"
     assert len(payload["data"]["checks"]) == 1
     assert payload["data"]["checks"][0]["name"] == "openproject"
-    assert payload["data"]["checks"][0]["summary"]["issue_count"] == len(payload["warnings"])
-    assert payload["warnings"]
-    assert all(
-        issue["field"].startswith("integrations.openproject.") for issue in payload["warnings"]
-    )
+    assert payload["data"]["checks"][0]["summary"]["issue_count"] == 0
+    assert payload["warnings"] == []
 
 
 def test_doctor_success_path_with_selected_checks_and_redacted_json(
@@ -741,9 +752,21 @@ def test_doctor_success_path_with_selected_checks_and_redacted_json(
     assert main(["--config-path", str(config_path), "init", "--apply"]) == 0
 
     success_commands = [
-        ["set", "integrations.openproject.url", '"https://openproject.example.test"', "--apply"],
-        ["set", "integrations.openproject.project_id", '"wood"', "--apply"],
-        ["set", "integrations.openproject.token_ref", '"env://OPENPROJECT_TOKEN"', "--apply"],
+        [
+            "set",
+            "integrations.openproject.projects",
+            json.dumps(
+                {
+                    ".": {
+                        "url": "https://openproject.example.test",
+                        "project_id": "wood",
+                        "initiative_id": 208,
+                        "token_ref": "env://OPENPROJECT_TOKEN",
+                    }
+                }
+            ),
+            "--apply",
+        ],
         ["set", "integrations.ntfy.token_ref", '"env://NTFY_TOKEN"', "--apply"],
         ["set", "integrations.vaultwarden.config_ref", '"env://VAULTWARDEN_CONFIG"', "--apply"],
         ["set", "wood_agents.boundary_ref", '"docs://wood-agents/boundary"', "--apply"],

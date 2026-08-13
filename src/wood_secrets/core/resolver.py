@@ -142,11 +142,31 @@ class SecretResolver:
             raise SecretProviderError(f"Command not found: {command[0]}") from exc
         return proc.returncode
 
+    @staticmethod
+    def _openproject_registry(integration: dict[str, Any], active_profile: str) -> dict[str, Any]:
+        projects = integration.get("projects")
+        if isinstance(projects, dict) and projects:
+            return integration
+
+        registry_path = integration.get("registry_path")
+        if not isinstance(registry_path, str) or not registry_path.strip():
+            return integration
+
+        registry_file = Path(registry_path).expanduser()
+        if not registry_file.is_absolute():
+            registry_file = Path.cwd() / registry_file
+        registry = load_config(build_paths(registry_file))
+        profiles = registry.get("profiles", {})
+        profile = profiles.get(active_profile, {}) if isinstance(profiles, dict) else {}
+        integrations = profile.get("integrations", {}) if isinstance(profile, dict) else {}
+        openproject = integrations.get("openproject", {}) if isinstance(integrations, dict) else {}
+        return openproject if isinstance(openproject, dict) else integration
+
     def _load_integration_targets(self) -> tuple[list[IntegrationSecretTarget], str | None]:
         targets = [
             IntegrationSecretTarget(
                 name="openproject",
-                field="integrations.openproject.token_ref",
+                field='integrations.openproject.projects["."].token_ref',
                 reference=None,
             ),
             IntegrationSecretTarget(
@@ -166,6 +186,32 @@ class SecretResolver:
             resolved_targets: list[IntegrationSecretTarget] = []
             for target in targets:
                 integration = integrations.get(target.name, {})
+                if target.name == "openproject" and isinstance(integration, dict):
+                    integration = self._openproject_registry(integration, active_profile)
+                    projects = integration.get("projects")
+                    if isinstance(projects, dict) and projects:
+                        for project_path, metadata in sorted(projects.items()):
+                            reference = None
+                            if isinstance(metadata, dict):
+                                candidate = metadata.get("token_ref")
+                                if isinstance(candidate, str) and candidate.strip():
+                                    reference = candidate.strip()
+                            integration_name = (
+                                "openproject"
+                                if project_path == "."
+                                else f"openproject:{project_path}"
+                            )
+                            resolved_targets.append(
+                                IntegrationSecretTarget(
+                                    name=integration_name,
+                                    field=(
+                                        "integrations.openproject.projects."
+                                        f"{project_path}.token_ref"
+                                    ),
+                                    reference=reference,
+                                )
+                            )
+                        continue
                 reference = None
                 if isinstance(integration, dict):
                     candidate = integration.get("token_ref")

@@ -51,9 +51,11 @@ def fetch_descendants(
     client: OpenProjectClient,
     root_work_package_id: int,
     page_size: int,
+    *,
+    project_id: str,
 ) -> list[dict[str, Any]]:
     filters = [
-        {"project": {"operator": "=", "values": [str(client.settings.project_id)]}},
+        {"project": {"operator": "=", "values": [project_id]}},
         {"ancestor": {"operator": "=", "values": [str(root_work_package_id)]}},
     ]
     return fetch_collection(
@@ -108,6 +110,40 @@ def version_rank(version_name: str) -> tuple[int, str]:
     if match:
         return (int(match.group(1)), version_name.lower())
     return (9000, version_name.lower())
+
+
+def resolve_project_id_from_root(
+    root: dict[str, Any],
+    *,
+    configured_project_id: str | None,
+    root_work_package_id: int,
+) -> str:
+    root_project_id = extract_id_from_href(link_href(root, "project"), "projects")
+    if (
+        root_project_id is not None
+        and configured_project_id is not None
+        and configured_project_id.isdecimal()
+        and root_project_id != int(configured_project_id)
+    ):
+        raise StoryWorkflowError(
+            "OPENPROJECT_LOOKUP_FAILED",
+            (
+                f"WP-{root_work_package_id} belongs to project "
+                f"{root_project_id}, not {configured_project_id}."
+            ),
+        )
+    if root_project_id is not None:
+        return str(root_project_id)
+    if configured_project_id is not None:
+        return configured_project_id
+    raise StoryWorkflowError(
+        "OPENPROJECT_CONFIG_UNAVAILABLE",
+        (
+            "Unable to determine OpenProject project. Set "
+            "initiative_id in the selected integrations.openproject.projects entry "
+            "to a work package with a project link."
+        ),
+    )
 
 
 def acceptance_criteria(description: str) -> list[str]:
@@ -178,22 +214,21 @@ def discover_next_story(
 ) -> dict[str, Any]:
     root_id = root_work_package_id
     root = api_get_json(client, f"/api/v3/work_packages/{root_id}")
-    root_project_id = extract_id_from_href(link_href(root, "project"), "projects")
-    if root_project_id is not None and root_project_id != int(client.settings.project_id):
-        raise StoryWorkflowError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"WP-{root_id} belongs to project {root_project_id}, not {client.settings.project_id}.",
-        )
+    project_id = resolve_project_id_from_root(
+        root,
+        configured_project_id=client.settings.project_id,
+        root_work_package_id=root_id,
+    )
 
     statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
     closed_status_names = {str(status.get("name")) for status in statuses if status.get("isClosed")}
-    versions_path = f"/api/v3/projects/{client.settings.project_id}/versions"
+    versions_path = f"/api/v3/projects/{project_id}/versions"
     versions = embedded_elements(api_get_json(client, versions_path))
     version_status = {
         str(version.get("name") or ""): str(version.get("status") or "") for version in versions
     }
 
-    descendants = fetch_descendants(client, root_id, page_size)
+    descendants = fetch_descendants(client, root_id, page_size, project_id=project_id)
     stories = [wp for wp in descendants if work_package_type_name(wp) == story_type]
     if not stories:
         raise StoryWorkflowError("NO_STORY_FOUND", f"No {story_type} work packages found.")

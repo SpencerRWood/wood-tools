@@ -23,7 +23,7 @@ def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
     project_parser.add_argument(
         "openproject_project_id",
         nargs="?",
-        help="Project numeric ID or identifier. Defaults to configured project_id.",
+        help="Project numeric ID or identifier. Defaults to deprecated project_id or initiative.",
     )
     _add_connection_options(project_parser)
 

@@ -133,8 +133,7 @@ Local config manager for Wood-tools.
 
 Configuration file path defaults to:
 
-- `$XDG_CONFIG_HOME/wood-tools/config.json` when `XDG_CONFIG_HOME` is set
-- `~/.config/wood-tools/config.json` otherwise
+- `./.wood/config/config.json` relative to the current working directory
 
 Global option:
 
@@ -166,10 +165,7 @@ Global option:
       },
       "integrations": {
         "openproject": {
-          "url": "https://openproject.example.test",
-          "project_id": "wood",
-          "token_ref": "env://OPENPROJECT_TOKEN",
-          "user_agent": "wood-tools/0.2.0"
+          "registry_path": "~/.config/wood-tools/config.json"
         },
         "ntfy": {
           "url": null,
@@ -290,7 +286,7 @@ wood-secrets doctor --json
 Behavior notes:
 
 - Secret values are never printed by the CLI; resolved output is redacted.
-- `wood-secrets check` inspects `integrations.openproject.token_ref` and `integrations.ntfy.token_ref` from the active `wood-config` profile.
+- `wood-secrets check` follows `integrations.openproject.registry_path` and inspects OpenProject token references under the global registry's `integrations.openproject.projects`, plus `integrations.ntfy.token_ref` from the active `wood-config` profile.
 - `wood-secrets` reads `integrations.vaultwarden.url` from the active `wood-config` profile.
 - `wood-secrets unlock` defaults to the Vaultwarden provider, prompts in the interactive terminal, and writes the protected runtime session file for later processes.
 - `wood-secrets unlock --no-write-session` keeps the session only in the current process.
@@ -438,15 +434,40 @@ Options for `link repo`:
 
 Options for OpenProject inspection commands:
 
-- `--config-path <path>` override the user-global `wood-config` file
+- `--config-path <path>` override the project-local `wood-config` file
 - `--profile <name>` read OpenProject settings from a specific profile
 - `--json` emit the shared JSON envelope for each inspection command
 
-OpenProject inspection reads `integrations.openproject.url`,
-`integrations.openproject.project_id`, `integrations.openproject.token_ref`, and optional
-`integrations.openproject.user_agent` from the active `wood-config` profile. The token reference is
-resolved in memory through `wood-secrets`; commands perform only `GET` requests and never print the
-resolved token.
+OpenProject inspection reads the repo-local `integrations.openproject.registry_path`, then selects
+metadata from the referenced global config's `integrations.openproject.projects` dictionary by
+matching the current repository path. Each global project entry contains `url`, `token_ref`,
+optional `initiative_id`, optional deprecated `project_id`, and optional `user_agent`. The token
+reference is resolved in memory through `wood-secrets`; commands perform only `GET` requests and
+never print the resolved token.
+
+Global registry example:
+
+```json
+{
+  "integrations": {
+    "openproject": {
+      "projects": {
+        "/Users/spencerwood/Projects/internal/wood-tools": {
+          "url": "https://openproject.example.test",
+          "project_id": null,
+          "initiative_id": 208,
+          "token_ref": "env://OPENPROJECT_TOKEN",
+          "user_agent": "wood-tools/0.3.0"
+        }
+      }
+    }
+  }
+}
+```
+
+Prefer `initiative_id` for project-bound workflows. `project_id` remains available only for explicit
+project lookup compatibility and can be omitted when commands can derive the project from the
+configured initiative work package.
 
 #### `wood-project story`
 
@@ -455,7 +476,7 @@ Story workflow commands for deterministic OpenProject Story intake and branch pr
 Commands:
 
 - `wood-project story show <id>` inspect a Story and its relation context
-- `wood-project story next <root-work-package-id>` discover the next dependency-ready Story
+- `wood-project story next [root-work-package-id]` discover the next dependency-ready Story
 - `wood-project story set-status <id> <status>` preview a Story status update
 - `wood-project story set-status <id> <status> --apply` apply the approved status update
 - `wood-project story create-branch <id> --title <title>` preview the branch operation
@@ -463,7 +484,7 @@ Commands:
 
 Options:
 
-- `--config-path <path>` override the user-global `wood-config` file for OpenProject commands
+- `--config-path <path>` override the project-local `wood-config` file for OpenProject commands
 - `--profile <name>` read OpenProject settings from a specific profile
 - `--json` emit deterministic JSON for agent workflows
 - `--status <name>` choose the candidate status for `next`, default `New`
@@ -473,6 +494,8 @@ Options:
 
 Story workflow behavior:
 
+- `wood-project story next` uses the selected OpenProject project entry's `initiative_id` when the
+  root work package argument is omitted.
 - `wood-project story next` is read-only and performs only OpenProject `GET` requests.
 - `wood-project story set-status` is preview-by-default; mutation requires `--apply`.
 - `wood-project story create-branch` is preview-by-default; git mutation requires `--apply`.
@@ -484,6 +507,7 @@ Story workflow behavior:
 Examples:
 
 ```bash
+wood-project story next --json
 wood-project story next 208 --json
 wood-project story set-status 301 "In progress" --json
 wood-project story set-status 301 "In progress" --apply --json
@@ -562,9 +586,9 @@ Options:
 
 - `--pyproject <path>` read version metadata from a specific `pyproject.toml`, default `pyproject.toml`
 - `--version <X.Y.Z>` use an explicit version for `check`, `tag`, or `github-create`
-- `--root-work-package-id <id>` include OpenProject story readiness under a root work package during `check`
+- `--root-work-package-id <id>` include OpenProject story readiness under a root work package during `check`; defaults to the selected OpenProject project entry's `initiative_id` when configured
 - `--openproject-version <name>` limit `release check` story readiness to one OpenProject Version
-- `--config-path <path>` override the user-global `wood-config` file for `release check`
+- `--config-path <path>` override the project-local `wood-config` file for `release check`
 - `--profile <name>` read OpenProject settings from a specific profile for `release check`
 - `--type <name>` choose the story work-package type for `release check`, default `Story`
 - `--page-size <count>` control OpenProject collection reads for `release check`, default `1000`
@@ -761,6 +785,12 @@ wood-project validate --json
 
 Initialize a config file with defaults.
 
+By default, `wood-config init --apply` writes:
+
+```text
+./.wood/config/config.json
+```
+
 Options:
 
 - `--apply` write the file
@@ -805,7 +835,7 @@ Examples:
 
 ```bash
 wood-config get paths.project_root
-wood-config get integrations.openproject.user_agent --json
+wood-config get integrations.openproject.registry_path --json
 wood-config get paths.project_aliases.demo --json
 wood-config get integrations.vaultwarden.session_file --profile dev
 ```
@@ -826,7 +856,7 @@ Examples:
 ```bash
 wood-config set paths.project_root '"./projects"' --apply
 wood-config set paths.project_aliases '{"demo":{"path":"//nas/projects/demo","targets":["/Volumes/Projects/demo","/mnt/projects/demo"]}}' --profile dev --apply
-wood-config set integrations.openproject.token_ref '"env://OPENPROJECT_TOKEN"' --apply
+wood-config set integrations.openproject.registry_path '"~/.config/wood-tools/config.json"' --apply
 wood-config set wood_agents.boundary_ref '"docs://wood-agents/boundary"' --profile dev --apply
 wood-config set env.name dev --profile dev --activate-profile --apply
 wood-config set diagnostics.agent_readiness '{"enabled":true}' --apply --json

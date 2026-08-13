@@ -14,7 +14,6 @@ from .core import SecretResolver
 from .core.env_files import resolve_env_file, write_resolved_env_file
 from .core.materialization import materialized_secret_identity
 from .core.providers import SecretProviderError
-from .core.vaultwarden_layout_migration import VaultwardenLayoutMigration
 
 
 def _emit(
@@ -200,21 +199,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional materialized secret name",
     )
     materialize_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
-
-    migrate_parser = subparsers.add_parser(
-        "migrate-vaultwarden-layout",
-        help="Preview or apply the Wood Vaultwarden service-centric layout migration",
-    )
-    migrate_parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Rename/update Vaultwarden items. Without --apply, only preview.",
-    )
-    migrate_parser.add_argument(
-        "--rollback-manifest",
-        help="Redacted rollback manifest path to write when --apply is used",
-    )
-    migrate_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -498,56 +482,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{item['name']} -> {item['target']} ({item['state']})")
             return 0 if payload["ok"] else 1
 
-        if args.command == "migrate-vaultwarden-layout":
-            if args.rollback_manifest and not args.apply:
-                raise SecretProviderError("--rollback-manifest can only be used with --apply.")
-            migration = VaultwardenLayoutMigration(resolver.get_provider("vaultwarden"))
-            rollback_path = Path(args.rollback_manifest) if args.rollback_manifest else None
-            payload = (
-                migration.apply(rollback_path=rollback_path) if args.apply else migration.plan()
-            )
-            if args.json:
-                envelope_builder = success_output if payload["ok"] else warning_output
-                envelope = envelope_builder(
-                    command="migrate-vaultwarden-layout",
-                    mutation="mutating" if args.apply else "read-only",
-                    summary=(
-                        "Vaultwarden layout migration applied."
-                        if args.apply and payload["ok"]
-                        else "Vaultwarden layout migration dry-run completed."
-                        if not args.apply
-                        else "Vaultwarden layout migration was not fully applied."
-                    ),
-                    data=payload,
-                    warnings=(
-                        [
-                            item
-                            for item in payload["items"]
-                            if item["status"] == "BLOCKED_FOR_REVIEW"
-                        ]
-                        if not payload["ok"]
-                        else None
-                    ),
-                    next_actions=(
-                        ["Review blocked mappings before running with --apply."]
-                        if payload["blocked_count"]
-                        else ["Re-run with --apply to mutate Vaultwarden items."]
-                        if not args.apply
-                        else None
-                    ),
-                )
-                return _emit(envelope, json_output=True, command_args=command_args)
-            for item in payload["items"]:
-                if item["status"] == "READY":
-                    print(
-                        "would migrate "
-                        f"{item['current_item']} -> {item['proposed_item']} "
-                        f"#{item['current_secret_field']}"
-                    )
-                elif item["status"] == "BLOCKED_FOR_REVIEW":
-                    print(f"blocked {item['current_item']}: {item['blocked_reason']}")
-            return 0 if payload["ok"] else 1
-
         if args.command == "exec":
             raw_args = args.command_args
             separator_index = raw_args.index("--") if "--" in raw_args else None
@@ -593,7 +527,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.command in {"unlock", "lock"}
             or (args.command == "resolve-env" and args.apply)
             or (args.command == "add" and args.apply)
-            or (args.command == "migrate-vaultwarden-layout" and args.apply)
             else "read-only"
         )
         if getattr(args, "json", False):

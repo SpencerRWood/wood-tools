@@ -8,6 +8,7 @@ from wood_project.openproject import OpenProjectClient, OpenProjectError, load_s
 from wood_project.story.discovery import (
     fetch_descendants,
     fetch_predecessor_map,
+    resolve_project_id_from_root,
     version_rank,
 )
 from wood_project.story.openproject import (
@@ -55,15 +56,26 @@ def story_readiness(
     page_size: int,
 ) -> dict[str, Any]:
     client = OpenProjectClient(load_settings(config_path=config_path, profile=profile))
+    root = api_get_json(client, f"/api/v3/work_packages/{root_work_package_id}")
+    project_id = resolve_project_id_from_root(
+        root,
+        configured_project_id=client.settings.project_id,
+        root_work_package_id=root_work_package_id,
+    )
     statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
     closed_status_names = {str(status.get("name")) for status in statuses if status.get("isClosed")}
     versions = embedded_elements(
-        api_get_json(client, f"/api/v3/projects/{client.settings.project_id}/versions")
+        api_get_json(client, f"/api/v3/projects/{project_id}/versions")
     )
     version_status = {
         str(version.get("name") or ""): str(version.get("status") or "") for version in versions
     }
-    descendants = fetch_descendants(client, root_work_package_id, page_size)
+    descendants = fetch_descendants(
+        client,
+        root_work_package_id,
+        page_size,
+        project_id=project_id,
+    )
     stories = [
         work_package
         for work_package in descendants
@@ -185,13 +197,25 @@ def check_release(
         )
     )
 
+    if root_work_package_id is None:
+        try:
+            root_work_package_id = load_settings(
+                config_path=config_path,
+                profile=profile,
+            ).initiative_id
+        except OpenProjectError:
+            root_work_package_id = None
+
     openproject: dict[str, Any] = {"checked": False}
     if root_work_package_id is None:
         checks.append(
             check(
                 "openproject-stories",
                 "skip",
-                "OpenProject story readiness requires --root-work-package-id.",
+                (
+                    "OpenProject story readiness requires --root-work-package-id "
+                    "or initiative_id in the selected integrations.openproject.projects entry."
+                ),
             )
         )
     else:

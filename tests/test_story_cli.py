@@ -16,13 +16,18 @@ def disable_audit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WOOD_AUDIT_LOG", "off")
 
 
-def settings() -> OpenProjectSettings:
+def settings(
+    *,
+    project_id: str | None = "3",
+    initiative_id: int | None = None,
+) -> OpenProjectSettings:
     return OpenProjectSettings(
         base_url="https://openproject.example.test",
-        project_id="3",
         token="secret-token",
         token_provider="test",
         user_agent="wood-tools-test/1",
+        project_id=project_id,
+        initiative_id=initiative_id,
     )
 
 
@@ -81,7 +86,7 @@ def test_project_story_set_status_apply_uses_openproject_lock_version(
             }
         raise AssertionError(path)
 
-    monkeypatch.setattr(story_commands, "load_settings", lambda **kwargs: settings())
+    monkeypatch.setattr(story_commands, "load_settings", lambda **kwargs: settings(project_id=None))
     monkeypatch.setattr(OpenProjectClient, "request_json", fake_request)
 
     assert project_main(["story", "set-status", "301", "In progress", "--apply", "--json"]) == 0
@@ -195,3 +200,34 @@ def test_project_story_next_selects_in_progress_story(
     assert payload["data"]["story"]["branch"] == "feature/op-301-productize-story-loop"
     assert payload["data"]["summary"]["goal"] == "Ship the workflow."
     assert payload["data"]["summary"]["acceptance_criteria"] == ["First criterion"]
+
+
+def test_project_story_next_uses_configured_initiative_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    seen_roots: list[int] = []
+
+    def fake_discover_next_story(**kwargs: Any) -> dict[str, Any]:
+        seen_roots.append(kwargs["root_work_package_id"])
+        return {
+            "ok": True,
+            "read_only": True,
+            "root": {"id": kwargs["root_work_package_id"]},
+            "story": {"id": 301, "subject": "Story"},
+            "summary": {},
+        }
+
+    monkeypatch.setattr(
+        story_commands,
+        "load_settings",
+        lambda **kwargs: settings(initiative_id=208),
+    )
+    monkeypatch.setattr(story_commands, "discover_next_story", fake_discover_next_story)
+
+    assert project_main(["story", "next", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success"
+    assert payload["data"]["root"] == {"id": 208}
+    assert seen_roots == [208]

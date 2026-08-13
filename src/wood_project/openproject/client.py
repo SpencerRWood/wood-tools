@@ -180,6 +180,17 @@ class OpenProjectClient:
 
     def project(self, project_id: str | None = None) -> dict[str, Any]:
         selected = project_id or self.settings.project_id
+        if selected is None and self.settings.initiative_id is not None:
+            root = self.get_json(f"/api/v3/work_packages/{self.settings.initiative_id}")
+            selected = extract_id_from_href(link_href(root, "project"), "projects")
+        if selected is None:
+            raise OpenProjectError(
+                "OPENPROJECT_CONFIG_UNAVAILABLE",
+                (
+                    "Pass a project ID or set initiative_id in the selected "
+                    "integrations.openproject.projects entry."
+                ),
+            )
         return summarize_project(self.get_json(f"/api/v3/projects/{parse.quote(str(selected))}"))
 
     def work_package(self, work_package_id: int) -> dict[str, Any]:

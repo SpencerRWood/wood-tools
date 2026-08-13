@@ -15,10 +15,11 @@ class OpenProjectError(RuntimeError):
 @dataclass(frozen=True)
 class OpenProjectSettings:
     base_url: str
-    project_id: str
     token: str = field(repr=False)
     token_provider: str
     user_agent: str
+    project_id: str | None = None
+    initiative_id: int | None = None
 
 
 class Transport(Protocol):
