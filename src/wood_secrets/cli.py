@@ -7,8 +7,6 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from resources.cli.audit import write_audit_event
 from resources.cli.output import error_output, success_output, warning_output
 from wood_config.core import ConfigError, build_paths, load_config, save_config
@@ -16,6 +14,9 @@ from wood_config.core import ConfigError, build_paths, load_config, save_config
 from .core import SecretResolver
 from .core.env_files import resolve_env_file, write_resolved_env_file
 from .core.materialization import (
+    DEFAULT_MATERIALIZED_SECRET_MANIFEST,
+    MaterializationError,
+    load_materialized_secret_manifest,
     materialized_secret_definitions,
     materialized_secret_identity,
 )
@@ -207,7 +208,15 @@ def build_parser() -> argparse.ArgumentParser:
         "import",
         help="Preview or import materialized secret file registrations from JSON/YAML",
     )
-    file_import_parser.add_argument("path", help="Path to a JSON or YAML secret file manifest")
+    file_import_parser.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_MATERIALIZED_SECRET_MANIFEST),
+        help=(
+            "Path to a JSON or YAML secret file manifest. "
+            f"Default: {DEFAULT_MATERIALIZED_SECRET_MANIFEST}"
+        ),
+    )
     file_import_parser.add_argument(
         "--apply",
         action="store_true",
@@ -221,6 +230,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     file_write_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
     file_write_parser.add_argument(
+        "--manifest",
+        help=(
+            "Materialized secret manifest to use instead of the default "
+            f"{DEFAULT_MATERIALIZED_SECRET_MANIFEST}"
+        ),
+    )
+    file_write_parser.add_argument(
         "--apply",
         action="store_true",
         help="Write configured materialized secrets. Without --apply, only preview.",
@@ -232,6 +248,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect configured materialized secret file status without writing files",
     )
     file_status_parser.add_argument("name", nargs="?", help="Optional materialized secret name")
+    file_status_parser.add_argument(
+        "--manifest",
+        help=(
+            "Materialized secret manifest to use instead of the default "
+            f"{DEFAULT_MATERIALIZED_SECRET_MANIFEST}"
+        ),
+    )
     file_status_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
     doctor_parser = subparsers.add_parser("doctor", help="Diagnose provider readiness")
@@ -310,53 +333,9 @@ def _register_materialized_file(
 
 def _load_materialized_file_manifest(path: Path) -> dict[str, Any]:
     try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise SecretProviderError(f"Unable to read materialized secret manifest: {exc}") from exc
-
-    try:
-        if path.suffix.lower() == ".json":
-            payload = json.loads(raw)
-        elif path.suffix.lower() in {".yaml", ".yml"}:
-            payload = yaml.safe_load(raw)
-        else:
-            raise SecretProviderError(
-                "Materialized secret manifest must use .json, .yaml, or .yml."
-            )
-    except json.JSONDecodeError as exc:
-        raise SecretProviderError(f"Invalid JSON in materialized secret manifest: {exc}") from exc
-    except yaml.YAMLError as exc:
-        raise SecretProviderError(f"Invalid YAML in materialized secret manifest: {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise SecretProviderError("Materialized secret manifest root must be an object.")
-
-    secrets = payload.get("secrets", payload)
-    if not isinstance(secrets, dict):
-        raise SecretProviderError("Materialized secret manifest 'secrets' must be an object.")
-
-    definitions: dict[str, Any] = {}
-    for raw_name, raw_definition in secrets.items():
-        if not isinstance(raw_name, str) or not raw_name.strip():
-            raise SecretProviderError("Materialized secret names must be non-empty strings.")
-        name = raw_name.strip()
-        if not isinstance(raw_definition, dict):
-            raise SecretProviderError(f"Materialized secret {name!r} must be an object.")
-        raw_ref = raw_definition.get("ref")
-        if not isinstance(raw_ref, str) or not raw_ref.strip():
-            raise SecretProviderError(f"Materialized secret {name!r} must include a non-empty ref.")
-        definition = {"ref": raw_ref.strip()}
-        if "target" in raw_definition:
-            raw_target = raw_definition["target"]
-            if raw_target is not None:
-                if not isinstance(raw_target, str) or not raw_target.strip():
-                    raise SecretProviderError(
-                        f"Materialized secret {name!r} target must be a non-empty string."
-                    )
-                definition["target"] = raw_target.strip()
-        definitions[name] = definition
-
-    return definitions
+        return load_materialized_secret_manifest(path)
+    except MaterializationError as exc:
+        raise SecretProviderError(str(exc)) from exc
 
 
 def _import_materialized_files(*, path: Path, apply: bool) -> dict[str, Any]:
@@ -689,7 +668,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
             if args.file_command == "write":
-                payload = resolver.materialize(args.name, apply=args.apply)
+                manifest_path = Path(args.manifest) if args.manifest else None
+                payload = resolver.materialize(
+                    args.name,
+                    apply=args.apply,
+                    manifest_path=manifest_path,
+                )
                 if args.json:
                     envelope_builder = success_output if payload["ok"] else warning_output
                     envelope = envelope_builder(
@@ -719,7 +703,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if payload["ok"] else 1
 
             if args.file_command == "status":
-                payload = resolver.materialize_status(args.name)
+                manifest_path = Path(args.manifest) if args.manifest else None
+                payload = resolver.materialize_status(args.name, manifest_path=manifest_path)
                 if args.json:
                     envelope_builder = success_output if payload["ok"] else warning_output
                     envelope = envelope_builder(

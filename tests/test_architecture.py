@@ -112,6 +112,7 @@ def test_wood_project_canonical_command_modules_are_authoritative() -> None:
         "release",
         "openproject",
         "resources",
+        "registry",
         "project",
     )
 
@@ -133,8 +134,9 @@ def test_wood_project_help_presents_primary_loop_surface_first() -> None:
     help_text = build_parser().format_help()
 
     assert "Deterministic Wood Agents execution surface" in help_text
-    assert "{story,implementation,release,user,project,resource,init,show,validate,link}" in (
-        help_text.replace("\n", "")
+    assert (
+        "{story,implementation,release,user,project,resource,registry,init,show,validate,link}"
+        in help_text.replace("\n", "")
     )
     assert "story-backlog" not in help_text
     assert "backlog" not in help_text

@@ -231,11 +231,11 @@ Supported commands:
 - `wood-secrets resolve-env --apply`
 - `wood-secrets file add <name> <ref>`
 - `wood-secrets file add <name> <ref> --apply`
-- `wood-secrets file import <path>`
+- `wood-secrets file import [path]`
 - `wood-secrets file import <path> --apply`
-- `wood-secrets file write [name]`
+- `wood-secrets file write [name] [--manifest <path>]`
 - `wood-secrets file write [name] --apply`
-- `wood-secrets file status [name]`
+- `wood-secrets file status [name] [--manifest <path>]`
 - `wood-secrets doctor`
 
 Supported reference syntax:
@@ -283,7 +283,8 @@ wood-secrets resolve-env --input .env --output .env.resolved --json
 wood-secrets resolve-env --input .env --output .env.resolved --apply --force
 wood-secrets file add openproject-token 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN'
 wood-secrets file add openproject-token 'vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN' --apply
-wood-secrets file import .wood/secrets.yaml
+wood-secrets file import
+wood-secrets file import --apply
 wood-secrets file import .wood/secrets.yaml --apply
 wood-secrets file status --json
 wood-secrets file write openproject-token --apply --json
@@ -313,9 +314,9 @@ Behavior notes:
 - `wood-secrets resolve-env` resolves supported `*_REF` entries from an env file into non-`_REF` keys in a local resolved env file; it previews by default and writes only with `--apply`.
 - `wood-secrets resolve-env` reports resolved keys and references only; it never prints resolved secret values.
 - `wood-secrets file add <name> <ref>` previews registering one Vaultwarden reference for materialization; `--apply` saves it under `integrations.vaultwarden.materialized_secrets`.
-- `wood-secrets file import <path>` previews importing materialized secret registrations from a JSON or YAML manifest; `--apply` merges them into `integrations.vaultwarden.materialized_secrets`.
-- `wood-secrets file write [name]` previews configured local secret files by name, reference, target path, and state without printing secret values; `--apply` writes files beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
-- `wood-secrets file status [name]` inspects configured materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`.
+- `wood-secrets file import [path]` previews importing materialized secret registrations from a JSON or YAML manifest; when `path` is omitted it reads `~/.wood/secrets/secrets.yaml`; `--apply` merges them into `integrations.vaultwarden.materialized_secrets`.
+- `wood-secrets file write [name]` previews materialized secret files by name, reference, target path, and state without printing secret values; by default it reads registrations from `~/.wood/secrets/secrets.yaml` when that file exists, and `--manifest <path>` selects a different manifest. `--apply` writes files beneath `paths.secrets_root`, defaulting to `~/.wood/secrets`.
+- `wood-secrets file status [name]` inspects materialized secrets without writing files, reporting states such as `missing`, `current`, `refresh-needed`, `present-unverified`, `invalid`, and `provider-error`; by default it reads registrations from `~/.wood/secrets/secrets.yaml` when that file exists, and `--manifest <path>` selects a different manifest.
 - Materialized secret definitions live under `integrations.vaultwarden.materialized_secrets` as named objects with `ref` and optional relative `target` fields.
 - Materialized secret import manifests may use either a root object or a `secrets` object:
   ```yaml
@@ -330,7 +331,7 @@ Behavior notes:
 - Explicit `target` values remain supported as overrides for existing configurations.
 - Materialized secret directories and files use owner-only permissions, reject absolute/traversing/symlink-escaping targets, write atomically, skip unchanged files, and report unsafe permissions deterministically.
 - Read-only Vaultwarden commands fail closed when the active `bw` CLI server does not match the configured URL.
-- `vaultwarden://` references require at least two path segments after the scheme.
+- `vaultwarden://` references require an item path after the scheme; single-item references such as `vaultwarden://Postgres#WOOD_DATABASE_URL` are supported when selecting a custom field explicitly.
 - Automatic materialization requires exactly three Vaultwarden identity path segments: service, principal, and credential.
 - `vaultwarden://...#FIELD_NAME` lets you separate item matching from field selection.
 - Vaultwarden runtime session files are written outside the repository, defaulting to `~/.wood/runtime/secrets/vaultwarden-session.json`.
@@ -398,7 +399,7 @@ Supporting context and precondition command groups:
 - `wood-project resource install <path>` preview or apply resource installation
 - `wood-project resource inspect <kind> <name>` inspect installed resource metadata
 - `wood-project resource path <kind> <name>` resolve an installed resource path
-- `wood-project init`, `show`, `validate`, `link repo`, and `link openproject` manage local project metadata and registry links
+- `wood-project init`, `show`, `validate`, `link repo`, `link openproject`, and `registry import` manage local project metadata and registry links
 
 Legacy compatibility policy:
 
@@ -415,6 +416,8 @@ All commands:
 - `wood-project link repo <path> --apply` persist a linked repository entry in `project.json`
 - `wood-project link openproject --initiative <id>` preview registering this repository with OpenProject
 - `wood-project link openproject --initiative <id> --apply` write the repo-local config pointer and global OpenProject registry entry
+- `wood-project registry import <path>` preview importing editable OpenProject project registry metadata
+- `wood-project registry import <path> --apply` merge the registry manifest into the canonical global config
 - `wood-project resource install <path>` preview installing a versioned global resource
 - `wood-project resource install <path> --apply` validate and install a resource into the owned Wood home directory
 - `wood-project resource inspect <kind> <name>` inspect installed metadata and verify the stored digest
@@ -469,6 +472,30 @@ wood-project link openproject \
   --url https://projects.woodhost.cloud \
   --token-ref vaultwarden://wood/openproject/prod/api-token \
   --apply
+```
+
+Options for `registry import`:
+
+- `<path>` JSON or YAML registry manifest
+- `--registry-path <path>` global Wood config path, defaulting to `~/.config/wood-tools/config.json`
+- `--apply` merge the manifest into the canonical global config
+- `--json` emit JSON envelope output
+
+Example:
+
+```bash
+wood-project registry import ~/.config/wood-tools/projects.yaml --apply
+```
+
+Registry manifests may use either `openproject.projects` or a root `projects` object:
+
+```yaml
+openproject:
+  projects:
+    /Users/spencerwood/Projects/internal/wood-tools:
+      url: https://projects.woodhost.cloud
+      initiative_id: 208
+      token_ref: vaultwarden://wood/openproject/prod/api-token
 ```
 
 Options for OpenProject inspection commands:

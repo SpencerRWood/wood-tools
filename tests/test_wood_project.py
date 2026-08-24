@@ -795,6 +795,189 @@ def test_link_openproject_uses_existing_registry_metadata_defaults(
     )
 
 
+def test_registry_import_yaml_preview_does_not_write_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry_path = tmp_path / "global" / "config.json"
+    manifest_path = tmp_path / "projects.yaml"
+    manifest_path.write_text(
+        """
+openproject:
+  projects:
+    /Users/spencerwood/Projects/internal/wood-tools:
+      url: https://projects.woodhost.cloud
+      initiative_id: 208
+      token_ref: vaultwarden://wood/openproject/prod/api-token
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "registry",
+                "import",
+                str(manifest_path),
+                "--registry-path",
+                str(registry_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "registry-import"
+    assert payload["status"] == "blocked"
+    assert payload["requires_approval"] is True
+    assert payload["data"]["changed"] is False
+    assert payload["data"]["selected_count"] == 1
+    assert payload["data"]["added_count"] == 1
+    assert not registry_path.exists()
+
+
+def test_registry_import_yaml_apply_merges_projects_into_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry_path = tmp_path / "global" / "config.json"
+    save_config(
+        ConfigPaths(file_path=registry_path),
+        {
+            "version": 1,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "paths": {
+                        "project_root": "./projects",
+                        "project_aliases": {},
+                        "secrets_root": "~/.wood/secrets",
+                        "scheduler_root": "./scheduler",
+                        "template_search_paths": ["./templates"],
+                    },
+                    "integrations": {
+                        "openproject": {
+                            "projects": {
+                                "/existing/repo": {
+                                    "url": "https://old.example.test",
+                                    "initiative_id": 101,
+                                    "token_ref": "vaultwarden://wood/openproject/old/api-token",
+                                },
+                                "/unchanged/repo": {
+                                    "url": "https://projects.woodhost.cloud",
+                                    "initiative_id": 202,
+                                    "token_ref": "vaultwarden://wood/openproject/prod/api-token",
+                                },
+                            }
+                        },
+                        "ntfy": {"url": None, "token_ref": None},
+                        "vaultwarden": {
+                            "url": None,
+                            "config_ref": None,
+                            "session_file": None,
+                            "cli": {"executable": "bw"},
+                            "materialized_secrets": {},
+                        },
+                    },
+                    "wood_agents": {"boundary_ref": None, "adapters_ref": None},
+                    "diagnostics": {"agent_readiness": {"enabled": True}},
+                    "output": {"json_envelope": {"enabled": True}},
+                }
+            },
+        },
+    )
+    manifest_path = tmp_path / "projects.yaml"
+    manifest_path.write_text(
+        """
+projects:
+  /existing/repo:
+    url: https://projects.woodhost.cloud
+    initiative_id: 208
+    token_ref: vaultwarden://wood/openproject/prod/api-token
+  /unchanged/repo:
+    url: https://projects.woodhost.cloud
+    initiative_id: 202
+    token_ref: vaultwarden://wood/openproject/prod/api-token
+  /new/repo:
+    url: https://projects.woodhost.cloud
+    initiative_id: 303
+    token_ref: vaultwarden://wood/openproject/prod/api-token
+    user_agent: wood-tools/test
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "registry",
+                "import",
+                str(manifest_path),
+                "--registry-path",
+                str(registry_path),
+                "--apply",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "registry-import"
+    assert payload["status"] == "success"
+    assert payload["data"]["changed"] is True
+    assert payload["data"]["added_count"] == 1
+    assert payload["data"]["updated_count"] == 1
+    assert payload["data"]["unchanged_count"] == 1
+
+    document = json.loads(registry_path.read_text(encoding="utf-8"))
+    projects = document["profiles"]["default"]["integrations"]["openproject"]["projects"]
+    assert projects["/existing/repo"] == {
+        "url": "https://projects.woodhost.cloud",
+        "initiative_id": 208,
+        "token_ref": "vaultwarden://wood/openproject/prod/api-token",
+    }
+    assert projects["/new/repo"]["user_agent"] == "wood-tools/test"
+
+
+def test_registry_import_invalid_manifest_does_not_write_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry_path = tmp_path / "global" / "config.json"
+    manifest_path = tmp_path / "projects.yaml"
+    manifest_path.write_text(
+        """
+projects:
+  /bad/repo:
+    initiative_id: nope
+    token_ref: vaultwarden://wood/openproject/prod/api-token
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "registry",
+            "import",
+            str(manifest_path),
+            "--registry-path",
+            str(registry_path),
+            "--apply",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert payload["command"] == "registry-import"
+    assert payload["status"] == "error"
+    assert payload["mutation"] == "mutating"
+    assert "must include a non-empty url" in payload["summary"]
+    assert not registry_path.exists()
+
+
 def test_resource_install_preview_apply_reinstall_inspect_and_path_contract(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

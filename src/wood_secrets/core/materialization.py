@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -8,9 +9,13 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+import yaml
+
 from wood_config.core import ConfigError, build_paths, load_config
 
 from .providers import SecretProviderError, parse_reference_scheme, parse_vaultwarden_reference
+
+DEFAULT_MATERIALIZED_SECRET_MANIFEST = Path.home() / ".wood" / "secrets" / "secrets.yaml"
 
 
 class MaterializationError(SecretProviderError):
@@ -69,19 +74,9 @@ def configured_secrets_root(values: dict[str, Any]) -> Path:
     return Path(os.path.expanduser(root))
 
 
-def materialized_secret_definitions(values: dict[str, Any]) -> list[MaterializedSecretDefinition]:
-    integrations = values.get("integrations")
-    integrations = integrations if isinstance(integrations, dict) else {}
-    vaultwarden = integrations.get("vaultwarden")
-    vaultwarden = vaultwarden if isinstance(vaultwarden, dict) else {}
-    definitions = vaultwarden.get("materialized_secrets")
-    if definitions is None:
-        definitions = {}
-    if not isinstance(definitions, dict):
-        raise MaterializationError(
-            "integrations.vaultwarden.materialized_secrets must be an object."
-        )
-
+def _materialized_secret_definitions_from_mapping(
+    definitions: dict[str, Any],
+) -> list[MaterializedSecretDefinition]:
     materializations: list[MaterializedSecretDefinition] = []
     for name, definition in sorted(definitions.items()):
         if not isinstance(name, str) or not name.strip():
@@ -106,6 +101,85 @@ def materialized_secret_definitions(values: dict[str, Any]) -> list[Materialized
             )
         )
     return materializations
+
+
+def materialized_secret_definitions(values: dict[str, Any]) -> list[MaterializedSecretDefinition]:
+    integrations = values.get("integrations")
+    integrations = integrations if isinstance(integrations, dict) else {}
+    vaultwarden = integrations.get("vaultwarden")
+    vaultwarden = vaultwarden if isinstance(vaultwarden, dict) else {}
+    definitions = vaultwarden.get("materialized_secrets")
+    if definitions is None:
+        definitions = {}
+    if not isinstance(definitions, dict):
+        raise MaterializationError(
+            "integrations.vaultwarden.materialized_secrets must be an object."
+        )
+    return _materialized_secret_definitions_from_mapping(
+        definitions
+    )
+
+
+def load_materialized_secret_manifest(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        raise MaterializationError(f"Unable to read materialized secret manifest: {exc}") from exc
+
+    try:
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            payload = json.loads(raw)
+        elif suffix in {".yaml", ".yml"}:
+            payload = yaml.safe_load(raw)
+        else:
+            raise MaterializationError(
+                "Materialized secret manifest must use .json, .yaml, or .yml."
+            )
+    except json.JSONDecodeError as exc:
+        raise MaterializationError(f"Invalid JSON in materialized secret manifest: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise MaterializationError(f"Invalid YAML in materialized secret manifest: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise MaterializationError("Materialized secret manifest root must be an object.")
+
+    secrets = payload.get("secrets", payload)
+    if not isinstance(secrets, dict):
+        raise MaterializationError("Materialized secret manifest 'secrets' must be an object.")
+
+    definitions: dict[str, Any] = {}
+    for raw_name, raw_definition in secrets.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise MaterializationError("Materialized secret names must be non-empty strings.")
+        name = raw_name.strip()
+        if not isinstance(raw_definition, dict):
+            raise MaterializationError(f"Materialized secret {name!r} must be an object.")
+        raw_ref = raw_definition.get("ref")
+        if not isinstance(raw_ref, str) or not raw_ref.strip():
+            raise MaterializationError(
+                f"Materialized secret {name!r} must include a non-empty ref."
+            )
+        definition = {"ref": raw_ref.strip()}
+        if "target" in raw_definition:
+            raw_target = raw_definition["target"]
+            if raw_target is not None:
+                if not isinstance(raw_target, str) or not raw_target.strip():
+                    raise MaterializationError(
+                        f"Materialized secret {name!r} target must be a non-empty string."
+                    )
+                definition["target"] = raw_target.strip()
+        definitions[name] = definition
+
+    return definitions
+
+
+def materialized_secret_definitions_from_manifest(
+    path: Path,
+) -> list[MaterializedSecretDefinition]:
+    return _materialized_secret_definitions_from_mapping(
+        load_materialized_secret_manifest(path)
+    )
 
 
 def selected_definitions(

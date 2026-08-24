@@ -23,6 +23,8 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"link-{getattr(args, 'link_command', 'unknown')}"
     if args.command == "resource":
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
+    if args.command == "registry":
+        return f"registry-{getattr(args, 'registry_command', 'unknown')}"
     if args.command == "story":
         return f"story-{getattr(args, 'story_command', 'unknown')}"
     if args.command == "release":
@@ -124,6 +126,20 @@ def _summarize_json_payload(
             mutation="read-only",
             summary=f"{action} {resource['kind']} resource {resource['name']}.",
             data=payload,
+        )
+    if command == "registry-import":
+        if apply:
+            return success_output(
+                command=command,
+                mutation="mutating",
+                summary="Imported OpenProject project registry manifest.",
+                data=payload,
+            )
+        return blocked_output(
+            command=command,
+            summary="OpenProject project registry import requires approval.",
+            data=payload,
+            next_actions=["Re-run wood-project registry import with --apply."],
         )
     if command in {"user", "project", "story-show"}:
         return success_output(
@@ -279,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                         "init",
                         "link-openproject",
                         "link-repo",
+                        "registry-import",
                         "resource-install",
                         "story-set-status",
                         "story-create-branch",

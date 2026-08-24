@@ -10,6 +10,7 @@ from typing import Any
 from wood_config.core import ConfigError, build_paths, load_config
 
 from .materialization import (
+    DEFAULT_MATERIALIZED_SECRET_MANIFEST,
     MaterializationError,
     active_profile_values,
     configured_secrets_root,
@@ -18,6 +19,7 @@ from .materialization import (
     materialization_result,
     materialization_status_result,
     materialized_secret_definitions,
+    materialized_secret_definitions_from_manifest,
     materialized_secret_identity,
     materialized_secret_target,
     safe_target_path,
@@ -280,6 +282,22 @@ class SecretResolver:
             "env_fallback_variable": normalize_env_fallback_name(reference),
         }
 
+    def _materialized_definitions(
+        self,
+        values: dict[str, Any],
+        *,
+        manifest_path: Path | None = None,
+    ) -> tuple[list[Any], str | None]:
+        if manifest_path is not None:
+            path = manifest_path.expanduser()
+            return materialized_secret_definitions_from_manifest(path), str(path)
+
+        if DEFAULT_MATERIALIZED_SECRET_MANIFEST.exists():
+            path = DEFAULT_MATERIALIZED_SECRET_MANIFEST
+            return materialized_secret_definitions_from_manifest(path), str(path)
+
+        return materialized_secret_definitions(values), None
+
     def inspect_reference(self, reference: str) -> dict[str, Any]:
         validated = self.validate_reference(reference)
         provider_status = self.get_provider(validated["scheme"]).status().to_dict()
@@ -505,10 +523,20 @@ class SecretResolver:
             "issues": issues,
         }
 
-    def materialize(self, name: str | None = None, *, apply: bool = False) -> dict[str, Any]:
+    def materialize(
+        self,
+        name: str | None = None,
+        *,
+        apply: bool = False,
+        manifest_path: Path | None = None,
+    ) -> dict[str, Any]:
         values = active_profile_values()
         root = configured_secrets_root(values)
-        definitions = selected_definitions(materialized_secret_definitions(values), name)
+        all_definitions, source_manifest = self._materialized_definitions(
+            values,
+            manifest_path=manifest_path,
+        )
+        definitions = selected_definitions(all_definitions, name)
         results: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
 
@@ -549,15 +577,25 @@ class SecretResolver:
             "ok": not errors,
             "apply": apply,
             "secrets_root": str(root.expanduser()),
+            "manifest_path": source_manifest,
             "selected_count": len(definitions),
             "materialized": results,
             "errors": errors,
         }
 
-    def materialize_status(self, name: str | None = None) -> dict[str, Any]:
+    def materialize_status(
+        self,
+        name: str | None = None,
+        *,
+        manifest_path: Path | None = None,
+    ) -> dict[str, Any]:
         values = active_profile_values()
         root = configured_secrets_root(values)
-        definitions = selected_definitions(materialized_secret_definitions(values), name)
+        all_definitions, source_manifest = self._materialized_definitions(
+            values,
+            manifest_path=manifest_path,
+        )
+        definitions = selected_definitions(all_definitions, name)
         results: list[dict[str, Any]] = []
 
         for definition in definitions:
@@ -625,6 +663,7 @@ class SecretResolver:
         return {
             "ok": not needs_attention,
             "secrets_root": str(root.expanduser()),
+            "manifest_path": source_manifest,
             "selected_count": len(definitions),
             "materialized": results,
             "needs_attention": needs_attention,

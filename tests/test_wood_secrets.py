@@ -212,6 +212,10 @@ def install_stub_resolver(monkeypatch: pytest.MonkeyPatch):
         config_document: dict[str, object] | None = None,
     ) -> None:
         monkeypatch.setattr(
+            "wood_secrets.core.resolver.DEFAULT_MATERIALIZED_SECRET_MANIFEST",
+            Path("/__wood_tools_missing/secrets.yaml"),
+        )
+        monkeypatch.setattr(
             "wood_secrets.core.resolver.load_config",
             lambda _: config_document if config_document is not None else make_config_document(),
         )
@@ -388,7 +392,22 @@ def test_resolve_invalid_explicit_field_reference_returns_error(
     assert code == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "error"
-    assert "at least two path segments" in payload["summary"]
+    assert "item path" in payload["summary"]
+
+
+def test_resolve_allows_single_item_with_explicit_field(
+    install_stub_resolver,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_stub_resolver()
+
+    code = main(["resolve", "--ref", "vaultwarden://Postgres#WOOD_DATABASE_URL", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success"
+    assert payload["data"]["reference"] == "vaultwarden://Postgres#WOOD_DATABASE_URL"
+    assert payload["data"]["redacted_value"] == "[REDACTED]"
 
 
 def test_resolve_env_json_previews_without_writing_or_leaking_secret(
@@ -642,6 +661,49 @@ secrets:
     )
 
 
+def test_file_import_defaults_to_user_secrets_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(secrets_root=tmp_path / "secrets", definitions={}),
+    )
+    manifest = tmp_path / ".wood" / "secrets" / "secrets.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        """
+secrets:
+  postgres-password:
+    ref: vaultwarden://postgres/wood-events/password#PASSWORD
+    target: postgres/wood-events/password
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("wood_secrets.cli.DEFAULT_MATERIALIZED_SECRET_MANIFEST", manifest)
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["file", "import", "--apply", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["manifest_path"] == str(manifest)
+    assert payload["data"]["selected_count"] == 1
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    materialized = document["profiles"]["default"]["integrations"]["vaultwarden"][
+        "materialized_secrets"
+    ]
+    assert materialized == {
+        "postgres-password": {
+            "ref": "vaultwarden://postgres/wood-events/password#PASSWORD",
+            "target": "postgres/wood-events/password",
+        }
+    }
+
+
 def test_file_import_json_applies_and_merges_materialized_secret_registrations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -767,6 +829,52 @@ def test_file_write_applies_materialized_secret_file(
     assert payload["command"] == "file-write"
     assert payload["mutation"] == "mutating"
     assert payload["data"]["materialized"][0]["state"] == "created"
+
+
+def test_file_write_defaults_to_user_secrets_manifest(
+    install_stub_resolver,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    secrets_root = tmp_path / "secrets"
+    manifest = tmp_path / ".wood" / "secrets" / "secrets.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        """
+secrets:
+  postgres-password:
+    ref: vaultwarden://postgres/wood-events/password#PASSWORD
+    target: postgres/wood-events/password
+""".lstrip(),
+        encoding="utf-8",
+    )
+    config_path = tmp_path / ".wood" / "config" / "config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    save_config(
+        ConfigPaths(file_path=config_path),
+        make_materialization_config(
+            secrets_root=secrets_root,
+            definitions={
+                "openproject-token": {
+                    "ref": "vaultwarden://openproject/wood-tools/api-token#OPENPROJECT_API_TOKEN"
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr("wood_secrets.core.resolver.DEFAULT_MATERIALIZED_SECRET_MANIFEST", manifest)
+    monkeypatch.chdir(tmp_path)
+    install_stub_resolver()
+    monkeypatch.setattr("wood_secrets.core.resolver.DEFAULT_MATERIALIZED_SECRET_MANIFEST", manifest)
+
+    code = main(["file", "write", "postgres-password", "--apply", "--json"])
+
+    assert code == 0
+    target = secrets_root / "postgres" / "wood-events" / "password"
+    assert target.read_text(encoding="utf-8") == "super-secret-token"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["manifest_path"] == str(manifest)
+    assert payload["data"]["materialized"][0]["name"] == "postgres-password"
 
 
 @pytest.mark.parametrize("command", ["materialize", "materialize-status"])

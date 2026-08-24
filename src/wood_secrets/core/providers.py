@@ -91,9 +91,9 @@ def parse_vaultwarden_reference(reference: str) -> VaultwardenReference:
         )
     path = path.strip("/")
     parts = tuple(part.strip() for part in path.split("/") if part.strip())
-    if len(parts) < 2:
+    if not parts:
         raise InvalidSecretReferenceError(
-            "Vaultwarden references must include at least two path segments."
+            "Vaultwarden references must include an item path after the scheme."
         )
     return VaultwardenReference(raw=reference, parts=parts, field_name=normalized_field_name)
 
