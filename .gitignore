@@ -41,6 +41,7 @@ docs/*
 AGENTS.md
 .codex/
 scripts/*
+!scripts/dev
 
 # Local story-loop helper scripts
 scripts/story_loop/next_story.py
