@@ -110,12 +110,12 @@ def implementation_plan_payload(
         env,
         ["OPENPROJECT_URL", "OPENPROJECT_API_TOKEN"],
     )
-    base_url = env["OPENPROJECT_URL"].rstrip("/")
-    token = env["OPENPROJECT_API_TOKEN"]
+    base_url = op.env_value(env, "OPENPROJECT_URL").rstrip("/")
+    token = op.env_value(env, "OPENPROJECT_API_TOKEN")
     client = op.client_from_env(
         base_url,
         token,
-        project_id=env.get("OPENPROJECT_PROJECT_ID", ""),
+        project_id=op.env_value(env, "OPENPROJECT_PROJECT_ID"),
     )
 
     rows = workbook_rows(workbook, sheet_name)

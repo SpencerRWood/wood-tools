@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "active_profile": "default",
+  "profiles": {
+    "default": {
+      "integrations": {
+        "openproject": {
+          "url": "https://projects.woodhost.cloud",
+          "project_id": "3",
+          "token_ref": "env://OPENPROJECT_API_TOKEN"
+        }
+      }
+    }
+  }
+}

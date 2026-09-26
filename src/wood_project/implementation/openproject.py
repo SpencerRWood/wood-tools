@@ -28,11 +28,7 @@ class ScriptError(RuntimeError):
 
 def parse_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"Environment file not found: {path}. Run wood-secrets resolve-env --apply "
-            "or execute the workflow through the existing secrets workflow.",
-        )
+        return {}
 
     env: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -45,12 +41,12 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def require_env(env: dict[str, str], keys: list[str]) -> None:
-    missing = [key for key in keys if not env.get(key)]
+    missing = [key for key in keys if not env_value(env, key)]
     if missing:
         raise ScriptError(
             "OPENPROJECT_ACCESS_UNAVAILABLE",
-            "Missing required OpenProject configuration. Resolve .env.resolved and run the "
-            "workflow through the secrets execution path so OPENPROJECT_API_TOKEN is available.",
+            f"Missing required OpenProject configuration: {', '.join(missing)}. "
+            "Set it in the environment or a resolved env file.",
         )
 
 

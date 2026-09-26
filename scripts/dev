@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+if (( $# == 0 )); then
+  echo "Usage: scripts/dev <command> [args...]" >&2
+  exit 2
+fi
+
+export OPENPROJECT_URL="${OPENPROJECT_URL:-https://projects.woodhost.cloud}"
+export OPENPROJECT_PROJECT_ID="${OPENPROJECT_PROJECT_ID:-3}"
+export OPENPROJECT_INITIATIVE_ID="${OPENPROJECT_INITIATIVE_ID:-208}"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/cert.pem}"
+export INFISICAL_DISABLE_UPDATE_CHECK=true
+export XDG_CONFIG_HOME="$PWD/.wood"
+unset OPENPROJECT_API_TOKEN
+exec infisical run \
+  --domain=https://dev-infisical.woodhost.cloud/api \
+  --projectId=7ea10433-2eeb-4c57-95a9-b793dd40c7a4 \
+  --env=dev \
+  --path=/openproject \
+  -- "$@"

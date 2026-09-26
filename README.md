@@ -500,6 +500,19 @@ Options:
 - `--initiative-id <id>` optionally override the workbook-derived root work-package ID for planning or apply
 - `--json` emit deterministic JSON for agent workflows
 
+For local OpenProject commands, authenticate with Infisical and run the command
+through `scripts/dev`. The shared OpenProject token comes from
+`Infrastructure Dev/dev:/openproject`; no `.env` or `.env.resolved` file is
+required. The launcher uses the
+checked-in, nonsecret OpenProject profile at `.wood/wood-tools/config.json` for
+`wood-project user`, `project`, and `story` commands.
+
+```bash
+infisical login --domain=https://dev-infisical.woodhost.cloud/api --method=user --interactive
+scripts/dev uv run --active wood-project implementation export 208 --json
+scripts/dev uv run --active wood-project user --json
+```
+
 Implementation workbook behavior:
 
 - `implementation export` is read-only against OpenProject and writes local snapshot artifacts.
