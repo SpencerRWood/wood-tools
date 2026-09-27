@@ -123,10 +123,7 @@ def _summarize_json_payload(
         summary = (
             f"Next Story is WP-{story['id']} {story['subject']}."
             if story
-            else (
-                "Planning Increment "
-                f"{payload.get('planning_increment', {}).get('version')} is complete."
-            )
+            else f"Release {payload.get('release', {}).get('version')} is ready."
         )
         return success_output(
             command=command,
