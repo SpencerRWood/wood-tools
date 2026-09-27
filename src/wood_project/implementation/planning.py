@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient, embedded_elements
+from wood_project.story.discovery import version_rank
 
 from . import openproject as op
 from . import workbook as workbook_module
@@ -49,7 +50,10 @@ def compose_description(values: dict[str, str]) -> str:
     if values["Story ID"].strip():
         openproject_lines.append(f"External story ID: {values['Story ID'].strip()}")
     if values["Version"].strip():
-        openproject_lines.append(f"Release/version: {values['Version'].strip()}")
+        openproject_lines.append(f"Planning Increment: {values['Version'].strip()}")
+    for column in ("Primary Repository", "Affected Repositories", "Released In"):
+        if values.get(column, "").strip():
+            openproject_lines.append(f"{column}: {values[column].strip()}")
     if values["Branch Name"].strip():
         openproject_lines.append(f"Branch: {values['Branch Name'].strip()}")
     if openproject_lines:
@@ -248,7 +252,7 @@ def build_epic_description(epic: str, rows: list[WorkbookRow]) -> str:
     story_ids = [story_key(row) for row in rows]
     lines = ["Codex Implementation Packet", "", "OpenProject"]
     if versions:
-        lines.append(f"Release/version: {versions[0]}")
+        lines.append(f"Planning Increment: {versions[0]}")
     lines.extend(["", "Goal", f"Track implementation stories for {epic}."])
     if story_ids:
         lines.extend(["", "Stories", ", ".join(story_ids)])
@@ -702,7 +706,29 @@ def version_href(versions: list[dict[str, Any]], name: str) -> str:
 
 
 def required_version_names(rows: list[WorkbookRow]) -> list[str]:
-    return sorted({row.values["Version"].strip() for row in rows if row.values["Version"].strip()})
+    return sorted(
+        {row.values["Version"].strip() for row in rows if row.values["Version"].strip()},
+        key=version_rank,
+    )
+
+
+def validate_story_traceability(row: WorkbookRow) -> None:
+    increment = row.values["Version"].strip()
+    if increment.startswith("R") and not row.values.get("Primary Repository", "").strip():
+        raise op.ScriptError(
+            "WORKBOOK_SCHEMA_MISMATCH",
+            f"Row {row.row_number} requires Primary Repository before publication.",
+        )
+    released_in = row.values.get("Released In", "").strip()
+    if released_in and (
+        not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?", released_in)
+        or row.values["Status"].casefold() != "closed"
+    ):
+        raise op.ScriptError(
+            "WORKBOOK_SCHEMA_MISMATCH",
+            f"Row {row.row_number} Released In requires a closed Story "
+            "and actual repository SemVer.",
+        )
 
 
 def existing_versions_by_name(versions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -725,6 +751,11 @@ def build_version_plan(
     planned: list[dict[str, Any]] = []
     for name in required_version_names(rows):
         existing = existing_by_name.get(name)
+        if not re.fullmatch(r"R[1-9]\d*(?:\s*(?:—|–|-)\s*.+)?", name) and not existing:
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                f"New OpenProject Version must be an R# Planning Increment: {name!r}.",
+            )
         if existing:
             planned.append(
                 {
@@ -807,6 +838,7 @@ def build_implementation_plan(
     versions_plan = build_version_plan(rows, versions)
     rows_by_key: dict[str, WorkbookRow] = {}
     for row in rows:
+        validate_story_traceability(row)
         key = story_key(row)
         if key in rows_by_key:
             raise op.ScriptError(

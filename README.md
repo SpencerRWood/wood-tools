@@ -522,9 +522,17 @@ Implementation workbook behavior:
 - Planning and apply resolve the target Project and Root Work Package from workbook metadata.
 - Existing root work packages are reused by ID or unique subject/type match; missing root work
   packages are planned for creation.
-- The workbook is treated as the desired release state: Root Work Package, Versions, Epics, Stories, and
+- The workbook is treated as the desired Planning Increment state: Root Work Package, OpenProject Versions, Epics, Stories, and
   predecessor relations are reused when an ID or unique deterministic match exists, and are
   planned for creation otherwise.
+- New OpenProject Version names use `R#` Planning Increment identifiers such as
+  `R1 — Codex Foundations`. Numeric order places `R10` after `R9`; no SemVer
+  parsing is used. Historical names can still be reused during migration.
+- `Version` is the OpenProject compatibility column. New Story rows need a
+  `Primary Repository`; `Affected Repositories` records other codebases touched.
+  `Released In` stays blank while planning and is filled with the actual repository
+  semantic-release version after a closed Story ships. A GitHub Release is the
+  separate published artifact record.
 - Ambiguous matches stop planning instead of guessing.
 - Workbook rows with explicit `OpenProject ID` values must resolve to Stories beneath the resolved
   Root Work Package; stale IDs outside that tree block planning instead of mutating unrelated work.
@@ -560,7 +568,7 @@ Options:
 - `--pyproject <path>` read version metadata from a specific `pyproject.toml`, default `pyproject.toml`
 - `--version <X.Y.Z>` use an explicit version for `check`, `tag`, or `github-create`
 - `--root-work-package-id <id>` include OpenProject story readiness under a root work package during `check`
-- `--openproject-version <name>` limit `release check` story readiness to one OpenProject Version
+- `--openproject-version <name>` limit repository `release check` Story readiness to one R# Planning Increment (OpenProject Version)
 - `--config-path <path>` override the user-global `wood-config` file for `release check`
 - `--profile <name>` read OpenProject settings from a specific profile for `release check`
 - `--type <name>` choose the story work-package type for `release check`, default `Story`
@@ -585,7 +593,7 @@ Examples:
 
 ```bash
 wood-project release check --json
-wood-project release check --root-work-package-id 208 --openproject-version "V0.3 Deterministic Workflow CLI" --json
+wood-project release check --root-work-package-id 208 --openproject-version "R3 — Deterministic Workflow CLI" --json
 wood-project release bump patch --json
 wood-project release bump patch --apply --json
 wood-project release tag --json

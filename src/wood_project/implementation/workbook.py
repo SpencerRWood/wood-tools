@@ -35,6 +35,8 @@ IMPLEMENTATION_WORKBOOK_COLUMNS = [
     "OpenProject ID",
     "Notes",
 ]
+TRACEABILITY_COLUMNS = ["Primary Repository", "Affected Repositories", "Released In"]
+EXPORT_WORKBOOK_COLUMNS = IMPLEMENTATION_WORKBOOK_COLUMNS + TRACEABILITY_COLUMNS
 
 SYNC_METADATA_ROWS = [
     "Configured Root Work Package ID",
@@ -147,12 +149,16 @@ def workbook_rows(path: Path, sheet_name: str) -> list[WorkbookRow]:
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Workbook is missing required columns: {', '.join(missing)}",
         )
-    indexed_headers = {column: headers.index(column) for column in IMPLEMENTATION_WORKBOOK_COLUMNS}
+    indexed_headers = {
+        column: headers.index(column) for column in EXPORT_WORKBOOK_COLUMNS if column in headers
+    }
     records: list[WorkbookRow] = []
     for row_number, row in enumerate(rows[1:], start=2):
         values = {
-            column: row[indexed_headers[column]] if indexed_headers[column] < len(row) else ""
-            for column in IMPLEMENTATION_WORKBOOK_COLUMNS
+            column: row[indexed_headers[column]]
+            if column in indexed_headers and indexed_headers[column] < len(row)
+            else ""
+            for column in EXPORT_WORKBOOK_COLUMNS
         }
         if any(values.values()):
             records.append(WorkbookRow(row_number=row_number, values=values))
@@ -206,14 +212,11 @@ def sheet_xml(rows: list[list[Any]]) -> str:
 
 
 def write_xlsx(path: Path, story_records: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
-    story_rows = [IMPLEMENTATION_WORKBOOK_COLUMNS]
+    story_rows: list[list[Any]] = [EXPORT_WORKBOOK_COLUMNS]
     story_rows.extend(
-        [
-            [record.get(column) for column in IMPLEMENTATION_WORKBOOK_COLUMNS]
-            for record in story_records
-        ]
+        [[record.get(column) for column in EXPORT_WORKBOOK_COLUMNS] for record in story_records]
     )
-    metadata_rows = [["Field", "Value"]]
+    metadata_rows: list[list[Any]] = [["Field", "Value"]]
     metadata_rows.extend([[row_name, metadata.get(row_name)] for row_name in SYNC_METADATA_ROWS])
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
         workbook.writestr("[Content_Types].xml", content_types_xml())

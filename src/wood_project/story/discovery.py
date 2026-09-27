@@ -103,11 +103,12 @@ def fetch_predecessor_map(
     return predecessor_map
 
 
-def version_rank(version_name: str) -> tuple[int, str]:
-    match = re.search(r"\b[MV](\d+)", version_name, flags=re.IGNORECASE)
+def version_rank(version_name: str) -> tuple[int, int, str]:
+    """Order Planning Increments by R-number; retain legacy names for readback."""
+    match = re.match(r"^R([1-9]\d*)(?:\s*(?:—|–|-)\s*.+)?$", version_name.strip())
     if match:
-        return (int(match.group(1)), version_name.lower())
-    return (9000, version_name.lower())
+        return (0, int(match.group(1)), version_name.casefold())
+    return (1, 0, version_name.casefold())
 
 
 def acceptance_criteria(description: str) -> list[str]:
@@ -159,7 +160,7 @@ def build_story_payload(
             "acceptance_criteria": acceptance_criteria(description),
             "likely_files": [],
             "risks": (
-                ["Other candidate stories in this version are still blocked by dependencies."]
+                ["Other Stories in this Planning Increment are blocked by predecessors."]
                 if blocked_count
                 else []
             ),
@@ -207,7 +208,18 @@ def discover_next_story(
             [],
         ).append(story)
 
+    by_id = {work_package_id(story): story for story in stories}
+
+    def ready(story: dict[str, Any]) -> bool:
+        return all(
+            predecessor_id in by_id
+            and work_package_status_name(by_id[predecessor_id]) in closed_status_names
+            for predecessor_id in predecessor_map.get(work_package_id(story), set())
+        )
+
     for version in sorted(stories_by_version, key=version_rank):
+        if version_status.get(version, "open").casefold() != "open":
+            continue
         unfinished = [
             story
             for story in stories_by_version[version]
@@ -218,7 +230,7 @@ def discover_next_story(
                 return {
                     "ok": True,
                     "story": None,
-                    "release": {
+                    "planning_increment": {
                         "root_work_package_id": root_id,
                         "root_subject": str(root.get("subject") or ""),
                         "version": version,
@@ -227,7 +239,7 @@ def discover_next_story(
                         "total_story_count": len(stories_by_version[version]),
                     },
                     "summary": {
-                        "goal": f"Prepare the release for {version}.",
+                        "goal": f"Complete the Planning Increment {version}.",
                         "acceptance_criteria": [],
                         "likely_files": [],
                         "risks": [],
@@ -241,6 +253,7 @@ def discover_next_story(
             for story in unfinished
             if work_package_status_name(story).casefold() == "in progress"
         ]
+        in_progress = [story for story in in_progress if ready(story)]
         if in_progress:
             story = sorted(in_progress, key=lambda item: work_package_id(item))[0]
             return build_story_payload(
@@ -255,16 +268,9 @@ def discover_next_story(
         ]
         blocked_count = 0
         eligible: list[dict[str, Any]] = []
-        by_id = {work_package_id(story): story for story in stories}
         for story in candidates:
             predecessor_ids = predecessor_map.get(work_package_id(story), set())
-            unfinished_predecessors = [
-                predecessor_id
-                for predecessor_id in predecessor_ids
-                if work_package_status_name(by_id.get(predecessor_id, {}))
-                not in closed_status_names
-            ]
-            if unfinished_predecessors:
+            if predecessor_ids and not ready(story):
                 blocked_count += 1
             else:
                 eligible.append(story)
