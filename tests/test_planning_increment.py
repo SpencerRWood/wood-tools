@@ -99,6 +99,21 @@ def test_import_accepts_r_increment_without_semver() -> None:
     assert planning.required_version_names(rows) == ["R1", "R2", "R9", "R10"]
 
 
+def test_import_reuses_historical_version_without_migrating_it() -> None:
+    values = {column: "" for column in workbook.EXPORT_WORKBOOK_COLUMNS}
+    values["Version"] = "V0.2 Foundation"
+    existing = [
+        {
+            "id": 7,
+            "name": "V0.2 Foundation",
+            "_links": {"self": {"href": "/api/v3/versions/7"}},
+        }
+    ]
+    result = planning.build_version_plan([workbook.WorkbookRow(2, values)], existing)
+    assert result[0]["action"] == "reuse"
+    assert result[0]["version_id"] == 7
+
+
 def test_released_in_requires_closed_story_and_actual_semver() -> None:
     values = {column: "" for column in workbook.EXPORT_WORKBOOK_COLUMNS}
     values.update({"Version": "R1", "Primary Repository": "wood-tools", "Status": "New"})
