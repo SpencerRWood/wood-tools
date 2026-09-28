@@ -59,6 +59,9 @@ def parse_description_packet(description: str) -> dict[str, str]:
     sections = {
         "story_id": extract_labeled_value(description, "External story ID"),
         "branch_name": extract_labeled_value(description, "Branch"),
+        "primary_repository": extract_labeled_value(description, "Primary Repository"),
+        "affected_repositories": extract_labeled_value(description, "Affected Repositories"),
+        "released_in": extract_labeled_value(description, "Released In"),
         "requirement_ids": extract_labeled_value(description, "Requirement IDs"),
         "goal": "",
         "acceptance_criteria": "",

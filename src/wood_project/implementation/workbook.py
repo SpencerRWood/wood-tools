@@ -19,6 +19,8 @@ IMPLEMENTATION_WORKBOOK_COLUMNS = [
     "Project",
     "Root Work Package",
     "Version",
+    "Primary Repository",
+    "Affected Repositories",
     "Epic",
     "Parent",
     "Story ID",
@@ -29,12 +31,16 @@ IMPLEMENTATION_WORKBOOK_COLUMNS = [
     "Implementation Notes",
     "Requirement IDs",
     "Predecessors",
+    "Released In",
     "Type",
     "Status",
     "Branch Name",
     "OpenProject ID",
     "Notes",
 ]
+
+# Existing 18-column workbooks remain readable during migration.
+OPTIONAL_TRACEABILITY_COLUMNS = {"Primary Repository", "Affected Repositories", "Released In"}
 
 SYNC_METADATA_ROWS = [
     "Configured Root Work Package ID",
@@ -141,17 +147,29 @@ def workbook_rows(path: Path, sheet_name: str) -> list[WorkbookRow]:
     if not rows:
         raise op.ScriptError("WORKBOOK_PARSE_FAILED", "Workbook sheet has no rows.")
     headers = rows[0]
-    missing = [column for column in IMPLEMENTATION_WORKBOOK_COLUMNS if column not in headers]
+    missing = [
+        column
+        for column in IMPLEMENTATION_WORKBOOK_COLUMNS
+        if column not in headers and column not in OPTIONAL_TRACEABILITY_COLUMNS
+    ]
     if missing:
         raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Workbook is missing required columns: {', '.join(missing)}",
         )
-    indexed_headers = {column: headers.index(column) for column in IMPLEMENTATION_WORKBOOK_COLUMNS}
+    indexed_headers = {
+        column: headers.index(column)
+        for column in IMPLEMENTATION_WORKBOOK_COLUMNS
+        if column in headers
+    }
     records: list[WorkbookRow] = []
     for row_number, row in enumerate(rows[1:], start=2):
         values = {
-            column: row[indexed_headers[column]] if indexed_headers[column] < len(row) else ""
+            column: (
+                row[indexed_headers[column]]
+                if column in indexed_headers and indexed_headers[column] < len(row)
+                else ""
+            )
             for column in IMPLEMENTATION_WORKBOOK_COLUMNS
         }
         if any(values.values()):

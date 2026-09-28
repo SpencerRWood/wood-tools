@@ -8,7 +8,8 @@ import pytest
 from wood_project.cli import main as project_main
 from wood_project.commands import story as story_commands
 from wood_project.openproject import OpenProjectClient, OpenProjectSettings
-from wood_project.story import branches
+from wood_project.planning_release import release_sort_key
+from wood_project.story import branches, discovery
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +156,7 @@ def test_project_story_next_selects_in_progress_story(
         if path == "/api/v3/statuses":
             return {"_embedded": {"elements": [{"name": "Closed", "isClosed": True}]}}
         if path == "/api/v3/projects/3/versions":
-            return {"_embedded": {"elements": [{"name": "V0.3", "status": "open"}]}}
+            return {"_embedded": {"elements": [{"name": "R3", "status": "open"}]}}
         if path == "/api/v3/work_packages":
             return {
                 "total": 1,
@@ -173,7 +174,7 @@ def test_project_story_next_selects_in_progress_story(
                             "_links": {
                                 "type": {"title": "Story"},
                                 "status": {"title": "In progress"},
-                                "version": {"title": "V0.3"},
+                                "version": {"title": "R3"},
                                 "parent": {"href": "/api/v3/work_packages/297"},
                             },
                         }
@@ -195,3 +196,101 @@ def test_project_story_next_selects_in_progress_story(
     assert payload["data"]["story"]["branch"] == "feature/op-301-productize-story-loop"
     assert payload["data"]["summary"]["goal"] == "Ship the workflow."
     assert payload["data"]["summary"]["acceptance_criteria"] == ["First criterion"]
+
+
+def test_numeric_planning_release_order() -> None:
+    assert sorted(["R10 — Later", "R9", "R2", "R1"], key=release_sort_key) == [
+        "R1",
+        "R2",
+        "R9",
+        "R10 — Later",
+    ]
+
+
+def test_blocks_relation_is_a_predecessor(monkeypatch) -> None:
+    relations = [
+        {
+            "id": 7,
+            "type": "blocks",
+            "_links": {
+                "from": {"href": "/api/v3/work_packages/1"},
+                "to": {"href": "/api/v3/work_packages/2"},
+            },
+        }
+    ]
+    monkeypatch.setattr(discovery, "fetch_collection", lambda *_args, **_kwargs: relations)
+    assert discovery.fetch_predecessor_map(OpenProjectClient(settings()), {1, 2}, 100) == {2: {1}}
+
+
+def test_next_story_keeps_earliest_active_release_and_dependencies(monkeypatch) -> None:
+    def story(story_id: int, version: str, status: str = "New") -> dict[str, Any]:
+        return {
+            "id": story_id,
+            "subject": f"Story {story_id}",
+            "_links": {
+                "type": {"title": "Story"},
+                "status": {"title": status},
+                "version": {"title": version},
+            },
+        }
+
+    stories = [
+        story(1, "R9", "In progress"),
+        story(2, "R9"),
+        story(3, "R10 — Later", "In progress"),
+    ]
+    documents = {
+        "/api/v3/work_packages/208": {
+            "id": 208,
+            "_links": {"project": {"href": "/api/v3/projects/3"}},
+        },
+        "/api/v3/statuses": {"_embedded": {"elements": [{"name": "Closed", "isClosed": True}]}},
+        "/api/v3/projects/3/versions": {
+            "_embedded": {
+                "elements": [
+                    {"name": "R10 — Later", "status": "open"},
+                    {"name": "R9", "status": "open"},
+                    {"name": "R2", "status": "closed"},
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(discovery, "api_get_json", lambda _client, path: documents[path])
+    monkeypatch.setattr(discovery, "fetch_descendants", lambda *_args: stories)
+    monkeypatch.setattr(discovery, "fetch_predecessor_map", lambda *_args: {1: {2}})
+    client = OpenProjectClient(settings())
+    result = discovery.discover_next_story(
+        client=client,
+        root_work_package_id=208,
+        target_status="New",
+        story_type="Story",
+        page_size=100,
+    )
+    assert result["story"]["id"] == 2
+    stories[1]["_links"]["status"]["title"] = "Closed"
+    result = discovery.discover_next_story(
+        client=client,
+        root_work_package_id=208,
+        target_status="New",
+        story_type="Story",
+        page_size=100,
+    )
+    assert result["story"]["id"] == 1
+    stories[0]["_links"]["status"]["title"] = "Closed"
+    result = discovery.discover_next_story(
+        client=client,
+        root_work_package_id=208,
+        target_status="New",
+        story_type="Story",
+        page_size=100,
+    )
+    assert result["story"]["id"] == 3
+    stories[2]["_links"]["status"]["title"] = "Closed"
+    with pytest.raises(discovery.StoryWorkflowError, match="No eligible Story"):
+        discovery.discover_next_story(
+            client=client,
+            root_work_package_id=208,
+            target_status="New",
+            story_type="Story",
+            page_size=100,
+        )

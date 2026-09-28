@@ -105,8 +105,7 @@ def _validate_materialized_secrets(value: Any, *, field: str) -> list[dict[str, 
                 "field": field,
                 "message": "Materialized secrets must be an object keyed by secret name.",
                 "remediation": (
-                    f'Set {field} like '
-                    '{"name": {"ref": "env://TOKEN", "target": "file"}}.'
+                    f'Set {field} like {{"name": {{"ref": "env://TOKEN", "target": "file"}}}}.'
                 ),
             }
         ]
@@ -130,8 +129,7 @@ def _validate_materialized_secrets(value: Any, *, field: str) -> list[dict[str, 
                     "field": entry_field,
                     "message": "Materialized secret definitions must be objects.",
                     "remediation": (
-                        f'Set {entry_field} like '
-                        '{"ref": "env://TOKEN", "target": "file"}.'
+                        f'Set {entry_field} like {{"ref": "env://TOKEN", "target": "file"}}.'
                     ),
                 }
             )

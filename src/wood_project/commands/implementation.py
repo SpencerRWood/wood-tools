@@ -4,7 +4,12 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from wood_project.openproject import OpenProjectError
+
 from ..implementation import apply_workbook, export_workbook, plan_workbook
+from ..implementation import openproject as implementation_op
+from ..implementation.models import ImplementationWorkflowError
+from ..implementation.released import record_released_in
 
 COMMAND = "implementation"
 
@@ -55,6 +60,16 @@ def _configure_parser(parser: argparse.ArgumentParser) -> None:
     apply_parser.add_argument("--sheet-name", default="Implementation")
     apply_parser.add_argument("--initiative-id", type=int)
     _add_common_options(apply_parser)
+
+    released_parser = implementation_subparsers.add_parser(
+        "record-release", help="Record a shipped Story's actual repository artifact version"
+    )
+    released_parser.add_argument("workbook", type=Path)
+    released_parser.add_argument("work_package_id", type=int)
+    released_parser.add_argument("version")
+    released_parser.add_argument("--sheet-name", default="Implementation")
+    released_parser.add_argument("--apply", action="store_true")
+    _add_common_options(released_parser)
 
 
 def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -108,4 +123,17 @@ def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
             ),
             True,
         )
+    if args.implementation_command == "record-release":
+        try:
+            payload = record_released_in(
+                path=args.workbook,
+                sheet_name=args.sheet_name,
+                work_package_id=args.work_package_id,
+                version=args.version,
+                env_file=args.env_file,
+                apply=args.apply,
+            )
+        except (implementation_op.ScriptError, OpenProjectError) as err:
+            raise ImplementationWorkflowError(err.code, str(err)) from err
+        return command, payload, args.apply
     raise AssertionError(f"Unknown implementation command: {args.implementation_command}")

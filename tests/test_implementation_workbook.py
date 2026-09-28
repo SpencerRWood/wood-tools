@@ -8,7 +8,9 @@ import pytest
 from wood_project.implementation import apply as implementation_apply
 from wood_project.implementation import openproject as implementation_openproject
 from wood_project.implementation import planning as implementation_planning
+from wood_project.implementation import released as implementation_released
 from wood_project.implementation import workbook as implementation_workbook
+from wood_project.implementation.packets import parse_description_packet
 
 
 def workbook_row(row_number: int, **values: str) -> implementation_planning.WorkbookRow:
@@ -62,7 +64,7 @@ def test_build_implementation_plan_matches_story_without_openproject_id(
         **{
             "Story ID": "S1",
             "Subject": "Existing story",
-            "Version": "V1",
+            "Version": "R1",
             "Epic": "Existing epic",
             "Type": "Story",
             "Status": "New",
@@ -125,7 +127,7 @@ def test_resolve_initiative_plan_creates_when_no_deterministic_match(
         2,
         **{
             "Project": "Project",
-            "Root Work Package": "V1 Initiative",
+            "Root Work Package": "R1 Initiative",
             "Story ID": "S1",
             "Subject": "New story",
         },
@@ -145,8 +147,8 @@ def test_resolve_initiative_plan_creates_when_no_deterministic_match(
     )
 
     assert initiative["action"] == "create"
-    assert initiative["subject"] == "V1 Initiative"
-    assert initiative["patch"]["subject"] == "V1 Initiative"
+    assert initiative["subject"] == "R1 Initiative"
+    assert initiative["patch"]["subject"] == "R1 Initiative"
     assert initiative["patch"]["_links"]["type"]["href"] == "/api/v3/types/9"
 
 
@@ -157,7 +159,7 @@ def test_resolve_initiative_plan_blocks_conflicting_root_type(
         2,
         **{
             "Project": "Project",
-            "Root Work Package": "V1 Initiative",
+            "Root Work Package": "R1 Initiative",
             "Story ID": "S1",
             "Subject": "New story",
         },
@@ -168,7 +170,7 @@ def test_resolve_initiative_plan_blocks_conflicting_root_type(
         lambda **kwargs: [
             {
                 "id": 22,
-                "subject": "V1 Initiative",
+                "subject": "R1 Initiative",
                 "_links": {"type": {"title": "Epic"}},
             }
         ],
@@ -224,6 +226,131 @@ def test_apply_writeback_records_openproject_ids(tmp_path: Path) -> None:
     assert updated_rows[0].values["OpenProject ID"] == "123"
 
 
+def test_traceability_round_trip_and_planning_guards(tmp_path: Path) -> None:
+    path = tmp_path / "implementation.xlsx"
+    values = workbook_row(
+        2,
+        **{
+            "Project": "Platform",
+            "Version": "R10 — Deployment",
+            "Story ID": "S1",
+            "Subject": "Ship",
+            "Primary Repository": "wood-tools",
+            "Affected Repositories": "codex-config, rag-service",
+            "Predecessors": "S0",
+        },
+    ).values
+    implementation_workbook.write_xlsx(path, [values], {})
+    parsed = implementation_workbook.workbook_rows(path, "Implementation")[0]
+    assert parsed.values == values
+    assert implementation_planning.required_version_names([parsed]) == ["R10 — Deployment"]
+    packet = parse_description_packet(implementation_planning.compose_description(parsed.values))
+    assert packet["primary_repository"] == "wood-tools"
+    assert packet["affected_repositories"] == "codex-config, rag-service"
+    assert packet["released_in"] == ""
+    parsed.values["Released In"] = "1.2.3"
+    with pytest.raises(implementation_openproject.ScriptError, match="must be blank"):
+        implementation_planning.required_version_names([parsed])
+    parsed.values["Released In"] = ""
+    parsed.values["Version"] = "V1"
+    with pytest.raises(implementation_openproject.ScriptError, match="R#"):
+        implementation_planning.required_version_names([parsed])
+
+
+def test_planning_update_preserves_shipped_traceability() -> None:
+    values = workbook_row(2, **{"Subject": "Shipped", "Version": "R1"}).values
+    existing = {
+        "id": 123,
+        "lockVersion": 2,
+        "description": {
+            "raw": (
+                "Codex Implementation Packet\n\nOpenProject\n"
+                "Primary Repository: wood-tools\nAffected Repositories: codex-config\n"
+                "Released In: 1.2.3\n\nGoal\nShipped"
+            )
+        },
+        "_links": {},
+    }
+    patch, _ = implementation_planning.build_patch_payload(
+        values=values,
+        current=existing,
+        statuses=[],
+        types=[],
+        versions=[],
+        parent_ref="/api/v3/work_packages/12",
+    )
+    packet = parse_description_packet(patch["description"]["raw"])
+    assert packet["primary_repository"] == "wood-tools"
+    assert packet["affected_repositories"] == "codex-config"
+    assert packet["released_in"] == "1.2.3"
+
+
+def test_record_released_in_updates_story_and_workbook_idempotently(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "implementation.xlsx"
+    values = workbook_row(
+        2,
+        **{
+            "Project": "Platform",
+            "Version": "R1",
+            "Story ID": "S1",
+            "Subject": "Ship",
+            "OpenProject ID": "123",
+            "Primary Repository": "wood-tools",
+        },
+    ).values
+    implementation_workbook.write_xlsx(path, [values], {})
+    description = implementation_planning.compose_description(values)
+    story = {
+        "id": 123,
+        "lockVersion": 1,
+        "description": {"raw": description},
+        "_links": {"type": {"title": "Story"}, "status": {"title": "Closed"}},
+    }
+    writes = []
+
+    def get_json(path, *, query=None):
+        if path == "/api/v3/statuses":
+            return {"_embedded": {"elements": [{"name": "Closed", "isClosed": True}]}}
+        assert path == "/api/v3/work_packages/123"
+        return story
+
+    def request_json(method, path, *, query=None, body=None):
+        writes.append(body)
+        story["description"] = body["description"]
+        story["lockVersion"] += 1
+        return story
+
+    monkeypatch.setattr(
+        implementation_released.op,
+        "client_from_env",
+        lambda *_args, **_kwargs: FakeOpenProjectClient(
+            get_json=get_json, request_json=request_json
+        ),
+    )
+    monkeypatch.setenv("OPENPROJECT_URL", "https://example.test")
+    monkeypatch.setenv("OPENPROJECT_API_TOKEN", "test-token")
+    args = dict(
+        path=path,
+        sheet_name="Implementation",
+        work_package_id=123,
+        version="1.2.3",
+        env_file=tmp_path / "missing.env",
+    )
+    preview = implementation_released.record_released_in(**args, apply=False)
+    assert preview["changed"] and not writes
+    applied = implementation_released.record_released_in(**args, apply=True)
+    assert applied["workbook_updated"] and applied["openproject_updated"]
+    assert (
+        implementation_workbook.workbook_rows(path, "Implementation")[0].values["Released In"]
+        == "1.2.3"
+    )
+    assert parse_description_packet(story["description"]["raw"])["released_in"] == "1.2.3"
+    repeated = implementation_released.record_released_in(**args, apply=True)
+    assert not repeated["changed"] and len(writes) == 1
+
+
 def test_build_implementation_plan_blocks_stale_openproject_id(
     monkeypatch,
 ) -> None:
@@ -233,7 +360,7 @@ def test_build_implementation_plan_blocks_stale_openproject_id(
             "OpenProject ID": "99",
             "Story ID": "S1",
             "Subject": "Stale story",
-            "Version": "V1",
+            "Version": "R1",
             "Type": "Story",
             "Status": "New",
         },
@@ -301,12 +428,12 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         requested.append((method, path))
         if method == "POST" and path == "/api/v3/versions":
             assert body == {
-                "name": "V1",
+                "name": "R1",
                 "_links": {"definingProject": {"href": "/api/v3/projects/7"}},
             }
             return {
                 "id": 12,
-                "name": "V1",
+                "name": "R1",
                 "_links": {"self": {"href": "/api/v3/versions/12"}},
             }
         if method == "POST" and path == "/api/v3/projects/project/work_packages":
@@ -332,7 +459,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         if path == "/api/v3/work_packages/208":
             return work_package(208, "Root", "Initiative")
         if path == "/api/v3/versions/12":
-            return {"id": 12, "name": "V1"}
+            return {"id": 12, "name": "R1"}
         if path == "/api/v3/work_packages/22":
             return work_package(22, "Epic", "Epic")
         if path == "/api/v3/work_packages/33":
@@ -364,7 +491,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
                 "action": "reuse",
                 "work_package_id": 208,
             },
-            "versions": [{"key": "V1", "name": "V1", "action": "create", "patch": {"name": "V1"}}],
+            "versions": [{"key": "R1", "name": "R1", "action": "create", "patch": {"name": "R1"}}],
             "epics": [
                 {
                     "key": "Epic",
@@ -373,7 +500,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
                         "subject": "Epic",
                         "_links": {
                             "parent": {"href": "planned:initiative"},
-                            "version": {"href": "planned:version:V1"},
+                            "version": {"href": "planned:version:R1"},
                         },
                     },
                 }

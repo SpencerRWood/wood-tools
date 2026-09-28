@@ -224,6 +224,35 @@ def test_implementation_workflow_uses_planner_library_function(
     assert payload["row_count"] == 1
 
 
+def test_record_release_cli_previews_then_applies(monkeypatch, tmp_path, capsys) -> None:
+    calls = []
+
+    def fake_record(**kwargs):
+        calls.append(kwargs)
+        return {
+            "work_package_id": 123,
+            "released_in": "1.2.3",
+            "changed": True,
+            "applied": kwargs["apply"],
+        }
+
+    monkeypatch.setattr(implementation_commands, "record_released_in", fake_record)
+    args = [
+        "implementation",
+        "record-release",
+        str(tmp_path / "plan.xlsx"),
+        "123",
+        "1.2.3",
+        "--json",
+    ]
+    assert project_main(args) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["status"] == "blocked" and calls[-1]["apply"] is False
+    assert project_main([*args, "--apply"]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["status"] == "success" and calls[-1]["apply"] is True
+
+
 @pytest.mark.parametrize("command", ["backlog", "story-backlog"])
 def test_project_implementation_legacy_aliases_are_removed(command: str) -> None:
     with pytest.raises(SystemExit) as exc:

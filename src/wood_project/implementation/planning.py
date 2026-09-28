@@ -5,9 +5,11 @@ import re
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient, embedded_elements
+from wood_project.planning_release import release_number, release_sort_key
 
 from . import openproject as op
 from . import workbook as workbook_module
+from .packets import extract_labeled_value
 
 IMPLEMENTATION_WORKBOOK_COLUMNS = workbook_module.IMPLEMENTATION_WORKBOOK_COLUMNS
 WorkbookRow = workbook_module.WorkbookRow
@@ -49,7 +51,13 @@ def compose_description(values: dict[str, str]) -> str:
     if values["Story ID"].strip():
         openproject_lines.append(f"External story ID: {values['Story ID'].strip()}")
     if values["Version"].strip():
-        openproject_lines.append(f"Release/version: {values['Version'].strip()}")
+        openproject_lines.append(f"Planning release: {values['Version'].strip()}")
+    if values["Primary Repository"].strip():
+        openproject_lines.append(f"Primary Repository: {values['Primary Repository'].strip()}")
+    if values["Affected Repositories"].strip():
+        openproject_lines.append(
+            f"Affected Repositories: {values['Affected Repositories'].strip()}"
+        )
     if values["Branch Name"].strip():
         openproject_lines.append(f"Branch: {values['Branch Name'].strip()}")
     if openproject_lines:
@@ -242,13 +250,11 @@ def split_predecessors(value: str) -> list[str]:
 
 
 def build_epic_description(epic: str, rows: list[WorkbookRow]) -> str:
-    versions = sorted(
-        {row.values["Version"].strip() for row in rows if row.values["Version"].strip()}
-    )
+    versions = required_version_names(rows)
     story_ids = [story_key(row) for row in rows]
     lines = ["Codex Implementation Packet", "", "OpenProject"]
     if versions:
-        lines.append(f"Release/version: {versions[0]}")
+        lines.append(f"Planning release: {versions[0]}")
     lines.extend(["", "Goal", f"Track implementation stories for {epic}."])
     if story_ids:
         lines.extend(["", "Stories", ", ".join(story_ids)])
@@ -265,9 +271,7 @@ def build_epic_create_payload(
     root_work_package_id: int | None,
 ) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
-    version_names = sorted(
-        {row.values["Version"].strip() for row in rows if row.values["Version"].strip()}
-    )
+    version_names = required_version_names(rows)
     if len(version_names) > 1:
         warnings.append(f"Epic spans multiple versions; using {version_names[0]!r}.")
 
@@ -319,7 +323,19 @@ def build_patch_payload(
 
     if values["Subject"]:
         payload["subject"] = values["Subject"]
-    description = compose_description(values)
+    existing_description = work_package_description_text(current)
+    effective_values = dict(values)
+    for column in ("Primary Repository", "Affected Repositories"):
+        if not effective_values[column].strip():
+            effective_values[column] = extract_labeled_value(existing_description, column)
+    description = compose_description(effective_values)
+    released_in = extract_labeled_value(existing_description, "Released In")
+    if released_in:
+        marker = "\nOpenProject\n"
+        if marker in description:
+            description = description.replace(marker, f"{marker}Released In: {released_in}\n", 1)
+        else:
+            description = f"{description}\n\nOpenProject\nReleased In: {released_in}"
     if description:
         payload["description"] = {"raw": description}
     if values["Status"]:
@@ -702,7 +718,20 @@ def version_href(versions: list[dict[str, Any]], name: str) -> str:
 
 
 def required_version_names(rows: list[WorkbookRow]) -> list[str]:
-    return sorted({row.values["Version"].strip() for row in rows if row.values["Version"].strip()})
+    names = {row.values["Version"].strip() for row in rows if row.values["Version"].strip()}
+    for row in rows:
+        name = row.values["Version"].strip()
+        if name and release_number(name) is None:
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                f"Row {row.row_number} Version must be an R# planning release: {name!r}.",
+            )
+        if row.values["Released In"].strip():
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                f"Row {row.row_number} Released In must be blank during planning/import.",
+            )
+    return sorted(names, key=release_sort_key)
 
 
 def existing_versions_by_name(versions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

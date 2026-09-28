@@ -195,6 +195,17 @@ def _summarize_json_payload(
             summary="Implementation workbook plan applied.",
             data=payload,
         )
+    if command == "implementation-record-release":
+        if apply:
+            return success_output(
+                command=command, mutation="mutating", summary="Released In recorded.", data=payload
+            )
+        return blocked_output(
+            command=command,
+            summary="Released In update previewed.",
+            data=payload,
+            next_actions=["Re-run with --apply after the artifact is shipped."],
+        )
     summary = (
         f"Loaded project metadata from {payload['path']}."
         if command == "show"
