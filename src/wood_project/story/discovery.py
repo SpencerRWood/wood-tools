@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient
+from wood_project.planning_release import release_number, release_sort_key
 
 from .models import StoryWorkflowError
 from .openproject import (
@@ -98,16 +99,9 @@ def fetch_predecessor_map(
         if normalized is None:
             continue
         from_id, to_id, relation_type = normalized
-        if relation_type == "precedes":
+        if relation_type in {"precedes", "blocks"}:
             predecessor_map.setdefault(to_id, set()).add(from_id)
     return predecessor_map
-
-
-def version_rank(version_name: str) -> tuple[int, str]:
-    match = re.search(r"\b[MV](\d+)", version_name, flags=re.IGNORECASE)
-    if match:
-        return (int(match.group(1)), version_name.lower())
-    return (9000, version_name.lower())
 
 
 def acceptance_criteria(description: str) -> list[str]:
@@ -189,8 +183,11 @@ def discover_next_story(
     closed_status_names = {str(status.get("name")) for status in statuses if status.get("isClosed")}
     versions_path = f"/api/v3/projects/{client.settings.project_id}/versions"
     versions = embedded_elements(api_get_json(client, versions_path))
-    version_status = {
-        str(version.get("name") or ""): str(version.get("status") or "") for version in versions
+    active_versions = {
+        str(version.get("name") or "")
+        for version in versions
+        if str(version.get("status") or "").casefold() == "open"
+        and release_number(str(version.get("name") or "")) is not None
     }
 
     descendants = fetch_descendants(client, root_id, page_size)
@@ -207,61 +204,32 @@ def discover_next_story(
             [],
         ).append(story)
 
-    for version in sorted(stories_by_version, key=version_rank):
+    by_id = {work_package_id(story): story for story in stories}
+    for version in sorted(active_versions, key=release_sort_key):
         unfinished = [
             story
-            for story in stories_by_version[version]
+            for story in stories_by_version.get(version, [])
             if work_package_status_name(story) not in closed_status_names
         ]
         if not unfinished:
-            if version != "(none)" and version_status.get(version, "").lower() == "open":
-                return {
-                    "ok": True,
-                    "story": None,
-                    "release": {
-                        "root_work_package_id": root_id,
-                        "root_subject": str(root.get("subject") or ""),
-                        "version": version,
-                        "status": version_status.get(version, ""),
-                        "completed_story_count": len(stories_by_version[version]),
-                        "total_story_count": len(stories_by_version[version]),
-                    },
-                    "summary": {
-                        "goal": f"Prepare the release for {version}.",
-                        "acceptance_criteria": [],
-                        "likely_files": [],
-                        "risks": [],
-                    },
-                    "read_only": True,
-                }
             continue
-
-        in_progress = [
+        candidates = [
             story
             for story in unfinished
-            if work_package_status_name(story).casefold() == "in progress"
-        ]
-        if in_progress:
-            story = sorted(in_progress, key=lambda item: work_package_id(item))[0]
-            return build_story_payload(
-                client,
-                story,
-                predecessor_map.get(work_package_id(story), set()),
-                0,
-            )
-
-        candidates = [
-            story for story in unfinished if work_package_status_name(story) == target_status
+            if work_package_status_name(story) == target_status
+            or work_package_status_name(story).casefold() == "in progress"
         ]
         blocked_count = 0
         eligible: list[dict[str, Any]] = []
-        by_id = {work_package_id(story): story for story in stories}
         for story in candidates:
             predecessor_ids = predecessor_map.get(work_package_id(story), set())
             unfinished_predecessors = [
                 predecessor_id
                 for predecessor_id in predecessor_ids
-                if work_package_status_name(by_id.get(predecessor_id, {}))
+                if work_package_status_name(
+                    by_id.get(predecessor_id)
+                    or api_get_json(client, f"/api/v3/work_packages/{predecessor_id}")
+                )
                 not in closed_status_names
             ]
             if unfinished_predecessors:
@@ -269,7 +237,13 @@ def discover_next_story(
             else:
                 eligible.append(story)
         if eligible:
-            story = sorted(eligible, key=lambda item: work_package_id(item))[0]
+            story = min(
+                eligible,
+                key=lambda item: (
+                    work_package_status_name(item).casefold() != "in progress",
+                    work_package_id(item),
+                ),
+            )
             return build_story_payload(
                 client,
                 story,
@@ -280,5 +254,5 @@ def discover_next_story(
 
     raise StoryWorkflowError(
         "NO_STORY_FOUND",
-        f"All matching Stories beneath WP-{root_id} are closed.",
+        f"No eligible Story in an active R# planning release beneath WP-{root_id}.",
     )

@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
+from wood_project.planning_release import release_number
 from wood_project.story.discovery import (
     fetch_descendants,
     fetch_predecessor_map,
-    version_rank,
 )
 from wood_project.story.openproject import (
     api_get_json,
@@ -82,7 +82,7 @@ def story_readiness(
     for story in sorted(
         stories,
         key=lambda item: (
-            version_rank(work_package_version_name(item) or ""),
+            release_number(work_package_version_name(item) or "") or float("inf"),
             work_package_id(item),
         ),
     ):

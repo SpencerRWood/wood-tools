@@ -28,6 +28,13 @@ Deterministic Python CLI tooling for project delivery workflows.
 - `wood_project.story` owns Story discovery, status, and branch behavior and reuses the
   project-owned OpenProject client.
 - `wood_project.implementation` owns Implementation Workbook export, planning, and apply behavior.
+- OpenProject planning Versions use numeric R# order (`R9` before `R10`); repository
+  semantic-release versions remain separate. The 21-column workbook carries
+  Primary Repository, Affected Repositories, and Released In. Planning requires
+  Released In to be blank. After shipment and Story closure, preview and apply
+  `wood-project implementation record-release <workbook> <story-id> <actual-semver>`.
+  See [the migration procedure](OPENPROJECT_PLANNING_RELEASE_MIGRATION.md)
+  before changing legacy live OpenProject Versions.
 - `wood_project.release` owns release readiness, version bump, tag, and GitHub release behavior.
 - `wood_templates` owns the template CLI, template domain API, and all built-in template packs.
 - `resources.cli` owns output envelopes and audit logging shared by every command.
@@ -585,7 +592,7 @@ Examples:
 
 ```bash
 wood-project release check --json
-wood-project release check --root-work-package-id 208 --openproject-version "V0.3 Deterministic Workflow CLI" --json
+wood-project release check --root-work-package-id 208 --openproject-version "R3 — Deterministic Workflow CLI" --json
 wood-project release bump patch --json
 wood-project release bump patch --apply --json
 wood-project release tag --json

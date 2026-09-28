@@ -125,7 +125,7 @@ def test_client_uses_read_only_get_requests_and_summarizes_work_package() -> Non
                     "status": {"title": "In progress"},
                     "project": {"href": "/api/v3/projects/1", "title": "Wood Tools"},
                     "parent": {"href": "/api/v3/work_packages/290", "title": "Foundation"},
-                    "version": {"href": "/api/v3/versions/7", "title": "V0.2"},
+                    "version": {"href": "/api/v3/versions/7", "title": "R2"},
                 },
             }
         )
