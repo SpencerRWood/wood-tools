@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-09-29)
+
+### Features
+
+- Add Infisical diagnostics and unified doctor (WP-397)
+  ([#34](https://github.com/SpencerRWood/wood-tools/pull/34),
+  [`91b3d47`](https://github.com/SpencerRWood/wood-tools/commit/91b3d4758993bd5d8fb134cc2bd4cb35ae82dde6))
+
+
 ## v0.4.0 (2026-09-29)
 
 ### Bug Fixes
