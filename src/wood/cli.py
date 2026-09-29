@@ -13,6 +13,7 @@ from resources.cli.audit import write_audit_event
 from .diagnostics import doctor, secret_command
 from .output import EXIT_CODES, envelope, exit_code, render
 from .project import run_project_command
+from .story import add_story_parser, run_story_command
 
 
 class _ArgumentError(Exception):
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--plan-hash")
     importer.add_argument("--operation-offset", type=int, default=0)
     importer.add_argument("--json", dest="project_json", action="store_true")
+    add_story_parser(commands)
     return parser
 
 
@@ -81,6 +83,14 @@ def _contract() -> dict[str, object]:
                 "project list",
                 "project status",
                 "project import-workbook",
+                "story list",
+                "story get",
+                "story next",
+                "story create",
+                "story set-status",
+                "story start",
+                "story block",
+                "story complete",
             ],
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
@@ -96,7 +106,13 @@ def main(argv: list[str] | None = None) -> int:
         parsed = build_parser().parse_args(args)
         as_json = parsed.json or any(
             getattr(parsed, name, False)
-            for name in ("contract_json", "secret_json", "doctor_json", "project_json")
+            for name in (
+                "contract_json",
+                "secret_json",
+                "doctor_json",
+                "project_json",
+                "story_json",
+            )
         )
         if parsed.command is None:
             if not as_json:
@@ -125,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                 plan_hash=getattr(parsed, "plan_hash", None),
                 operation_offset=getattr(parsed, "operation_offset", 0),
             )
+        elif parsed.command == "story":
+            payload = run_story_command(parsed)
         else:
             payload = _contract()
     except _ArgumentError:

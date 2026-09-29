@@ -52,9 +52,11 @@ def fetch_descendants(
     client: OpenProjectClient,
     root_work_package_id: int,
     page_size: int,
+    project_id: int | None = None,
 ) -> list[dict[str, Any]]:
+    selected_project = project_id or int(client.settings.project_id)
     filters = [
-        {"project": {"operator": "=", "values": [str(client.settings.project_id)]}},
+        {"project": {"operator": "=", "values": [str(selected_project)]}},
         {"ancestor": {"operator": "=", "values": [str(root_work_package_id)]}},
     ]
     return fetch_collection(
@@ -173,15 +175,20 @@ def discover_next_story(
     root_id = root_work_package_id
     root = api_get_json(client, f"/api/v3/work_packages/{root_id}")
     root_project_id = extract_id_from_href(link_href(root, "project"), "projects")
-    if root_project_id is not None and root_project_id != int(client.settings.project_id):
+    selected_project_id = (
+        int(client.settings.project_id) if client.settings.project_id else root_project_id
+    )
+    if selected_project_id is None:
+        raise StoryWorkflowError("OPENPROJECT_LOOKUP_FAILED", "Initiative has no project link.")
+    if root_project_id is not None and root_project_id != selected_project_id:
         raise StoryWorkflowError(
             "OPENPROJECT_LOOKUP_FAILED",
-            f"WP-{root_id} belongs to project {root_project_id}, not {client.settings.project_id}.",
+            f"WP-{root_id} belongs to project {root_project_id}, not {selected_project_id}.",
         )
 
     statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
     closed_status_names = {str(status.get("name")) for status in statuses if status.get("isClosed")}
-    versions_path = f"/api/v3/projects/{client.settings.project_id}/versions"
+    versions_path = f"/api/v3/projects/{selected_project_id}/versions"
     versions = embedded_elements(api_get_json(client, versions_path))
     active_versions = {
         str(version.get("name") or "")
@@ -190,7 +197,11 @@ def discover_next_story(
         and release_number(str(version.get("name") or "")) is not None
     }
 
-    descendants = fetch_descendants(client, root_id, page_size)
+    descendants = (
+        fetch_descendants(client, root_id, page_size)
+        if client.settings.project_id
+        else fetch_descendants(client, root_id, page_size, selected_project_id)
+    )
     stories = [wp for wp in descendants if work_package_type_name(wp) == story_type]
     if not stories:
         raise StoryWorkflowError("NO_STORY_FOUND", f"No {story_type} work packages found.")
@@ -210,6 +221,7 @@ def discover_next_story(
             story
             for story in stories_by_version.get(version, [])
             if work_package_status_name(story) not in closed_status_names
+            and work_package_status_name(story).casefold() != "rejected"
         ]
         if not unfinished:
             continue
@@ -226,11 +238,16 @@ def discover_next_story(
             unfinished_predecessors = [
                 predecessor_id
                 for predecessor_id in predecessor_ids
-                if work_package_status_name(
-                    by_id.get(predecessor_id)
-                    or api_get_json(client, f"/api/v3/work_packages/{predecessor_id}")
+                if (
+                    (
+                        status := work_package_status_name(
+                            by_id.get(predecessor_id)
+                            or api_get_json(client, f"/api/v3/work_packages/{predecessor_id}")
+                        )
+                    )
+                    not in closed_status_names
+                    or status.casefold() == "rejected"
                 )
-                not in closed_status_names
             ]
             if unfinished_predecessors:
                 blocked_count += 1

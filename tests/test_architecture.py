@@ -108,7 +108,6 @@ def test_wood_project_canonical_command_modules_are_authoritative() -> None:
     module_names = tuple(module.__name__.rsplit(".", maxsplit=1)[-1] for module in COMMAND_MODULES)
 
     assert module_names == (
-        "story",
         "openproject",
         "resources",
         "project",
@@ -132,7 +131,7 @@ def test_wood_help_exposes_diagnostics() -> None:
     help_text = build_parser().format_help()
 
     assert "Wood Tools v2 agent CLI" in help_text
-    assert "{contract,secret,doctor,project}" in help_text
+    assert "{contract,secret,doctor,project,story}" in help_text
     assert "release" not in help_text
 
 

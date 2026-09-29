@@ -187,14 +187,20 @@ class OpenProjectClient:
 
     def story_context(self, work_package_id: int) -> dict[str, Any]:
         work_package = self.get_json(f"/api/v3/work_packages/{work_package_id}")
-        relations = self.get_json(
-            "/api/v3/relations",
-            query={
-                "filters": json.dumps(
-                    [{"involved": {"operator": "=", "values": [str(work_package_id)]}}]
-                )
-            },
-        )
+        filters = json.dumps([{"involved": {"operator": "=", "values": [str(work_package_id)]}}])
+        relation_elements: list[dict[str, Any]] = []
+        offset = 1
+        while True:
+            relations = self.get_json(
+                "/api/v3/relations",
+                query={"filters": filters, "pageSize": "100", "offset": str(offset)},
+            )
+            page = embedded_elements(relations)
+            relation_elements.extend(page)
+            total = int(relations.get("total") or len(relation_elements))
+            if len(relation_elements) >= total or not page:
+                break
+            offset += len(page)
         return {
             "work_package": summarize_work_package(work_package),
             "relations": [
@@ -210,6 +216,6 @@ class OpenProjectClient:
                         "title": link_title(relation, "to"),
                     },
                 }
-                for relation in embedded_elements(relations)
+                for relation in relation_elements
             ],
         }
