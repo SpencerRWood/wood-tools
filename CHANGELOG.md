@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.10.0 (2026-09-29)
+
+### Features
+
+- **story**: Resolve initiative from repository context
+  ([#42](https://github.com/SpencerRWood/wood-tools/pull/42),
+  [`1bdbd9d`](https://github.com/SpencerRWood/wood-tools/commit/1bdbd9d614a617685ac201a7ec70d8ea71b7e193))
+
+
 ## v0.9.0 (2026-09-29)
 
 ### Features
