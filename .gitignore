@@ -34,13 +34,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-.env.resolved
 
 # Local/generated project files
 docs/*
 .codex/
 scripts/*
-!scripts/dev
 
 # Local story-loop helper scripts
 scripts/story_loop/next_story.py

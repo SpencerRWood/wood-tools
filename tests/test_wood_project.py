@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import tomllib
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 import pytest
@@ -165,7 +166,7 @@ def test_init_show_validate_success_path_creates_global_wood_home(
     project_file = project_root / "project.json"
     assert project_file.exists()
     assert not (project_root / ".wood").exists()
-    assert (wood_home / "config.toml").read_text(encoding="utf-8") == "version = 1\n"
+    assert not (wood_home / "config.toml").exists()
     for directory in WOOD_HOME_DIRS:
         assert (wood_home / directory).is_dir()
 
@@ -175,7 +176,6 @@ def test_init_show_validate_success_path_creates_global_wood_home(
         "project_id": "proj-123",
         "project_slug": "demo-app",
         "project_root": str(project_root.resolve()),
-        "wood_config_file": str((wood_home / "config.toml").resolve()),
         "wood_home": str(wood_home.resolve()),
     }
 
@@ -246,9 +246,7 @@ def test_init_with_apply_json_reports_success_and_custom_values(
     assert payload["data"]["project"]["project_id"] == "proj-456"
     assert payload["data"]["project"]["project_slug"] == "client-portal"
     assert payload["data"]["project"]["wood_home"] == str(wood_home.resolve())
-    assert payload["data"]["project"]["wood_config_file"] == str(
-        (wood_home / "config.toml").resolve()
-    )
+    assert "wood_config_file" not in payload["data"]["project"]
 
 
 def test_init_reuses_existing_project_document_and_preserves_wood_home_files(
@@ -264,7 +262,6 @@ def test_init_reuses_existing_project_document_and_preserves_wood_home_files(
         == 0
     )
     (wood_home / "tools" / "custom.txt").write_text("keep me\n", encoding="utf-8")
-    (wood_home / "config.toml").write_text("version = 1\ncustom = true\n", encoding="utf-8")
     capsys.readouterr()
 
     assert (
@@ -288,7 +285,7 @@ def test_init_reuses_existing_project_document_and_preserves_wood_home_files(
     assert payload["data"]["changed"] is False
     assert payload["data"]["project"]["project_id"] == "proj-original"
     assert (wood_home / "tools" / "custom.txt").read_text(encoding="utf-8") == "keep me\n"
-    assert (wood_home / "config.toml").read_text(encoding="utf-8") == "version = 1\ncustom = true\n"
+    assert not (wood_home / "config.toml").exists()
 
 
 def test_default_wood_home_uses_home_and_wood_home_env_overrides(
@@ -515,9 +512,7 @@ def test_show_json_reports_generated_slug_and_custom_wood_home(
     assert payload["status"] == "success"
     assert payload["data"]["project"]["project_slug"] == "my-demo-app"
     assert payload["data"]["project"]["wood_home"] == str(wood_home.resolve())
-    assert payload["data"]["project"]["wood_config_file"] == str(
-        (wood_home / "config.toml").resolve()
-    )
+    assert "wood_config_file" not in payload["data"]["project"]
 
 
 def test_link_repo_apply_persists_repository_metadata_and_validate_reports_it(
@@ -1268,7 +1263,7 @@ def test_wood_template_renders_python_cli_in_current_directory(
         "reference_packs": [],
         "schema_version": 1,
         "template": payload["data"]["template"],
-        "wood_tools_version": "0.3.0",
+        "wood_tools_version": package_version("wood-tools"),
     }
     assert not (project_root / ".wood").exists()
     assert str(Path.home() / ".wood") not in json.dumps(lock)
@@ -1681,7 +1676,6 @@ def test_validate_reports_unavailable_wood_home_path(
     document = json.loads(project_file.read_text(encoding="utf-8"))
     missing_mount_root = tmp_path / "mnt" / "nas-share"
     document["wood_home"] = str((missing_mount_root / "wood-home").resolve())
-    document["wood_config_file"] = str((missing_mount_root / "wood-home" / "config.toml").resolve())
     project_file.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
     code = main(["validate", "--json"])

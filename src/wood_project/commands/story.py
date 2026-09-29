@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any
 
 from ..openproject import OpenProjectClient, load_settings
@@ -11,8 +10,6 @@ COMMAND = "story"
 
 
 def _add_connection_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config-path", type=Path, help="Override wood-config path")
-    parser.add_argument("--profile", help="wood-config profile to read")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
 
@@ -53,19 +50,19 @@ def handles(args: argparse.Namespace) -> bool:
     return args.command == COMMAND
 
 
-def _client(config_path: Path | None, profile: str | None) -> OpenProjectClient:
-    return OpenProjectClient(load_settings(config_path=config_path, profile=profile))
+def _client() -> OpenProjectClient:
+    return OpenProjectClient(load_settings())
 
 
 def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
     command = f"story-{args.story_command}"
     if args.story_command == "show":
-        payload = _client(args.config_path, args.profile).story_context(args.work_package_id)
+        payload = _client().story_context(args.work_package_id)
         return command, payload, None
 
     if args.story_command == "next":
         payload = discover_next_story(
-            client=_client(args.config_path, args.profile),
+            client=_client(),
             root_work_package_id=args.root_work_package_id,
             target_status=args.status,
             story_type=args.type,
@@ -77,7 +74,7 @@ def run(args: argparse.Namespace) -> tuple[str, dict[str, Any], bool | None]:
         payload = set_status(
             work_package_id=args.work_package_id,
             target_status=args.target_status,
-            client=_client(args.config_path, args.profile) if args.apply else None,
+            client=_client() if args.apply else None,
             apply=args.apply,
         )
         return command, payload, args.apply

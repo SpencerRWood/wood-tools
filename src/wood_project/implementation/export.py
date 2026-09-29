@@ -27,8 +27,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default=".env.resolved",
-        help="Resolved environment file path. Default: .env.resolved.",
+        default=".env",
+        help="Optional environment file path. Injected variables take precedence.",
     )
     parser.add_argument(
         "--output-dir",

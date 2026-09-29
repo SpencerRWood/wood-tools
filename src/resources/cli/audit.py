@@ -127,41 +127,20 @@ def _infer_target_type(cli_name: str, command: str, data: Any) -> str:
             return "resource"
         if "repository" in data or "project" in data:
             return "project"
-        if (
-            "selected_profile" in data
-            or "active_profile" in data
-            or "profile" in data
-            or "alias_resolution" in data
-        ):
-            return "config"
-        if "provider" in data or "providers" in data or "session" in data or "resolved" in data:
-            return "secret-provider"
+        if "infisical" in data or "presence" in data:
+            return "secret-readiness"
 
-    if cli_name == "wood-config":
-        return "config"
     if cli_name == "wood-project":
         return "resource" if command.startswith("resource-") else "project"
-    if cli_name == "wood-secrets":
-        return "secret-provider"
+    if command.startswith("secret "):
+        return "secret-readiness"
+    if command == "doctor":
+        return "readiness"
 
     if command in {"link-repo"}:
         return "project"
     if command.startswith("resource-"):
         return "resource"
-    if command in {"get", "set", "doctor"}:
-        return "config"
-    if command in {
-        "check",
-        "providers",
-        "status",
-        "unlock",
-        "lock",
-        "session",
-        "list",
-        "resolve",
-        "exec",
-    }:
-        return "secret-provider"
     return "command"
 
 
@@ -195,12 +174,10 @@ def _report_paths(data: Any) -> list[str]:
 
 def _command_summary(cli_name: str, command: str, target_type: str) -> str:
     summaries = {
-        ("wood-config", "init"): "Initialize Wood Tools configuration",
-        ("wood-config", "show"): "Show Wood Tools configuration",
-        ("wood-config", "get"): "Read a Wood Tools configuration value",
-        ("wood-config", "set"): "Update a Wood Tools configuration value",
-        ("wood-config", "validate"): "Validate Wood Tools configuration",
-        ("wood-config", "doctor"): "Run Wood Tools configuration diagnostics",
+        ("wood", "secret status"): "Inspect Infisical readiness",
+        ("wood", "secret check"): "Check injected variable presence",
+        ("wood", "secret requirements"): "List required variable names",
+        ("wood", "doctor"): "Inspect aggregate readiness",
         ("wood-project", "init"): "Initialize project metadata",
         ("wood-project", "show"): "Show project metadata",
         ("wood-project", "validate"): "Validate project metadata",
@@ -211,15 +188,6 @@ def _command_summary(cli_name: str, command: str, target_type: str) -> str:
         ("wood-project", "implementation-export"): "Export implementation workbook",
         ("wood-project", "implementation-plan"): "Build implementation workbook plan",
         ("wood-project", "implementation-apply"): "Apply implementation workbook plan",
-        ("wood-secrets", "check"): "Check secret reference readiness",
-        ("wood-secrets", "providers"): "List secret providers",
-        ("wood-secrets", "status"): "Check secret provider status",
-        ("wood-secrets", "unlock"): "Unlock a secret provider session",
-        ("wood-secrets", "lock"): "Lock a secret provider session",
-        ("wood-secrets", "session"): "Inspect secret runtime session status",
-        ("wood-secrets", "list"): "List secret entries without exposing values",
-        ("wood-secrets", "resolve"): "Resolve a secret reference without exposing the value",
-        ("wood-secrets", "doctor"): "Run secret provider diagnostics",
     }
     return summaries.get((cli_name, command), f"Run {target_type} command")
 

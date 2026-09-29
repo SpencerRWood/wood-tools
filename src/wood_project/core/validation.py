@@ -8,7 +8,6 @@ from .models import LinkedRepository, ProjectError
 from .paths import (
     WOOD_HOME_DIRECTORY_NAMES,
     _check_directory_access,
-    _check_file_access,
     _nearest_existing_parent,
 )
 
@@ -24,19 +23,6 @@ def _validate_existing_directory(field: str, path: Path) -> None:
         raise ProjectError(f"{field} does not exist: {path}")
     if not path.is_dir():
         raise ProjectError(f"{field} must be a directory: {path}")
-
-
-def _validate_existing_file(field: str, path: Path) -> None:
-    if not path.exists():
-        nearest_parent = _nearest_existing_parent(path)
-        if nearest_parent is not None and nearest_parent != path.parent:
-            raise ProjectError(
-                f"{field} is unavailable: {path} (nearest existing parent: {nearest_parent}; "
-                "the expected Wood home may not be available)"
-            )
-        raise ProjectError(f"{field} does not exist: {path}")
-    if not path.is_file():
-        raise ProjectError(f"{field} must be a file: {path}")
 
 
 def _ensure_unique_paths(entries: list[tuple[str, Path]]) -> None:
@@ -124,13 +110,11 @@ def validate_project_state(
 
     project_root = Path(document["project_root"])
     wood_home = Path(document["wood_home"])
-    wood_config_file = Path(document["wood_config_file"])
     wood_home_dirs = tuple(wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES)
     linked_repositories = _load_linked_repositories(document)
 
     _validate_existing_directory("project_root", project_root)
     _validate_existing_directory("wood_home", wood_home)
-    _validate_existing_file("wood_config_file", wood_config_file)
     for directory in wood_home_dirs:
         field = f"wood_home_dirs.{directory.relative_to(wood_home)}"
         _validate_existing_directory(field, directory)
@@ -138,9 +122,6 @@ def validate_project_state(
     mount_checks = {
         "project_root": _check_directory_access("project_root", project_root, require_write=False),
         "wood_home": _check_directory_access("wood_home", wood_home, require_write=False),
-        "wood_config_file": _check_file_access(
-            "wood_config_file", wood_config_file, require_write=False
-        ),
         "wood_home_dirs": {
             str(directory.relative_to(wood_home)): _check_directory_access(
                 f"wood_home_dirs.{directory.relative_to(wood_home)}",
@@ -155,7 +136,6 @@ def validate_project_state(
         [
             ("project_root", project_root),
             ("wood_home", wood_home),
-            ("wood_config_file", wood_config_file),
             *[
                 (f"wood_home_dirs.{directory.relative_to(wood_home)}", directory)
                 for directory in wood_home_dirs
@@ -189,7 +169,6 @@ def validate_project_state(
         [
             ("project_root", project_root),
             ("wood_home", wood_home),
-            ("wood_config_file", wood_config_file),
             *[
                 (f"wood_home_dirs.{directory.relative_to(wood_home)}", directory)
                 for directory in wood_home_dirs
@@ -204,7 +183,6 @@ def validate_project_state(
         "checked_paths": {
             "project_root": str(project_root),
             "wood_home": str(wood_home),
-            "wood_config_file": str(wood_config_file),
             "wood_home_dirs": [str(directory) for directory in wood_home_dirs],
         },
         "mount_checks": mount_checks,

@@ -174,7 +174,7 @@ def test_implementation_workflow_uses_export_library_function(
 
     payload = implementation_workflows.export_workbook(
         root_work_package_id=208,
-        env_file=tmp_path / ".env.resolved",
+        env_file=tmp_path / ".env",
         output_dir=tmp_path,
         story_type="Story",
         epic_type="Epic",
@@ -215,7 +215,7 @@ def test_implementation_workflow_uses_planner_library_function(
 
     payload = implementation_workflows.plan_workbook(
         workbook=tmp_path / "implementation_workbook.xlsx",
-        env_file=tmp_path / ".env.resolved",
+        env_file=tmp_path / ".env",
         sheet_name="Implementation",
         initiative_id=None,
     )

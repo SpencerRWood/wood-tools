@@ -1,6 +1,6 @@
 # Wood Tools
 
-Wood Tools v2 is a single `wood` command for deterministic agent workflows. This branch establishes the CLI and repository foundation for [WP-396](https://projects.woodhost.cloud/work_packages/396). Project, Story, repository, CI, deployment, and secret capabilities are added in later migration Stories.
+Wood Tools v2 is a single `wood` command for deterministic agent workflows. Secret readiness and aggregate diagnostics are part of [WP-397](https://projects.woodhost.cloud/work_packages/397).
 
 ## Install and inspect
 
@@ -12,6 +12,18 @@ uv run --active wood contract --json
 ```
 
 `wood` is the only installed public executable. The v1 commands are intentionally unavailable. Existing domain packages remain internal while their replacement capabilities are built in later Stories.
+
+## Infisical runtime
+
+The checked-in `.infisical.json` selects the local Infisical project and domain. Infisical injects secret values into the child process; Wood Tools only reports readiness and variable presence. Set the public OpenProject context and run the CLI directly under Infisical:
+
+```sh
+OPENPROJECT_URL=https://projects.woodhost.cloud \
+OPENPROJECT_PROJECT_ID=3 OPENPROJECT_INITIATIVE_ID=208 \
+infisical run --env=dev --path=/openproject -- uv run --active wood doctor --json
+```
+
+Use `wood secret status --json` for Infisical CLI, context, authentication, and OpenProject prerequisites; `wood secret requirements --json` for required names; and `wood secret check --json` for injected variable presence. `--name NAME` can be repeated on `check` and `requirements`. These commands do not retrieve or print values. `wood doctor` adds repository, OpenProject connectivity, tool, and Python checks. An unavailable check exits 4 and includes a concise next action.
 
 ## JSON and exits
 
