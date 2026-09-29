@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.9.0 (2026-09-29)
+
+### Features
+
+- **story**: Add verified idempotent activity posting
+  ([#41](https://github.com/SpencerRWood/wood-tools/pull/41),
+  [`910240c`](https://github.com/SpencerRWood/wood-tools/commit/910240c5a84a34a936c0709f551d858d4a4a75a2))
+
+
 ## v0.8.1 (2026-09-29)
 
 ### Bug Fixes
