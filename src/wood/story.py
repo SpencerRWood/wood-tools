@@ -9,6 +9,7 @@ from typing import Any
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
 from wood_project.story import workflow
+from wood_project.story.activity import add_activity, read_comment
 from wood_project.story.models import StoryWorkflowError
 
 from .output import Mutation, Status, envelope
@@ -52,11 +53,18 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
             item.add_argument("--evidence", type=Path, required=True)
         item.add_argument("--apply", action="store_true")
         item.add_argument("--json", dest="story_json", action="store_true")
+    activity = actions.add_parser("activity")
+    activity_actions = activity.add_subparsers(dest="activity_command", required=True)
+    add = activity_actions.add_parser("add")
+    add.add_argument("id", type=int)
+    add.add_argument("--file", type=Path, required=True)
+    add.add_argument("--apply", action="store_true")
+    add.add_argument("--json", dest="story_json", action="store_true")
 
 
 def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
     action = args.story_command
-    command = f"story {action}"
+    command = f"story {action}" + (" add" if action == "activity" else "")
     apply = getattr(args, "apply", False)
     try:
         client = OpenProjectClient(load_settings())
@@ -88,6 +96,8 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
             data = workflow.start_story(client, args.id, apply=apply)
         elif action == "block":
             data = workflow.block_story(client, args.id, args.reason, apply=apply)
+        elif action == "activity":
+            data = add_activity(client, args.id, read_comment(args.file), apply=apply)
         else:
             try:
                 evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
