@@ -53,6 +53,9 @@ def test_validation_runs_in_disposable_checkout(
 ) -> None:
     root = repository(tmp_path / "repo")
     (root / "source.txt").write_text("original")
+    ignored_cache = root / "src/wood_project/commands/__pycache__"
+    ignored_cache.mkdir(parents=True)
+    (ignored_cache / "old.pyc").write_bytes(b"ignored")
     assert operations._copy_ignores(str(root), [".env", ".env.local", ".env.example"]) == {
         ".env",
         ".env.local",
@@ -61,6 +64,7 @@ def test_validation_runs_in_disposable_checkout(
 
     def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["uv", "run"]:
+            assert not Path(str(kwargs["cwd"]), "src/wood_project/commands").exists()
             Path(str(kwargs["cwd"]), "source.txt").write_text("modified")
             return subprocess.CompletedProcess(args, 0, "ok", "")
         return real_run(args, **kwargs)  # type: ignore[arg-type]
