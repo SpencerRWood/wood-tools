@@ -15,8 +15,6 @@ from wood_project.openproject import (
     OpenProjectSettings,
     load_settings,
 )
-from wood_secrets.core import SecretResolver
-from wood_secrets.core.providers import SecretProviderError
 
 
 class FakeResponse:
@@ -33,74 +31,28 @@ class FakeResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
-def test_load_settings_resolves_configured_token_ref_without_leaking_value(
-    tmp_path: pytest.TempPathFactory,
-) -> None:
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "active_profile": "default",
-                "profiles": {
-                    "default": {
-                        "integrations": {
-                            "openproject": {
-                                "url": "https://openproject.example.test",
-                                "project_id": "wood",
-                                "token_ref": "env://OPENPROJECT_TOKEN",
-                                "user_agent": "wood-tools-test/1",
-                            }
-                        }
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+def test_load_settings_uses_injected_environment_without_leaking_value() -> None:
+    settings = load_settings(
+        {
+            "OPENPROJECT_URL": "https://openproject.example.test",
+            "OPENPROJECT_PROJECT_ID": "wood",
+            "OPENPROJECT_API_TOKEN": "super-secret-token",
+        }
     )
-    resolver = SecretResolver(environ={"OPENPROJECT_TOKEN": "super-secret-token"})
-
-    settings = load_settings(config_path=config_path, resolver=resolver)
 
     assert settings.base_url == "https://openproject.example.test"
     assert settings.project_id == "wood"
     assert settings.token == "super-secret-token"
-    assert settings.user_agent == "wood-tools-test/1"
+    assert settings.token_provider == "injected-environment"
     assert "super-secret-token" not in repr(settings)
 
 
-def test_load_settings_reports_provider_failure(tmp_path: pytest.TempPathFactory) -> None:
-    class FailingResolver:
-        def resolve(self, reference: str) -> object:
-            raise SecretProviderError(f"provider failed for {reference}")
-
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "active_profile": "default",
-                "profiles": {
-                    "default": {
-                        "integrations": {
-                            "openproject": {
-                                "url": "https://openproject.example.test",
-                                "project_id": "wood",
-                                "token_ref": "env://OPENPROJECT_TOKEN",
-                            }
-                        }
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
+def test_load_settings_reports_missing_injected_variables() -> None:
     with pytest.raises(OpenProjectError) as excinfo:
-        load_settings(config_path=config_path, resolver=FailingResolver())  # type: ignore[arg-type]
+        load_settings({"OPENPROJECT_URL": "https://openproject.example.test"})
 
-    assert excinfo.value.code == "OPENPROJECT_ACCESS_UNAVAILABLE"
-    assert "provider failed" in excinfo.value.message
+    assert excinfo.value.code == "OPENPROJECT_CONFIG_UNAVAILABLE"
+    assert "OPENPROJECT_API_TOKEN" in excinfo.value.message
 
 
 def test_client_uses_read_only_get_requests_and_summarizes_work_package() -> None:

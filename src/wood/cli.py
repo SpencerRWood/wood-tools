@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 from typing import Never
 
 from resources.cli.audit import write_audit_event
 
+from .diagnostics import doctor, secret_command
 from .output import EXIT_CODES, envelope, exit_code, render
 
 
@@ -30,6 +33,15 @@ def build_parser() -> argparse.ArgumentParser:
     contract.add_argument(
         "--json", dest="contract_json", action="store_true", help="Emit the structured v2 envelope"
     )
+    secret = commands.add_parser("secret", help="Inspect injected secret readiness")
+    secret_commands = secret.add_subparsers(dest="secret_command", required=True)
+    for name in ("status", "check", "requirements"):
+        action = secret_commands.add_parser(name)
+        action.add_argument("--json", dest="secret_json", action="store_true")
+        if name in {"check", "requirements"}:
+            action.add_argument("--name", action="append", default=[])
+    doctor_parser = commands.add_parser("doctor", help="Inspect aggregate readiness")
+    doctor_parser.add_argument("--json", dest="doctor_json", action="store_true")
     return parser
 
 
@@ -40,7 +52,13 @@ def _contract() -> dict[str, object]:
         summary="Wood Tools v2 CLI foundation is ready.",
         data={
             "public_executable": "wood",
-            "capabilities": ["contract"],
+            "capabilities": [
+                "contract",
+                "secret status",
+                "secret check",
+                "secret requirements",
+                "doctor",
+            ],
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
         },
@@ -53,12 +71,23 @@ def main(argv: list[str] | None = None) -> int:
     as_json = "--json" in args
     try:
         parsed = build_parser().parse_args(args)
-        as_json = parsed.json or getattr(parsed, "contract_json", False)
+        as_json = parsed.json or any(
+            getattr(parsed, name, False) for name in ("contract_json", "secret_json", "doctor_json")
+        )
         if parsed.command is None:
             if not as_json:
                 build_parser().print_help()
                 return 0
             payload = _contract()
+        elif parsed.command == "secret":
+            payload = secret_command(
+                parsed.secret_command,
+                root=Path.cwd(),
+                environ=os.environ,
+                names=getattr(parsed, "name", []),
+            )
+        elif parsed.command == "doctor":
+            payload = doctor(Path.cwd(), os.environ)
         else:
             payload = _contract()
     except _ArgumentError:

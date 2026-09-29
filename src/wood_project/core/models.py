@@ -13,7 +13,6 @@ class ProjectPaths:
     project_root: Path
     project_file: Path
     wood_home: Path
-    wood_config_file: Path
     wood_home_dirs: tuple[Path, ...]
 
 

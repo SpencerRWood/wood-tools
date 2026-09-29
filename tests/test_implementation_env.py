@@ -11,17 +11,17 @@ def test_implementation_settings_work_without_env_file(
     monkeypatch.setenv("OPENPROJECT_URL", "https://example.test")
     monkeypatch.setenv("OPENPROJECT_API_TOKEN", "injected-token")
 
-    settings = openproject.parse_env_file(tmp_path / ".env.resolved")
+    settings = openproject.parse_env_file(tmp_path / ".env")
     openproject.require_env(settings, ["OPENPROJECT_URL", "OPENPROJECT_API_TOKEN"])
 
     assert settings == {}
     assert openproject.env_value(settings, "OPENPROJECT_API_TOKEN") == "injected-token"
 
 
-def test_injected_token_takes_precedence_over_resolved_file(
+def test_injected_token_takes_precedence_over_optional_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    env_file = tmp_path / ".env.resolved"
+    env_file = tmp_path / ".env"
     env_file.write_text("OPENPROJECT_API_TOKEN=old-file-token\n", encoding="utf-8")
     monkeypatch.setenv("OPENPROJECT_API_TOKEN", "injected-token")
 

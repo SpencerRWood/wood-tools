@@ -46,7 +46,7 @@ def resolve_export_root_work_package_id(
             ) from err
     raise op.ScriptError(
         "MISSING_ROOT_WORK_PACKAGE_ID",
-        "Pass <root_work_package_id> or set OPENPROJECT_INITIATIVE_ID in .env.resolved.",
+        "Pass <root_work_package_id> or inject OPENPROJECT_INITIATIVE_ID.",
     )
 
 

@@ -13,9 +13,7 @@ PROJECT_ROOT = SRC_ROOT.parent
 ALLOWED_PACKAGE_DEPENDENCIES = {
     "resources": set(),
     "wood": {"resources"},
-    "wood_config": {"resources"},
-    "wood_secrets": {"resources", "wood_config"},
-    "wood_project": {"resources", "wood_config", "wood_secrets"},
+    "wood_project": {"resources"},
     "wood_templates": {"resources"},
 }
 
@@ -131,11 +129,11 @@ def test_legacy_loop_and_backlog_routes_are_absent() -> None:
     assert [path for path in legacy_paths if path.exists()] == []
 
 
-def test_wood_help_exposes_only_foundation_capability() -> None:
+def test_wood_help_exposes_diagnostics() -> None:
     help_text = build_parser().format_help()
 
     assert "Wood Tools v2 agent CLI" in help_text
-    assert "{contract}" in help_text
+    assert "{contract,secret,doctor}" in help_text
     assert "release" not in help_text
 
 

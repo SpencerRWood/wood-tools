@@ -10,7 +10,6 @@ from uuid import uuid4
 from .models import ProjectError
 from .paths import (
     SLUG_PATTERN,
-    WOOD_CONFIG_FILE_NAME,
     WOOD_HOME_DIRECTORY_NAMES,
     _check_mutation_parent,
     _validate_wood_home_location,
@@ -24,7 +23,6 @@ PROJECT_DOCUMENT_FIELDS = {
     "project_slug",
     "project_root",
     "wood_home",
-    "wood_config_file",
     "linked_repositories",
 }
 
@@ -61,7 +59,6 @@ def create_project_document(
         "project_slug": slug,
         "project_root": str(paths.project_root),
         "wood_home": str(paths.wood_home),
-        "wood_config_file": str(paths.wood_config_file),
     }
     validate_project_document(document)
     return document
@@ -88,7 +85,7 @@ def validate_project_document(document: dict[str, Any]) -> None:
     if unexpected_fields:
         raise ProjectError("Unexpected project metadata fields: " + ", ".join(unexpected_fields))
 
-    for field in ("project_root", "wood_home", "wood_config_file"):
+    for field in ("project_root", "wood_home"):
         value = document.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ProjectError(f"{field} must be a non-empty string.")
@@ -97,32 +94,23 @@ def validate_project_document(document: dict[str, Any]) -> None:
 
     project_root = Path(document["project_root"])
     wood_home = Path(document["wood_home"])
-    wood_config_file = Path(document["wood_config_file"])
-
     _validate_wood_home_location(project_root, wood_home)
-    if wood_config_file != wood_home / WOOD_CONFIG_FILE_NAME:
-        raise ProjectError("wood_config_file must be '<wood_home>/config.toml'.")
 
 
 def save_project_document(project_file: Path, document: dict[str, Any]) -> None:
     validate_project_document(document)
     wood_home = Path(document["wood_home"])
-    wood_config_file = Path(document["wood_config_file"])
     wood_home_dirs = tuple(wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES)
 
     _check_mutation_parent("project_root", project_file.parent)
     _check_mutation_parent("wood_home", wood_home)
 
     wood_home.mkdir(parents=True, exist_ok=True)
-    if wood_config_file.exists() and not wood_config_file.is_file():
-        raise ProjectError(f"wood_config_file must be a file: {wood_config_file}")
     for directory in wood_home_dirs:
         if directory.exists() and not directory.is_dir():
             field = f"wood_home_dirs.{directory.relative_to(wood_home)}"
             raise ProjectError(f"{field} must be a directory: {directory}")
         directory.mkdir(parents=True, exist_ok=True)
-    if not wood_config_file.exists():
-        wood_config_file.write_text("version = 1\n", encoding="utf-8")
 
     with NamedTemporaryFile("w", encoding="utf-8", dir=project_file.parent, delete=False) as tmp:
         json.dump(document, tmp, indent=2, sort_keys=True)

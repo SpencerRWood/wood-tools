@@ -18,8 +18,8 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=Path(".env.resolved"),
-        help="Resolved environment file path. Default: .env.resolved.",
+        default=Path(".env"),
+        help="Optional environment file path. Injected variables take precedence.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
 

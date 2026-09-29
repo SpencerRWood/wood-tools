@@ -11,7 +11,7 @@ def test_success_output_contract_is_stable() -> None:
         mutation="read-only",
         summary="Loaded config.",
         data={"profile": "default"},
-        next_actions=["Run wood-config validate --json."],
+        next_actions=["Run wood doctor --json."],
     )
 
     assert payload == {
@@ -23,7 +23,7 @@ def test_success_output_contract_is_stable() -> None:
         "data": {"profile": "default"},
         "warnings": [],
         "errors": [],
-        "next_actions": ["Run wood-config validate --json."],
+        "next_actions": ["Run wood doctor --json."],
     }
     assert json.loads(json.dumps(payload)) == payload
 

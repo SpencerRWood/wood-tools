@@ -10,7 +10,6 @@ from .models import ProjectError, ProjectPaths
 PROJECT_FILE_NAME = "project.json"
 WOOD_HOME_ENV = "WOOD_HOME"
 WOOD_HOME_DIR_NAME = ".wood"
-WOOD_CONFIG_FILE_NAME = "config.toml"
 WOOD_HOME_DIRECTORY_NAMES = (
     "packs/templates",
     "packs/references",
@@ -64,7 +63,6 @@ def build_paths(
         project_root=resolved_root,
         project_file=project_file,
         wood_home=resolved_wood_home,
-        wood_config_file=resolved_wood_home / WOOD_CONFIG_FILE_NAME,
         wood_home_dirs=tuple(resolved_wood_home / name for name in WOOD_HOME_DIRECTORY_NAMES),
     )
 
