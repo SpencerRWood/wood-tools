@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.7.0 (2026-09-29)
+
+### Features
+
+- Implement complete Story workflow harness (WP-399)
+  ([`2a5b194`](https://github.com/SpencerRWood/wood-tools/commit/2a5b1945424cb23c327e0aa8c0ead2f1dbc6e102))
+
+
 ## v0.6.0 (2026-09-29)
 
 ### Features
