@@ -11,7 +11,7 @@ uv sync --active
 uv run --active wood contract --json
 ```
 
-`wood` is the only installed public executable. The v1 commands are intentionally unavailable. Existing domain packages remain internal while their replacement capabilities are built in later Stories.
+`wood` is the only installed public executable. The v1 project, resource, and template command routers and their unused packages have been removed. The OpenProject transport and workbook logic used by the v2 commands remain internal.
 
 ## Repository and operations inspection
 

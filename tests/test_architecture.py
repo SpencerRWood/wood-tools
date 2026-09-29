@@ -5,7 +5,6 @@ import tomllib
 from pathlib import Path
 
 from wood.cli import build_parser
-from wood_project.commands import COMMAND_MODULES
 
 SRC_ROOT = Path(__file__).parents[1] / "src"
 PROJECT_ROOT = SRC_ROOT.parent
@@ -14,7 +13,6 @@ ALLOWED_PACKAGE_DEPENDENCIES = {
     "resources": set(),
     "wood": {"resources", "wood_project"},
     "wood_project": {"resources"},
-    "wood_templates": {"resources"},
 }
 
 
@@ -43,7 +41,15 @@ def test_legacy_implementation_modules_are_absent() -> None:
     assert not (SRC_ROOT / "woodlib").exists()
     assert (SRC_ROOT / "wood" / "cli.py").is_file()
     assert (SRC_ROOT / "resources" / "cli" / "__init__.py").is_file()
-    assert (SRC_ROOT / "resources" / "packages" / "__init__.py").is_file()
+    for old_path in (
+        SRC_ROOT / "wood_project" / "cli.py",
+        SRC_ROOT / "wood_project" / "commands",
+        SRC_ROOT / "wood_project" / "core",
+        SRC_ROOT / "wood_templates",
+        SRC_ROOT / "resources" / "packages",
+        SRC_ROOT / "resources" / "cli" / "output.py",
+    ):
+        assert not old_path.exists()
 
 
 def test_shared_namespace_initializer_has_no_eager_imports() -> None:
@@ -71,16 +77,6 @@ def test_packages_do_not_import_legacy_shared_namespaces() -> None:
     assert violations == []
 
 
-def test_templates_do_not_depend_on_wood_project() -> None:
-    violations = [
-        f"{path.relative_to(SRC_ROOT)}: {module}"
-        for path in _python_files("wood_templates")
-        for module in _imports(path)
-        if module == "wood_project" or module.startswith("wood_project.")
-    ]
-    assert violations == []
-
-
 def test_package_dependencies_follow_the_architecture() -> None:
     violations: list[str] = []
     for owner, allowed_dependencies in ALLOWED_PACKAGE_DEPENDENCIES.items():
@@ -94,29 +90,8 @@ def test_package_dependencies_follow_the_architecture() -> None:
     assert violations == []
 
 
-def test_core_modules_do_not_import_cli_layers() -> None:
-    violations = [
-        f"{path.relative_to(SRC_ROOT)}: {module}"
-        for path in SRC_ROOT.glob("wood_*/core/**/*.py")
-        for module in _imports(path)
-        if ".cli." in module or module.endswith(".cli")
-    ]
-    assert violations == []
-
-
-def test_wood_project_canonical_command_modules_are_authoritative() -> None:
-    module_names = tuple(module.__name__.rsplit(".", maxsplit=1)[-1] for module in COMMAND_MODULES)
-
-    assert module_names == (
-        "openproject",
-        "resources",
-        "project",
-    )
-
-
 def test_legacy_loop_and_backlog_routes_are_absent() -> None:
     legacy_paths = [
-        SRC_ROOT / "wood_project" / "commands" / "story_backlog.py",
         SRC_ROOT / "wood_project" / "story_backlog",
         SRC_ROOT / "wood_project" / "backlog",
         SRC_ROOT / "wood_project" / "story_loop",
@@ -139,4 +114,4 @@ def test_single_public_entrypoint_and_no_manual_release_package() -> None:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert project["project"]["scripts"] == {"wood": "wood.cli:main"}
     assert not list((SRC_ROOT / "wood_project" / "release").glob("*.py"))
-    assert not (SRC_ROOT / "wood_project" / "commands" / "release.py").exists()
+    assert not (SRC_ROOT / "wood_project" / "commands").exists()
