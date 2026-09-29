@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-09-29)
+
+### Features
+
+- Add project discovery and workbook import (WP-398)
+  ([#35](https://github.com/SpencerRWood/wood-tools/pull/35),
+  [`20abc61`](https://github.com/SpencerRWood/wood-tools/commit/20abc61850594650ddaae754770740387369f958))
+
+
 ## v0.5.0 (2026-09-29)
 
 ### Features
