@@ -127,10 +127,12 @@ def list_stories(
     status: str | None = None,
     version: str | None = None,
     offset: int = 0,
+    configured_project_id: int | None = None,
 ) -> dict[str, Any]:
     if offset < 0:
         raise StoryWorkflowError("INVALID_OFFSET", "Offset must be nonnegative.")
     root_id, project_id = _root(client, ref)
+    _check_configured_project(project_id, configured_project_id)
     if root_id:
         stories = discovery.fetch_descendants(client, root_id, PAGE_SIZE, project_id)
     else:
@@ -189,8 +191,18 @@ def get_story(client: OpenProjectClient, story_id: int, *, offset: int = 0) -> d
     return context
 
 
-def next_story(client: OpenProjectClient, ref: str) -> dict[str, Any]:
+def _check_configured_project(project_id: int | None, configured_project_id: int | None) -> None:
+    if configured_project_id is not None and project_id != configured_project_id:
+        raise StoryWorkflowError(
+            "PROJECT_MISMATCH", "Configured project_id does not match the selected Initiative."
+        )
+
+
+def next_story(
+    client: OpenProjectClient, ref: str, *, configured_project_id: int | None = None
+) -> dict[str, Any]:
     root_id, project_id = _root(client, ref)
+    _check_configured_project(project_id, configured_project_id)
     if not root_id:
         assert project_id is not None
         filters = [{"project": {"operator": "=", "values": [str(project_id)]}}]
