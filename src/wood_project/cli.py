@@ -12,7 +12,6 @@ from resources.packages import ResourceError
 
 from .commands import COMMAND_MODULES
 from .core.models import ProjectError
-from .implementation import ImplementationWorkflowError
 from .openproject.models import OpenProjectError
 from .story import StoryWorkflowError
 
@@ -24,8 +23,6 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
     if args.command == "story":
         return f"story-{getattr(args, 'story_command', 'unknown')}"
-    if args.command == "implementation":
-        return f"implementation-{getattr(args, 'implementation_command', 'unknown')}"
     return args.command
 
 
@@ -144,38 +141,6 @@ def _summarize_json_payload(
                 f"Re-run wood-project story {command.removeprefix('story-')} with --apply."
             ],
         )
-    if command == "implementation-export":
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary="Implementation workbook exported.",
-            data=payload,
-        )
-    if command == "implementation-plan":
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary="Implementation workbook plan built.",
-            data=payload,
-        )
-    if command == "implementation-apply":
-        return success_output(
-            command=command,
-            mutation="mutating",
-            summary="Implementation workbook plan applied.",
-            data=payload,
-        )
-    if command == "implementation-record-release":
-        if apply:
-            return success_output(
-                command=command, mutation="mutating", summary="Released In recorded.", data=payload
-            )
-        return blocked_output(
-            command=command,
-            summary="Released In update previewed.",
-            data=payload,
-            next_actions=["Re-run with --apply after the artifact is shipped."],
-        )
     summary = (
         f"Loaded project metadata from {payload['path']}."
         if command == "show"
@@ -229,7 +194,6 @@ def main(argv: list[str] | None = None) -> int:
         ResourceError,
         OpenProjectError,
         StoryWorkflowError,
-        ImplementationWorkflowError,
     ) as exc:
         command = _command_name(args)
         message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
@@ -245,7 +209,6 @@ def main(argv: list[str] | None = None) -> int:
                         "resource-install",
                         "story-set-status",
                         "story-create-branch",
-                        "implementation-apply",
                     }
                     else "read-only"
                 ),
@@ -254,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                     [{"code": exc.code, "message": message}]
                     if isinstance(
                         exc,
-                        OpenProjectError | StoryWorkflowError | ImplementationWorkflowError,
+                        OpenProjectError | StoryWorkflowError,
                     )
                     else [{"message": message}]
                 ),

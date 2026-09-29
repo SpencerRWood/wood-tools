@@ -15,10 +15,6 @@ from .planning import WorkbookRow, link_href, story_key
 read_xlsx_rows = workbook_module.read_xlsx_rows
 
 
-def project_identifier(project: dict[str, Any]) -> str:
-    return str(project.get("identifier") or project.get("id") or "")
-
-
 def project_href(project: dict[str, Any]) -> str:
     project_id = project.get("id")
     if not isinstance(project_id, int):
@@ -57,6 +53,22 @@ def relation_link_id(relation: dict[str, Any], name: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def verify_work_package(actual: dict[str, Any], expected: dict[str, Any], label: str) -> None:
+    for name in ("subject", "description"):
+        wanted = (
+            expected[name].get("raw")
+            if name == "description" and name in expected
+            else expected.get(name)
+        )
+        got = (actual.get(name) or {}).get("raw") if name == "description" else actual.get(name)
+        if name in expected and got != wanted:
+            raise op.ScriptError("WORKBOOK_UPLOAD_FAILED", f"{label} verification failed: {name}.")
+    for name, link in (expected.get("_links") or {}).items():
+        href = (link or {}).get("href")
+        if isinstance(href, str) and link_href(actual, name) != href:
+            raise op.ScriptError("WORKBOOK_UPLOAD_FAILED", f"{label} verification failed: {name}.")
+
+
 def apply_plan(
     client: OpenProjectClient,
     project: dict[str, Any],
@@ -73,7 +85,7 @@ def apply_plan(
     version_hrefs: dict[str, str] = {}
     epic_ids: dict[str, int] = {}
     story_ids: dict[str, int] = {}
-    work_package_project_id = project_identifier(project)
+    work_package_project_id = int(project["id"])
     defining_project_href = project_href(project)
 
     initiative = phases["initiative"]
@@ -98,6 +110,7 @@ def apply_plan(
         )
         initiative_id = op.work_package_id(updated)
         verified = client.get_json(f"/api/v3/work_packages/{initiative_id}")
+        verify_work_package(verified, initiative["patch"], "Initiative")
         applied["initiative"].append(
             {
                 "action": "create",
@@ -132,6 +145,8 @@ def apply_plan(
                 f"Created Version {item['name']!r} did not include a self href.",
             )
         verified = client.get_json(href)
+        if verified.get("name") != item["name"]:
+            raise op.ScriptError("WORKBOOK_UPLOAD_FAILED", "Version verification failed: name.")
         version_hrefs[item["key"]] = href
         applied["versions"].append(
             {
@@ -157,6 +172,7 @@ def apply_plan(
         )
         epic_id = op.work_package_id(updated)
         verified = client.get_json(f"/api/v3/work_packages/{epic_id}")
+        verify_work_package(verified, patch, "Epic")
         epic_ids[item["key"]] = epic_id
         applied["epics"].append(
             {
@@ -171,6 +187,21 @@ def apply_plan(
 
     for item in phases["stories"]:
         patch = resolved_patch(item["patch"], initiative_id, epic_ids, version_hrefs)
+        if item["action"] == "reuse":
+            story_id = int(item["work_package_id"])
+            verified = client.get_json(f"/api/v3/work_packages/{story_id}")
+            verify_work_package(verified, patch, "Story")
+            story_ids[item["key"]] = story_id
+            applied["stories"].append(
+                {
+                    "action": "reuse",
+                    "key": item["key"],
+                    "work_package_id": story_id,
+                    "subject": op.work_package_subject(verified),
+                    "verified": True,
+                }
+            )
+            continue
         if item["action"] == "create":
             updated = client.request_json(
                 "POST",
@@ -186,6 +217,7 @@ def apply_plan(
             )
         story_id = op.work_package_id(updated)
         verified = client.get_json(f"/api/v3/work_packages/{story_id}")
+        verify_work_package(verified, patch, "Story")
         story_ids[item["key"]] = story_id
         applied["stories"].append(
             {
@@ -218,6 +250,12 @@ def apply_plan(
             if isinstance(relation_id, int)
             else created
         )
+        if (
+            relation_link_id(verified, "from"),
+            relation_link_id(verified, "to"),
+            verified.get("type"),
+        ) != (from_id, to_id, item["relation_type"]):
+            raise op.ScriptError("WORKBOOK_UPLOAD_FAILED", "Relation verification failed.")
         applied["relations"].append(
             {
                 "action": "create",

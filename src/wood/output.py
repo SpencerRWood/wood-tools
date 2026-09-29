@@ -22,7 +22,7 @@ EXIT_CODES: dict[Status, int] = {
 }
 MAX_ITEMS = 50
 MAX_TEXT = 500
-MAX_DEPTH = 5
+MAX_DEPTH = 6
 
 
 def _bounded(value: object, depth: int = 0) -> object:

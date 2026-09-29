@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from wood_project.openproject import OpenProjectClient, embedded_elements
+from wood_project.openproject import OpenProjectClient, embedded_elements, extract_id_from_href
 from wood_project.planning_release import release_number, release_sort_key
 
 from . import openproject as op
@@ -46,8 +46,6 @@ def optional_int(value: str, *, field_name: str, row_number: int) -> int | None:
 def compose_description(values: dict[str, str]) -> str:
     lines = ["Codex Implementation Packet"]
     openproject_lines = []
-    if values["OpenProject ID"].strip():
-        openproject_lines.append(f"Work package ID: {values['OpenProject ID'].strip()}")
     if values["Story ID"].strip():
         openproject_lines.append(f"External story ID: {values['Story ID'].strip()}")
     if values["Version"].strip():
@@ -115,7 +113,7 @@ def fetch_collection(
         total = int(document.get("total") or len(elements))
         if len(elements) >= total or not page:
             break
-        offset += len(page)
+        offset += 1
     return elements
 
 
@@ -375,6 +373,19 @@ def build_patch_payload(
     return payload, warnings
 
 
+def patch_has_changes(patch: dict[str, Any], current: dict[str, Any]) -> bool:
+    for field in ("subject", "description"):
+        if field == "description":
+            if patch.get(field, {}).get("raw") != (current.get(field) or {}).get("raw"):
+                return True
+        elif field in patch and patch[field] != current.get(field):
+            return True
+    for name, link in (patch.get("_links") or {}).items():
+        if link.get("href") != ((current.get("_links") or {}).get(name) or {}).get("href"):
+            return True
+    return False
+
+
 def element_self_href(element: dict[str, Any]) -> str:
     return str(((element.get("_links") or {}).get("self") or {}).get("href") or "")
 
@@ -416,6 +427,7 @@ def resolve_project(
     if configured_project_id:
         project = fetch_project(client, configured_project_id)
         if workbook_project and workbook_project not in {
+            str(project.get("id") or ""),
             project_identifier(project),
             project_name(project),
         }:
@@ -437,7 +449,12 @@ def resolve_project(
     matches = [
         project
         for project in fetch_projects(client)
-        if workbook_project in {project_identifier(project), project_name(project)}
+        if workbook_project
+        in {
+            str(project.get("id") or ""),
+            project_identifier(project),
+            project_name(project),
+        }
     ]
     if len(matches) == 1:
         return matches[0]
@@ -561,11 +578,22 @@ def resolve_initiative_plan(
             "Workbook must identify a Root Work Package in Sync Metadata or workbook rows.",
         )
 
-    root_id = explicit_initiative_id or workbook_initiative_id(metadata) or configured_initiative_id
+    metadata_root_id = workbook_initiative_id(metadata)
+    if (
+        explicit_initiative_id is not None
+        and metadata_root_id is not None
+        and explicit_initiative_id != metadata_root_id
+    ):
+        raise op.ScriptError(
+            "WORKBOOK_SCHEMA_MISMATCH",
+            "Selected Initiative conflicts with workbook Sync Metadata root ID.",
+        )
+    root_id = explicit_initiative_id or metadata_root_id or configured_initiative_id
     if root_id is not None:
         existing = client.get_json(f"/api/v3/work_packages/{root_id}")
         existing_subject = op.work_package_subject(existing)
-        existing_project = link_title(existing, "project")
+        existing_project_id = extract_id_from_href(link_href(existing, "project"), "projects")
+        expected_type = metadata.get("Root Work Package Type", "").strip() or "Initiative"
         if workbook_subject and existing_subject != workbook_subject:
             raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
@@ -574,14 +602,18 @@ def resolve_initiative_plan(
                     f"workbook={workbook_subject!r}, openproject={existing_subject!r}."
                 ),
             )
-        expected_project_names = {project_name(project), project_identifier(project)}
-        if existing_project and existing_project not in expected_project_names:
+        if existing_project_id != int(project["id"]):
             raise op.ScriptError(
                 "WORKBOOK_SCHEMA_MISMATCH",
                 (
                     "Resolved Root Work Package belongs to a different project: "
-                    f"{existing_project!r}."
+                    f"project {existing_project_id}."
                 ),
+            )
+        if op.work_package_type_name(existing) != expected_type:
+            raise op.ScriptError(
+                "WORKBOOK_SCHEMA_MISMATCH",
+                f"Resolved Root Work Package must have type {expected_type!r}.",
             )
         return {
             "key": workbook_subject,
@@ -927,6 +959,8 @@ def build_implementation_plan(
                 parent_ref=parent_ref,
             )
             warnings = [*match_warnings, *warnings]
+            if not patch_has_changes(patch, existing_story):
+                action = "reuse"
         stories.append(
             {
                 "key": key,

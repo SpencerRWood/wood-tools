@@ -408,6 +408,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         subject: str,
         type_name: str,
         status_name: str = "New",
+        links: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "id": work_package_id,
@@ -415,6 +416,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
             "_links": {
                 "type": {"title": type_name},
                 "status": {"title": status_name},
+                **(links or {}),
             },
         }
 
@@ -436,7 +438,7 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
                 "name": "R1",
                 "_links": {"self": {"href": "/api/v3/versions/12"}},
             }
-        if method == "POST" and path == "/api/v3/projects/project/work_packages":
+        if method == "POST" and path == "/api/v3/projects/7/work_packages":
             subject = str((body or {}).get("subject") or "")
             if subject == "Epic":
                 return work_package(22, subject, "Epic")
@@ -461,9 +463,24 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         if path == "/api/v3/versions/12":
             return {"id": 12, "name": "R1"}
         if path == "/api/v3/work_packages/22":
-            return work_package(22, "Epic", "Epic")
+            return work_package(
+                22,
+                "Epic",
+                "Epic",
+                links={
+                    "parent": {"href": "/api/v3/work_packages/208"},
+                    "version": {"href": "/api/v3/versions/12"},
+                },
+            )
         if path == "/api/v3/work_packages/33":
-            return work_package(33, "Created story", "Story")
+            return work_package(
+                33,
+                "Created story",
+                "Story",
+                links={
+                    "parent": {"href": "/api/v3/work_packages/22"},
+                },
+            )
         if path == "/api/v3/work_packages/34":
             return work_package(34, "Updated story", "Story", "In progress")
         if path == "/api/v3/relations/44":
@@ -612,3 +629,57 @@ def test_apply_plan_stops_dependent_actions_after_story_failure(monkeypatch) -> 
 
     assert ("PATCH", "/api/v3/work_packages/33") in requested
     assert ("POST", "/api/v3/work_packages/33/relations") not in requested
+
+
+def test_repeated_story_import_reuses_matching_work_package_without_write() -> None:
+    current = {
+        "id": 33,
+        "subject": "Story",
+        "description": {"raw": "Goal\nDone"},
+        "_links": {"parent": {"href": "/api/v3/work_packages/208"}},
+    }
+    patch = {
+        "lockVersion": 4,
+        "subject": "Story",
+        "description": {"raw": "Goal\nDone"},
+        "_links": {"parent": {"href": "/api/v3/work_packages/208"}},
+    }
+    assert not implementation_planning.patch_has_changes(patch, current)
+
+    def get_json(path: str, *, query=None):
+        if path == "/api/v3/work_packages/208":
+            return {"id": 208, "subject": "Root", "_links": {"type": {"title": "Initiative"}}}
+        if path == "/api/v3/work_packages/33":
+            return current
+        raise AssertionError(path)
+
+    def request_json(method: str, path: str, *, body=None, query=None):
+        raise AssertionError(f"Unexpected mutation: {method} {path}")
+
+    applied = implementation_apply.apply_plan(
+        FakeOpenProjectClient(get_json=get_json, request_json=request_json),
+        {"id": 7, "name": "Project"},
+        {
+            "initiative": {"key": "Root", "action": "reuse", "work_package_id": 208},
+            "versions": [],
+            "epics": [],
+            "stories": [{"key": "S1", "action": "reuse", "work_package_id": 33, "patch": patch}],
+            "relations": [],
+        },
+    )
+    assert applied["stories"][0]["action"] == "reuse"
+
+
+def test_import_rejects_conflicting_initiative_selector_and_workbook_metadata() -> None:
+    row = workbook_row(2, **{"Root Work Package": "Tools"})
+    with pytest.raises(implementation_openproject.ScriptError, match="conflicts"):
+        implementation_planning.resolve_initiative_plan(
+            client=FakeOpenProjectClient(),
+            project={"id": 3, "name": "Wood"},
+            statuses=[],
+            types=[],
+            rows=[row],
+            metadata={"Verified Root Work Package ID": "999"},
+            explicit_initiative_id=208,
+            configured_initiative_id=None,
+        )
