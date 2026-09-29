@@ -13,6 +13,12 @@ uv run --active wood contract --json
 
 `wood` is the only installed public executable. The v1 commands are intentionally unavailable. Existing domain packages remain internal while their replacement capabilities are built in later Stories.
 
+## Repository and operations inspection
+
+`wood repo info --json` reads `.github/release.toml` and workflow files to identify repository type, validation checks, release configuration, and deployment applicability. `wood repo standards --json` reports required, optional, and not-applicable conventions. `wood repo validate --json` runs the declared Python and Node checks in a disposable checkout, keeping full logs at the returned paths so hooks and builds do not edit the working tree. It uses the repository's existing virtual environment for Python checks; missing tools are reported as unavailable or unsupported.
+
+`wood ci status --json` reports the latest centralized validation run and marks it stale when its commit differs from the local checkout. `wood ci failures --json` returns failed job and step names with GitHub links. `wood deploy status --json` reads GitHub deployment and latest release evidence, or returns `not_applicable` for a repository without a deployment workflow. Use `--environment <name>` when several environments exist. GitHub inspection requires `gh` authentication and repository access.
+
 ## Infisical runtime
 
 The checked-in `.infisical.json` selects the local Infisical project and domain. Infisical injects secret values into the child process; Wood Tools only reports readiness and variable presence. Set the public OpenProject context and run the CLI directly under Infisical:
@@ -52,6 +58,8 @@ Every informational command supports `--json`. The version 2 envelope has `schem
 | `blocked` | 3 | A required approval or condition is pending |
 | `unavailable` | 4 | A required dependency is unavailable |
 | `ambiguous` | 5 | A selector matches more than one target |
+| `stale` | 6 | Evidence refers to an older release or commit |
+| `unsupported` | 7 | The release contract or check is not supported |
 
 ## Development and release
 

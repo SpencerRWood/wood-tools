@@ -11,6 +11,7 @@ from typing import Never
 from resources.cli.audit import write_audit_event
 
 from .diagnostics import doctor, secret_command
+from .operations_cli import add_operations_parsers, run_operations_command
 from .output import EXIT_CODES, envelope, exit_code, render
 from .project import run_project_command
 from .story import add_story_parser, run_story_command
@@ -64,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--operation-offset", type=int, default=0)
     importer.add_argument("--json", dest="project_json", action="store_true")
     add_story_parser(commands)
+    add_operations_parsers(commands)
     return parser
 
 
@@ -91,6 +93,12 @@ def _contract() -> dict[str, object]:
                 "story start",
                 "story block",
                 "story complete",
+                "repo info",
+                "repo validate",
+                "repo standards",
+                "ci status",
+                "ci failures",
+                "deploy status",
             ],
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
@@ -112,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 "doctor_json",
                 "project_json",
                 "story_json",
+                "operations_json",
             )
         )
         if parsed.command is None:
@@ -143,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif parsed.command == "story":
             payload = run_story_command(parsed)
+        elif parsed.command in {"repo", "ci", "deploy"}:
+            payload = run_operations_command(parsed, Path.cwd())
         else:
             payload = _contract()
     except _ArgumentError:

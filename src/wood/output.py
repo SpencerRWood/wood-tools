@@ -7,7 +7,15 @@ from collections.abc import Mapping, Sequence
 from typing import Literal, cast
 
 type Status = Literal[
-    "success", "blocked", "invalid", "unavailable", "ambiguous", "not_applicable", "error"
+    "success",
+    "blocked",
+    "invalid",
+    "unavailable",
+    "ambiguous",
+    "not_applicable",
+    "error",
+    "stale",
+    "unsupported",
 ]
 type Mutation = Literal["read-only", "preview", "mutating"]
 
@@ -19,6 +27,8 @@ EXIT_CODES: dict[Status, int] = {
     "blocked": 3,
     "unavailable": 4,
     "ambiguous": 5,
+    "stale": 6,
+    "unsupported": 7,
 }
 MAX_ITEMS = 50
 MAX_TEXT = 500
