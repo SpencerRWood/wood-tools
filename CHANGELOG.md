@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.8.1 (2026-09-29)
+
+### Bug Fixes
+
+- Prune ignored-only directories during validation (WP-402)
+  ([`65a5cb5`](https://github.com/SpencerRWood/wood-tools/commit/65a5cb5ba7007c91f7837da78feff4bc8db832ac))
+
+### Chores
+
+- Sync uv lock with released version
+  ([`5121dcc`](https://github.com/SpencerRWood/wood-tools/commit/5121dcc42b48b9453aea6657adc065689002cb49))
+
+### Refactoring
+
+- Remove superseded v1 mechanics (WP-401)
+  ([#39](https://github.com/SpencerRWood/wood-tools/pull/39),
+  [`97bf930`](https://github.com/SpencerRWood/wood-tools/commit/97bf930b85e5d3ae4c78e8e5b5ddd3de6bf67eeb))
+
+
 ## v0.8.0 (2026-09-29)
 
 ### Features
