@@ -287,7 +287,7 @@ class VaultwardenSecretProvider(SecretProvider):
     def _data_file_has_login_state(self, path: Path) -> bool:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return False
         if not isinstance(payload, dict):
             return False

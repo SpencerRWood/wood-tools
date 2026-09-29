@@ -85,7 +85,7 @@ def check_output_not_staged(output_path: Path) -> None:
             capture_output=True,
             text=True,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except FileNotFoundError, subprocess.CalledProcessError:
         return
 
     staged = {line.strip() for line in proc.stdout.splitlines() if line.strip()}

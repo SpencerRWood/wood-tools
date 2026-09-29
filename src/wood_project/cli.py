@@ -14,7 +14,6 @@ from .commands import COMMAND_MODULES
 from .core.models import ProjectError
 from .implementation import ImplementationWorkflowError
 from .openproject.models import OpenProjectError
-from .release import ReleaseWorkflowError
 from .story import StoryWorkflowError
 
 
@@ -25,8 +24,6 @@ def _command_name(args: argparse.Namespace) -> str:
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
     if args.command == "story":
         return f"story-{getattr(args, 'story_command', 'unknown')}"
-    if args.command == "release":
-        return f"release-{getattr(args, 'release_command', 'unknown')}"
     if args.command == "implementation":
         return f"implementation-{getattr(args, 'implementation_command', 'unknown')}"
     return args.command
@@ -147,33 +144,6 @@ def _summarize_json_payload(
                 f"Re-run wood-project story {command.removeprefix('story-')} with --apply."
             ],
         )
-    if command == "release-check":
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary=(
-                "Release readiness check passed."
-                if payload.get("ready")
-                else "Release readiness check found blockers."
-            ),
-            data=payload,
-        )
-    if command in {"release-bump", "release-tag", "release-github-create"}:
-        if apply:
-            return success_output(
-                command=command,
-                mutation="mutating",
-                summary=f"{command.removeprefix('release-')} completed.",
-                data=payload,
-            )
-        return blocked_output(
-            command=command,
-            summary=f"{command.removeprefix('release-')} requires approval.",
-            data=payload,
-            next_actions=[
-                f"Re-run wood-project release {command.removeprefix('release-')} with --apply."
-            ],
-        )
     if command == "implementation-export":
         return success_output(
             command=command,
@@ -222,9 +192,7 @@ def _summarize_json_payload(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wood-project",
-        description=(
-            "Deterministic Wood Agents execution surface for story, implementation, and release"
-        ),
+        description=("Legacy internal project command router"),
     )
     parser.add_argument(
         "--project-root",
@@ -261,7 +229,6 @@ def main(argv: list[str] | None = None) -> int:
         ResourceError,
         OpenProjectError,
         StoryWorkflowError,
-        ReleaseWorkflowError,
         ImplementationWorkflowError,
     ) as exc:
         command = _command_name(args)
@@ -278,9 +245,6 @@ def main(argv: list[str] | None = None) -> int:
                         "resource-install",
                         "story-set-status",
                         "story-create-branch",
-                        "release-bump",
-                        "release-tag",
-                        "release-github-create",
                         "implementation-apply",
                     }
                     else "read-only"
