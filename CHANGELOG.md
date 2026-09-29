@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.8.0 (2026-09-29)
+
+### Features
+
+- Add repository CI and deployment inspection
+  ([#37](https://github.com/SpencerRWood/wood-tools/pull/37),
+  [`c23df78`](https://github.com/SpencerRWood/wood-tools/commit/c23df787af30bca133257a38498f8c54a668886d))
+
+
 ## v0.7.0 (2026-09-29)
 
 ### Features
