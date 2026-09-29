@@ -13,7 +13,6 @@ from resources.packages import ResourceError
 from .commands import COMMAND_MODULES
 from .core.models import ProjectError
 from .openproject.models import OpenProjectError
-from .story import StoryWorkflowError
 
 
 def _command_name(args: argparse.Namespace) -> str:
@@ -21,8 +20,6 @@ def _command_name(args: argparse.Namespace) -> str:
         return "link-repo"
     if args.command == "resource":
         return f"resource-{getattr(args, 'resource_command', 'unknown')}"
-    if args.command == "story":
-        return f"story-{getattr(args, 'story_command', 'unknown')}"
     return args.command
 
 
@@ -105,41 +102,12 @@ def _summarize_json_payload(
             summary=f"{action} {resource['kind']} resource {resource['name']}.",
             data=payload,
         )
-    if command in {"user", "project", "story-show"}:
+    if command in {"user", "project"}:
         return success_output(
             command=command,
             mutation="read-only",
             summary=f"OpenProject {command.removeprefix('story-')} inspection completed.",
             data=payload,
-        )
-    if command == "story-next":
-        story = payload.get("story")
-        summary = (
-            f"Next Story is WP-{story['id']} {story['subject']}."
-            if story
-            else f"Release {payload.get('release', {}).get('version')} is ready."
-        )
-        return success_output(
-            command=command,
-            mutation="read-only",
-            summary=summary,
-            data=payload,
-        )
-    if command in {"story-set-status", "story-create-branch"}:
-        if apply:
-            return success_output(
-                command=command,
-                mutation="mutating",
-                summary=f"{command.removeprefix('story-')} completed.",
-                data=payload,
-            )
-        return blocked_output(
-            command=command,
-            summary=f"{command.removeprefix('story-')} requires approval.",
-            data=payload,
-            next_actions=[
-                f"Re-run wood-project story {command.removeprefix('story-')} with --apply."
-            ],
         )
     summary = (
         f"Loaded project metadata from {payload['path']}."
@@ -193,7 +161,6 @@ def main(argv: list[str] | None = None) -> int:
         ProjectError,
         ResourceError,
         OpenProjectError,
-        StoryWorkflowError,
     ) as exc:
         command = _command_name(args)
         message = exc.message if isinstance(exc, OpenProjectError) else str(exc)
@@ -207,8 +174,6 @@ def main(argv: list[str] | None = None) -> int:
                         "init",
                         "link-repo",
                         "resource-install",
-                        "story-set-status",
-                        "story-create-branch",
                     }
                     else "read-only"
                 ),
@@ -217,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                     [{"code": exc.code, "message": message}]
                     if isinstance(
                         exc,
-                        OpenProjectError | StoryWorkflowError,
+                        OpenProjectError,
                     )
                     else [{"message": message}]
                 ),

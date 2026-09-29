@@ -1,0 +1,491 @@
+"""Bounded Story business operations shared by the public CLI."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+from wood_project.openproject import (
+    OpenProjectClient,
+    embedded_elements,
+    link_href,
+    summarize_work_package,
+)
+from wood_project.planning_release import release_number
+
+from . import discovery
+from .branches import create_branch, repo_state
+from .models import StoryWorkflowError
+from .openproject import (
+    api_get_json,
+    api_request_json,
+    extract_id_from_href,
+    find_named_element,
+    work_package_description_text,
+    work_package_status_name,
+    work_package_type_name,
+    work_package_version_name,
+)
+
+PAGE_SIZE = 100
+TRANSITIONS = {
+    "new": {"in progress", "blocked", "on hold", "rejected"},
+    "in progress": {"blocked", "on hold", "closed", "rejected"},
+    "blocked": {"in progress", "rejected"},
+    "on hold": {"in progress", "rejected"},
+}
+
+
+def _verify_ci_run(url: str, expected_repository: str) -> None:
+    parsed = urlparse(url)
+    match = re.fullmatch(r"/([^/]+)/([^/]+)/actions/runs/(\d+)", parsed.path)
+    if parsed.scheme != "https" or parsed.netloc != "github.com" or match is None:
+        raise StoryWorkflowError("INVALID_EVIDENCE", "CI URL must identify a GitHub Actions run.")
+    owner, repository, run_id = match.groups()
+    if repository.casefold() != expected_repository.casefold():
+        raise StoryWorkflowError("INVALID_EVIDENCE", "CI run belongs to another repository.")
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{owner}/{repository}/actions/runs/{run_id}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise StoryWorkflowError(
+            "CI_UNAVAILABLE", "Could not verify the GitHub Actions run."
+        ) from exc
+    if result.returncode != 0:
+        raise StoryWorkflowError("CI_UNAVAILABLE", "Could not verify the GitHub Actions run.")
+    try:
+        run = json.loads(result.stdout)
+    except ValueError as exc:
+        raise StoryWorkflowError("CI_UNAVAILABLE", "GitHub returned invalid run data.") from exc
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise StoryWorkflowError("VALIDATION_REQUIRED", "GitHub Actions run has not passed.")
+
+
+def _repository(description: str) -> str:
+    match = re.search(r"^Primary Repository:\s*(.+)$", description, flags=re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def _story(client: OpenProjectClient, story_id: int) -> dict[str, Any]:
+    story = api_get_json(client, f"/api/v3/work_packages/{story_id}")
+    if work_package_type_name(story) != "Story":
+        raise StoryWorkflowError("NOT_A_STORY", f"WP-{story_id} is not a Story.")
+    return story
+
+
+def _root(client: OpenProjectClient, ref: str) -> tuple[int, int | None]:
+    if ref.isdecimal():
+        try:
+            root = api_get_json(client, f"/api/v3/work_packages/{ref}")
+        except StoryWorkflowError:
+            root = {}
+        if work_package_type_name(root) == "Initiative":
+            return int(ref), extract_id_from_href(link_href(root, "project"), "projects")
+        project = api_get_json(client, f"/api/v3/projects/{ref}")
+        return 0, int(project["id"])
+    projects = discovery.fetch_collection(client, "/api/v3/projects", query={}, page_size=PAGE_SIZE)
+    matches = [
+        p for p in projects if ref in {str(p.get("identifier") or ""), str(p.get("name") or "")}
+    ]
+    if len(matches) == 1:
+        return 0, int(matches[0]["id"])
+    if len(matches) > 1:
+        raise StoryWorkflowError("AMBIGUOUS_SELECTOR", "Project reference is ambiguous.")
+    filters = [{"project": {"operator": "=", "values": [str(client.settings.project_id)]}}]
+    packages = discovery.fetch_collection(
+        client,
+        "/api/v3/work_packages",
+        query={"filters": json.dumps(filters)},
+        page_size=PAGE_SIZE,
+    )
+    matches = [
+        wp
+        for wp in packages
+        if work_package_type_name(wp) == "Initiative" and wp.get("subject") == ref
+    ]
+    if len(matches) == 1:
+        return int(matches[0]["id"]), int(client.settings.project_id)
+    if len(matches) > 1:
+        raise StoryWorkflowError("AMBIGUOUS_SELECTOR", "Initiative reference is ambiguous.")
+    raise StoryWorkflowError("NOT_FOUND", "Project or Initiative reference did not match.")
+
+
+def list_stories(
+    client: OpenProjectClient,
+    ref: str,
+    *,
+    status: str | None = None,
+    version: str | None = None,
+    offset: int = 0,
+) -> dict[str, Any]:
+    if offset < 0:
+        raise StoryWorkflowError("INVALID_OFFSET", "Offset must be nonnegative.")
+    root_id, project_id = _root(client, ref)
+    if root_id:
+        stories = discovery.fetch_descendants(client, root_id, PAGE_SIZE, project_id)
+    else:
+        assert project_id is not None
+        filters = [{"project": {"operator": "=", "values": [str(project_id)]}}]
+        stories = discovery.fetch_collection(
+            client,
+            "/api/v3/work_packages",
+            query={"filters": json.dumps(filters)},
+            page_size=PAGE_SIZE,
+        )
+    stories = [s for s in stories if work_package_type_name(s) == "Story"]
+    if status:
+        stories = [
+            s for s in stories if work_package_status_name(s).casefold() == status.casefold()
+        ]
+    if version:
+        stories = [
+            s for s in stories if work_package_version_name(s).casefold() == version.casefold()
+        ]
+    stories.sort(key=lambda s: int(s["id"]))
+    page = stories[offset : offset + 50]
+    return {
+        "stories": [summarize_work_package(s) for s in page],
+        "total": len(stories),
+        "offset": offset,
+        "next_offset": offset + len(page) if offset + len(page) < len(stories) else None,
+    }
+
+
+def get_story(client: OpenProjectClient, story_id: int, *, offset: int = 0) -> dict[str, Any]:
+    if offset < 0:
+        raise StoryWorkflowError("INVALID_OFFSET", "Offset must be nonnegative.")
+    story = _story(client, story_id)
+    context = client.story_context(story_id)
+    description = work_package_description_text(story)
+    chunks = [description[index : index + 450] for index in range(0, len(description), 450)]
+    relations = context["relations"]
+    context["relations"] = relations[offset : offset + 50]
+    context["relation_total"] = len(relations)
+    context["next_offset"] = offset + 50 if offset + 50 < max(len(relations), len(chunks)) else None
+    context["description"] = {
+        "chunks": chunks[offset : offset + 50],
+        "offset": offset,
+        "next_offset": offset + 50 if offset + 50 < len(chunks) else None,
+    }
+    context["implementation"] = {
+        "goal": discovery.packet_section(description, "Goal"),
+        "acceptance_criteria": discovery.acceptance_criteria(description),
+        "requirements": discovery.packet_section(description, "Requirement IDs"),
+        "dependencies": discovery.packet_section(description, "Dependencies"),
+        "repository": _repository(description),
+        "non_goals": discovery.packet_section(description, "Non-Goals"),
+        "implementation_notes": discovery.packet_section(description, "Implementation Notes"),
+    }
+    return context
+
+
+def next_story(client: OpenProjectClient, ref: str) -> dict[str, Any]:
+    root_id, project_id = _root(client, ref)
+    if not root_id:
+        assert project_id is not None
+        filters = [{"project": {"operator": "=", "values": [str(project_id)]}}]
+        packages = discovery.fetch_collection(
+            client,
+            "/api/v3/work_packages",
+            query={"filters": json.dumps(filters)},
+            page_size=PAGE_SIZE,
+        )
+        initiatives = sorted(
+            (wp for wp in packages if work_package_type_name(wp) == "Initiative"),
+            key=lambda wp: int(wp["id"]),
+        )
+        if len(initiatives) != 1:
+            raise StoryWorkflowError(
+                "INITIATIVE_REQUIRED",
+                "Project has multiple Initiatives; pass an Initiative reference.",
+            )
+        root_id = int(initiatives[0]["id"])
+    if (
+        project_id
+        and client.settings.project_id
+        and str(project_id) != str(client.settings.project_id)
+    ):
+        raise StoryWorkflowError(
+            "PROJECT_MISMATCH", "Selected Initiative belongs to another project."
+        )
+    return discovery.discover_next_story(
+        client=client,
+        root_work_package_id=root_id,
+        target_status="New",
+        story_type="Story",
+        page_size=PAGE_SIZE,
+    )
+
+
+def _status(
+    client: OpenProjectClient, story: dict[str, Any], target: str, *, apply: bool
+) -> dict[str, Any]:
+    story_id = int(story["id"])
+    current = work_package_status_name(story)
+    if current.casefold() == target.casefold():
+        raise StoryWorkflowError("INVALID_TRANSITION", f"WP-{story_id} is already {current}.")
+    statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
+    status = find_named_element(statuses, target)
+    allowed = TRANSITIONS.get(current.casefold(), set())
+    closing = bool(status.get("isClosed")) and current.casefold() == "in progress"
+    if target.casefold() not in allowed and not closing:
+        raise StoryWorkflowError(
+            "INVALID_TRANSITION", f"Transition from {current} to {target} is not allowed."
+        )
+    href = link_href(status, "self")
+    if not href or not isinstance(story.get("lockVersion"), int):
+        raise StoryWorkflowError("STATUS_UPDATE_FAILED", f"WP-{story_id} is not updatable.")
+    result = {"id": story_id, "from_status": current, "to_status": target, "dry_run": not apply}
+    if apply:
+        updated = api_request_json(
+            "PATCH",
+            client,
+            f"/api/v3/work_packages/{story_id}",
+            body={"lockVersion": story["lockVersion"], "_links": {"status": {"href": href}}},
+        )
+        if work_package_status_name(updated).casefold() != target.casefold():
+            raise StoryWorkflowError(
+                "STATUS_UPDATE_FAILED", "OpenProject returned a different status."
+            )
+        result["status"] = work_package_status_name(updated)
+    return result
+
+
+def set_story_status(
+    client: OpenProjectClient, story_id: int, target: str, *, apply: bool
+) -> dict[str, Any]:
+    story = _story(client, story_id)
+    target_status = find_named_element(
+        embedded_elements(api_get_json(client, "/api/v3/statuses")), target
+    )
+    if (target_status.get("isClosed") and target.casefold() != "rejected") or target.casefold() in {
+        "blocked",
+        "on hold",
+    }:
+        raise StoryWorkflowError(
+            "LIFECYCLE_COMMAND_REQUIRED",
+            "Use story complete or story block for this transition.",
+        )
+    if target.casefold() == "in progress":
+        _ready(client, story, allow_on_hold=True)
+    return _status(client, story, target, apply=apply)
+
+
+def _ready(
+    client: OpenProjectClient, story: dict[str, Any], *, allow_on_hold: bool = False
+) -> None:
+    story_id = int(story["id"])
+    allowed = {"new", "on hold", "blocked"} if allow_on_hold else {"new"}
+    if work_package_status_name(story).casefold() not in allowed:
+        raise StoryWorkflowError("NOT_READY", "Story is not ready to enter In progress.")
+    version_name = work_package_version_name(story)
+    version_id = extract_id_from_href(link_href(story, "version"), "versions")
+    if not version_name or version_id is None or release_number(version_name) is None:
+        raise StoryWorkflowError("NOT_READY", "Story has no active R# planning version.")
+    version = api_get_json(client, f"/api/v3/versions/{version_id}")
+    if str(version.get("status") or "").casefold() != "open":
+        raise StoryWorkflowError("NOT_READY", "Story's planning version is not open.")
+    predecessors = discovery.fetch_predecessor_map(client, {story_id}, PAGE_SIZE).get(
+        story_id, set()
+    )
+    for predecessor in sorted(predecessors):
+        previous = api_get_json(client, f"/api/v3/work_packages/{predecessor}")
+        if work_package_status_name(previous).casefold() != "closed":
+            raise StoryWorkflowError("DEPENDENCY_BLOCKED", f"WP-{predecessor} is not Closed.")
+
+
+def start_story(client: OpenProjectClient, story_id: int, *, apply: bool) -> dict[str, Any]:
+    story = _story(client, story_id)
+    _ready(client, story)
+    description = work_package_description_text(story)
+    repository = _repository(description)
+    branch = None
+    if repository:
+        state = repo_state()
+        if Path(state["path"]).name != repository:
+            raise StoryWorkflowError(
+                "REPOSITORY_MISMATCH", f"Current repository does not match {repository}."
+            )
+        branch = create_branch(
+            work_package_id=story_id,
+            title=str(story.get("subject") or ""),
+            apply=False,
+            allow_dirty=False,
+        )
+    status = _status(client, story, "In progress", apply=apply)
+    if apply and branch:
+        branch = create_branch(
+            work_package_id=story_id,
+            title=str(story.get("subject") or ""),
+            apply=True,
+            allow_dirty=False,
+        )
+    return {
+        "status": status,
+        "branch": branch,
+        "next_action": "Implement the Story and run repository checks.",
+    }
+
+
+def block_story(
+    client: OpenProjectClient, story_id: int, reason: str, *, apply: bool
+) -> dict[str, Any]:
+    if not reason.strip():
+        raise StoryWorkflowError("INVALID_REASON", "A blocked reason is required.")
+    story = _story(client, story_id)
+    statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
+    available = {str(status.get("name") or "") for status in statuses}
+    blocked_status = "Blocked" if "Blocked" in available else "On hold"
+    if blocked_status not in available:
+        raise StoryWorkflowError(
+            "BLOCKED_STATUS_UNAVAILABLE", "No supported blocked status exists."
+        )
+    result = _status(client, story, blocked_status, apply=apply)
+    if apply:
+        api_request_json(
+            "POST",
+            client,
+            f"/api/v3/work_packages/{story_id}/activities",
+            body={"comment": {"raw": f"Blocked: {reason.strip()}"}},
+        )
+    return {
+        "status": result,
+        "reason": reason.strip()[:500],
+        "next_action": (
+            f"Resolve the blocker, then run story set-status {story_id} 'In progress'."
+        ),
+    }
+
+
+def complete_story(
+    client: OpenProjectClient, story_id: int, *, evidence: dict[str, Any], apply: bool
+) -> dict[str, Any]:
+    story = _story(client, story_id)
+    if work_package_status_name(story).casefold() != "in progress":
+        raise StoryWorkflowError("INVALID_TRANSITION", "Only In progress Stories can be completed.")
+    repository = _repository(work_package_description_text(story))
+    checks = evidence.get("repository_checks")
+    ci = evidence.get("ci")
+    if repository and (
+        not isinstance(checks, list)
+        or not checks
+        or any(
+            not isinstance(check, dict) or not check.get("name") or check.get("status") != "passed"
+            for check in checks
+        )
+        or not isinstance(ci, dict)
+        or ci.get("status") != "passed"
+        or not str(ci.get("url") or "").startswith("https://")
+    ):
+        raise StoryWorkflowError(
+            "VALIDATION_REQUIRED",
+            "Repository checks and a passed CI run URL are required as validation evidence.",
+        )
+    if not repository and not evidence.get("validation_summary"):
+        raise StoryWorkflowError("VALIDATION_REQUIRED", "Validation evidence is required.")
+    if apply and repository:
+        _verify_ci_run(str(ci["url"]), repository)
+    closed_status = os.environ.get("OPENPROJECT_STORY_CLOSED_STATUS", "Closed")
+    closed = find_named_element(
+        embedded_elements(api_get_json(client, "/api/v3/statuses")), closed_status
+    )
+    if not closed.get("isClosed") or closed_status.casefold() == "rejected":
+        raise StoryWorkflowError("INVALID_CONTEXT", "Configured completion status is not closed.")
+    result = _status(client, story, closed_status, apply=apply)
+    return {
+        "status": result,
+        "validation_evidence": {
+            "repository_checks": [check["name"] for check in checks] if repository else [],
+            "ci_url": ci["url"] if repository else None,
+        },
+        "next_action": "Select the next dependency-ready Story.",
+    }
+
+
+def create_story(
+    client: OpenProjectClient,
+    *,
+    project_id: int,
+    initiative_id: int,
+    epic_id: int,
+    subject: str,
+    goal: str,
+    requirements: str,
+    acceptance: list[str],
+    repository: str | None,
+    version_id: int,
+    apply: bool,
+) -> dict[str, Any]:
+    if not all((subject.strip(), goal.strip(), requirements.strip())) or not all(
+        item.strip() for item in acceptance
+    ):
+        raise StoryWorkflowError(
+            "INVALID_INPUT", "Subject, goal, requirement IDs, and acceptance criteria are required."
+        )
+    parent = api_get_json(client, f"/api/v3/work_packages/{initiative_id}")
+    if (
+        work_package_type_name(parent) != "Initiative"
+        or extract_id_from_href(link_href(parent, "project"), "projects") != project_id
+    ):
+        raise StoryWorkflowError(
+            "INVALID_CONTEXT", "Initiative must belong to the selected project."
+        )
+    epic = api_get_json(client, f"/api/v3/work_packages/{epic_id}")
+    if (
+        work_package_type_name(epic) != "Epic"
+        or extract_id_from_href(link_href(epic, "parent"), "work_packages") != initiative_id
+    ):
+        raise StoryWorkflowError("INVALID_CONTEXT", "Epic must belong to the selected Initiative.")
+    types = embedded_elements(api_get_json(client, f"/api/v3/projects/{project_id}/types"))
+    story_type = find_named_element(types, "Story")
+    version = api_get_json(client, f"/api/v3/versions/{version_id}")
+    project_versions = discovery.fetch_collection(
+        client, f"/api/v3/projects/{project_id}/versions", query={}, page_size=PAGE_SIZE
+    )
+    if not any(int(item["id"]) == version_id for item in project_versions) or (
+        release_number(str(version.get("name") or "")) is None
+        or str(version.get("status") or "").casefold() != "open"
+    ):
+        raise StoryWorkflowError(
+            "INVALID_CONTEXT", "Planning version must be an open R# release in the project."
+        )
+    description = (
+        "Codex Implementation Packet\n\n"
+        f"OpenProject\nPrimary Repository: {repository.strip() if repository else ''}\n\n"
+        f"Goal\n{goal.strip()}\n\n"
+        f"Requirement IDs\n{requirements.strip()}\n\n"
+        "Acceptance Criteria\n" + "\n".join(item.strip() for item in acceptance)
+    )
+    payload = {
+        "subject": subject.strip(),
+        "description": {"format": "markdown", "raw": description},
+        "_links": {
+            "type": {"href": link_href(story_type, "self")},
+            "parent": {"href": f"/api/v3/work_packages/{epic_id}"},
+            "version": {"href": f"/api/v3/versions/{version_id}"},
+        },
+    }
+    if not apply:
+        return {
+            "dry_run": True,
+            "project_id": project_id,
+            "initiative_id": initiative_id,
+            "epic_id": epic_id,
+            "subject": subject.strip(),
+            "version_id": version_id,
+            "requirements": requirements.strip(),
+        }
+    created = api_request_json(
+        "POST", client, f"/api/v3/projects/{project_id}/work_packages", body=payload
+    )
+    return {"dry_run": False, "work_package": summarize_work_package(created)}

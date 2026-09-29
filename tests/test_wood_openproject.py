@@ -8,7 +8,6 @@ import pytest
 
 from wood_project import cli as project_cli
 from wood_project.commands import openproject as openproject_commands
-from wood_project.commands import story as story_commands
 from wood_project.openproject import (
     OpenProjectClient,
     OpenProjectError,
@@ -213,49 +212,6 @@ def test_client_story_context_fetches_relation_fixture() -> None:
     ]
 
 
-def test_wood_project_openproject_json_uses_standard_envelope_and_no_secret_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    class FakeClient:
-        def __init__(self, settings: object) -> None:
-            self.settings = settings
-
-        def story_context(self, work_package_id: int) -> dict[str, Any]:
-            assert work_package_id == 292
-            return {
-                "work_package": {
-                    "id": 292,
-                    "subject": "Read only",
-                    "status": "In progress",
-                },
-                "relations": [],
-            }
-
-    monkeypatch.setattr(
-        story_commands,
-        "load_settings",
-        lambda **kwargs: OpenProjectSettings(
-            base_url="https://openproject.example.test",
-            project_id="wood",
-            token="super-secret-token",
-            token_provider="env",
-            user_agent="wood-tools-test/1",
-        ),
-    )
-    monkeypatch.setattr(story_commands, "OpenProjectClient", FakeClient)
-
-    code = project_cli.main(["story", "show", "292", "--json"])
-
-    assert code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "story-show"
-    assert payload["status"] == "success"
-    assert payload["mutation"] == "read-only"
-    assert payload["data"]["work_package"]["id"] == 292
-    assert "super-secret-token" not in json.dumps(payload)
-
-
 def test_wood_project_openproject_provider_failure_returns_error_envelope(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -275,3 +231,33 @@ def test_wood_project_openproject_provider_failure_returns_error_envelope(
     assert payload["errors"] == [
         {"code": "OPENPROJECT_ACCESS_UNAVAILABLE", "message": "provider locked"}
     ]
+
+
+def test_story_context_pages_all_relations(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = OpenProjectClient(
+        OpenProjectSettings(
+            base_url="https://openproject.example.test",
+            project_id="3",
+            token="secret",
+            token_provider="test",
+            user_agent="test/1",
+        )
+    )
+    offsets: list[str] = []
+
+    def fake_get(path: str, *, query: dict[str, str] | None = None) -> dict[str, Any]:
+        if path.endswith("/work_packages/292"):
+            return {"id": 292, "_links": {}}
+        assert query is not None
+        offsets.append(query["offset"])
+        return {
+            "total": 2,
+            "_embedded": {
+                "elements": [{"id": int(query["offset"]), "type": "relates", "_links": {}}]
+            },
+        }
+
+    monkeypatch.setattr(client, "get_json", fake_get)
+    result = client.story_context(292)
+    assert offsets == ["1", "2"]
+    assert [relation["id"] for relation in result["relations"]] == [1, 2]

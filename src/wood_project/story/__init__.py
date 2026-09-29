@@ -8,7 +8,6 @@ from .discovery import (
     slugify,
 )
 from .models import StoryWorkflowError
-from .status import set_status
 
 __all__ = [
     "StoryWorkflowError",
@@ -19,6 +18,5 @@ __all__ = [
     "packet_section",
     "repo_state",
     "run_git",
-    "set_status",
     "slugify",
 ]
