@@ -233,6 +233,16 @@ def _copy_ignores(directory: str, names: list[str]) -> set[str]:
     return ignored - {".env.example"}
 
 
+def _prune_empty_directories(root: Path) -> None:
+    for directory in sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        if not any(directory.iterdir()):
+            directory.rmdir()
+
+
 def repo_validate(root: Path) -> dict[str, object]:
     contract = _contract(root)
     checks = contract["validation"].get("checks", [])
@@ -253,6 +263,7 @@ def repo_validate(root: Path) -> dict[str, object]:
             checkout,
             ignore=_copy_ignores,
         )
+        _prune_empty_directories(checkout)
         # pre-commit requires a repository, and all hooks run against this disposable copy.
         initialized = _run(["git", "init", "--quiet"], checkout).returncode == 0
         initialized = (

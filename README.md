@@ -21,11 +21,9 @@ uv run --active wood contract --json
 
 ## Infisical runtime
 
-The checked-in `.infisical.json` selects the local Infisical project and domain. Infisical injects secret values into the child process; Wood Tools only reports readiness and variable presence. Set the public OpenProject context and run the CLI directly under Infisical:
+The checked-in `.infisical.json` selects the local Infisical project and domain. Infisical injects the OpenProject URL and token into the child process; Wood Tools only reports readiness and variable presence. Discover project and initiative IDs with `wood project list --json` when needed:
 
 ```sh
-OPENPROJECT_URL=https://projects.woodhost.cloud \
-OPENPROJECT_PROJECT_ID=3 OPENPROJECT_INITIATIVE_ID=208 \
 infisical run --env=dev --path=/openproject -- uv run --active wood doctor --json
 ```
 

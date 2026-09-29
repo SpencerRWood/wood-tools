@@ -32,6 +32,10 @@ def _imports(path: Path) -> list[str]:
     return imported
 
 
+def _active_files(path: Path) -> list[Path]:
+    return [file for file in path.rglob("*") if file.is_file() and "__pycache__" not in file.parts]
+
+
 def test_legacy_implementation_modules_are_absent() -> None:
     assert not list(SRC_ROOT.rglob("_impl.py"))
     assert not (SRC_ROOT / "wood_tools").exists()
@@ -49,7 +53,7 @@ def test_legacy_implementation_modules_are_absent() -> None:
         SRC_ROOT / "resources" / "packages",
         SRC_ROOT / "resources" / "cli" / "output.py",
     ):
-        assert not old_path.exists()
+        assert not _active_files(old_path)
 
 
 def test_shared_namespace_initializer_has_no_eager_imports() -> None:
@@ -114,4 +118,4 @@ def test_single_public_entrypoint_and_no_manual_release_package() -> None:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert project["project"]["scripts"] == {"wood": "wood.cli:main"}
     assert not list((SRC_ROOT / "wood_project" / "release").glob("*.py"))
-    assert not (SRC_ROOT / "wood_project" / "commands").exists()
+    assert not _active_files(SRC_ROOT / "wood_project" / "commands")
