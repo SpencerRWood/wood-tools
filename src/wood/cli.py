@@ -12,6 +12,7 @@ from resources.cli.audit import write_audit_event
 
 from .diagnostics import doctor, secret_command
 from .output import EXIT_CODES, envelope, exit_code, render
+from .project import run_project_command
 
 
 class _ArgumentError(Exception):
@@ -42,6 +43,25 @@ def build_parser() -> argparse.ArgumentParser:
             action.add_argument("--name", action="append", default=[])
     doctor_parser = commands.add_parser("doctor", help="Inspect aggregate readiness")
     doctor_parser.add_argument("--json", dest="doctor_json", action="store_true")
+    project = commands.add_parser("project", help="Discover projects and import planning workbooks")
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+    projects = project_commands.add_parser("list", help="List accessible projects")
+    projects.add_argument("--initiative")
+    projects.add_argument("--offset", type=int, default=0)
+    projects.add_argument("--json", dest="project_json", action="store_true")
+    status = project_commands.add_parser("status", help="Show project planning and Story status")
+    status.add_argument("ref")
+    status.add_argument("--initiative")
+    status.add_argument("--json", dest="project_json", action="store_true")
+    importer = project_commands.add_parser("import-workbook", help="Plan or apply a workbook")
+    importer.add_argument("path", type=Path)
+    importer.add_argument("--project")
+    importer.add_argument("--initiative")
+    importer.add_argument("--sheet-name", default="Implementation")
+    importer.add_argument("--apply", action="store_true")
+    importer.add_argument("--plan-hash")
+    importer.add_argument("--operation-offset", type=int, default=0)
+    importer.add_argument("--json", dest="project_json", action="store_true")
     return parser
 
 
@@ -58,6 +78,9 @@ def _contract() -> dict[str, object]:
                 "secret check",
                 "secret requirements",
                 "doctor",
+                "project list",
+                "project status",
+                "project import-workbook",
             ],
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
@@ -72,7 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         parsed = build_parser().parse_args(args)
         as_json = parsed.json or any(
-            getattr(parsed, name, False) for name in ("contract_json", "secret_json", "doctor_json")
+            getattr(parsed, name, False)
+            for name in ("contract_json", "secret_json", "doctor_json", "project_json")
         )
         if parsed.command is None:
             if not as_json:
@@ -88,6 +112,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif parsed.command == "doctor":
             payload = doctor(Path.cwd(), os.environ)
+        elif parsed.command == "project":
+            payload = run_project_command(
+                parsed.project_command,
+                ref=getattr(parsed, "ref", None),
+                initiative=getattr(parsed, "initiative", None),
+                offset=getattr(parsed, "offset", 0),
+                path=getattr(parsed, "path", None),
+                sheet_name=getattr(parsed, "sheet_name", "Implementation"),
+                project=getattr(parsed, "project", None),
+                apply=getattr(parsed, "apply", False),
+                plan_hash=getattr(parsed, "plan_hash", None),
+                operation_offset=getattr(parsed, "operation_offset", 0),
+            )
         else:
             payload = _contract()
     except _ArgumentError:

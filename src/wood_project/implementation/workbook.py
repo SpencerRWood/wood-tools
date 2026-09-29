@@ -39,9 +39,6 @@ IMPLEMENTATION_WORKBOOK_COLUMNS = [
     "Notes",
 ]
 
-# Existing 18-column workbooks remain readable during migration.
-OPTIONAL_TRACEABILITY_COLUMNS = {"Primary Repository", "Affected Repositories", "Released In"}
-
 SYNC_METADATA_ROWS = [
     "Configured Root Work Package ID",
     "Verified Root Work Package ID",
@@ -147,15 +144,22 @@ def workbook_rows(path: Path, sheet_name: str) -> list[WorkbookRow]:
     if not rows:
         raise op.ScriptError("WORKBOOK_PARSE_FAILED", "Workbook sheet has no rows.")
     headers = rows[0]
-    missing = [
-        column
-        for column in IMPLEMENTATION_WORKBOOK_COLUMNS
-        if column not in headers and column not in OPTIONAL_TRACEABILITY_COLUMNS
-    ]
+    if len(headers) != len(IMPLEMENTATION_WORKBOOK_COLUMNS) or len(set(headers)) != len(headers):
+        raise op.ScriptError(
+            "WORKBOOK_SCHEMA_MISMATCH",
+            "Workbook must contain exactly 21 distinct Implementation columns.",
+        )
+    missing = [column for column in IMPLEMENTATION_WORKBOOK_COLUMNS if column not in headers]
     if missing:
         raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             f"Workbook is missing required columns: {', '.join(missing)}",
+        )
+    unexpected = [column for column in headers if column not in IMPLEMENTATION_WORKBOOK_COLUMNS]
+    if unexpected:
+        raise op.ScriptError(
+            "WORKBOOK_SCHEMA_MISMATCH",
+            f"Workbook has unexpected columns: {', '.join(unexpected)}",
         )
     indexed_headers = {
         column: headers.index(column)

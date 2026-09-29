@@ -12,7 +12,7 @@ PROJECT_ROOT = SRC_ROOT.parent
 
 ALLOWED_PACKAGE_DEPENDENCIES = {
     "resources": set(),
-    "wood": {"resources"},
+    "wood": {"resources", "wood_project"},
     "wood_project": {"resources"},
     "wood_templates": {"resources"},
 }
@@ -109,7 +109,6 @@ def test_wood_project_canonical_command_modules_are_authoritative() -> None:
 
     assert module_names == (
         "story",
-        "implementation",
         "openproject",
         "resources",
         "project",
@@ -133,7 +132,7 @@ def test_wood_help_exposes_diagnostics() -> None:
     help_text = build_parser().format_help()
 
     assert "Wood Tools v2 agent CLI" in help_text
-    assert "{contract,secret,doctor}" in help_text
+    assert "{contract,secret,doctor,project}" in help_text
     assert "release" not in help_text
 
 

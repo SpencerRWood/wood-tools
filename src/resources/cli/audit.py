@@ -136,6 +136,8 @@ def _infer_target_type(cli_name: str, command: str, data: Any) -> str:
         return "secret-readiness"
     if command == "doctor":
         return "readiness"
+    if command.startswith("project "):
+        return "project"
 
     if command in {"link-repo"}:
         return "project"
@@ -185,9 +187,9 @@ def _command_summary(cli_name: str, command: str, target_type: str) -> str:
         ("wood-project", "resource-install"): "Install a Wood resource",
         ("wood-project", "resource-inspect"): "Inspect a Wood resource",
         ("wood-project", "resource-path"): "Resolve a Wood resource path",
-        ("wood-project", "implementation-export"): "Export implementation workbook",
-        ("wood-project", "implementation-plan"): "Build implementation workbook plan",
-        ("wood-project", "implementation-apply"): "Apply implementation workbook plan",
+        ("wood", "project list"): "List OpenProject projects",
+        ("wood", "project status"): "Inspect OpenProject planning status",
+        ("wood", "project import-workbook"): "Plan or apply implementation workbook",
     }
     return summaries.get((cli_name, command), f"Run {target_type} command")
 

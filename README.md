@@ -1,6 +1,6 @@
 # Wood Tools
 
-Wood Tools v2 is a single `wood` command for deterministic agent workflows. Secret readiness and aggregate diagnostics are part of [WP-397](https://projects.woodhost.cloud/work_packages/397).
+Wood Tools v2 is a single `wood` command for deterministic agent workflows. Secret readiness and aggregate diagnostics are part of [WP-397](https://projects.woodhost.cloud/work_packages/397). Project discovery and Implementation Workbook import are part of [WP-398](https://projects.woodhost.cloud/work_packages/398).
 
 ## Install and inspect
 
@@ -24,6 +24,12 @@ infisical run --env=dev --path=/openproject -- uv run --active wood doctor --jso
 ```
 
 Use `wood secret status --json` for Infisical CLI, context, authentication, and OpenProject prerequisites; `wood secret requirements --json` for required names; and `wood secret check --json` for injected variable presence. `--name NAME` can be repeated on `check` and `requirements`. These commands do not retrieve or print values. `wood doctor` adds repository, OpenProject connectivity, tool, and Python checks. An unavailable check exits 4 and includes a concise next action.
+
+## OpenProject projects and workbook import
+
+`wood project list --json` lists accessible projects with their Initiative associations. Use `--initiative <id|name>` to filter and `--offset` to page through more than 50 projects. `wood project status <id|identifier|exact name> --json` reports R# planning versions and Story counts; `--initiative <id|name>` scopes the Story counts. Ambiguous names return candidate IDs.
+
+`wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name. Inject `OPENPROJECT_URL` and `OPENPROJECT_API_TOKEN` via Infisical for these commands; `OPENPROJECT_PROJECT_ID` is optional.
 
 ## JSON and exits
 
