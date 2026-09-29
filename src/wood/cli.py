@@ -103,7 +103,7 @@ def _contract() -> dict[str, object]:
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
         },
-        next_actions=["Use a capability command when its migration Story is implemented."],
+        next_actions=["Use a listed capability command for the current task."],
     )
 
 

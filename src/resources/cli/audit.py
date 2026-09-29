@@ -130,8 +130,6 @@ def _infer_target_type(cli_name: str, command: str, data: Any) -> str:
         if "infisical" in data or "presence" in data:
             return "secret-readiness"
 
-    if cli_name == "wood-project":
-        return "resource" if command.startswith("resource-") else "project"
     if command.startswith("secret "):
         return "secret-readiness"
     if command == "doctor":
@@ -139,10 +137,6 @@ def _infer_target_type(cli_name: str, command: str, data: Any) -> str:
     if command.startswith("project "):
         return "project"
 
-    if command in {"link-repo"}:
-        return "project"
-    if command.startswith("resource-"):
-        return "resource"
     return "command"
 
 
@@ -180,13 +174,6 @@ def _command_summary(cli_name: str, command: str, target_type: str) -> str:
         ("wood", "secret check"): "Check injected variable presence",
         ("wood", "secret requirements"): "List required variable names",
         ("wood", "doctor"): "Inspect aggregate readiness",
-        ("wood-project", "init"): "Initialize project metadata",
-        ("wood-project", "show"): "Show project metadata",
-        ("wood-project", "validate"): "Validate project metadata",
-        ("wood-project", "link-repo"): "Link a repository in project metadata",
-        ("wood-project", "resource-install"): "Install a Wood resource",
-        ("wood-project", "resource-inspect"): "Inspect a Wood resource",
-        ("wood-project", "resource-path"): "Resolve a Wood resource path",
         ("wood", "project list"): "List OpenProject projects",
         ("wood", "project status"): "Inspect OpenProject planning status",
         ("wood", "project import-workbook"): "Plan or apply implementation workbook",

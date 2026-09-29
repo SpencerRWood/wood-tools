@@ -25,13 +25,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["resources", "resources.*", "wood", "wood.*", "wood_*"]
-
-[tool.setuptools.package-data]
-wood_templates = [
-    "builtin_template_packs/**/*",
-    "builtin_template_packs/**/.pre-commit-config.yaml.tmpl",
-]
+include = ["resources", "resources.*", "wood", "wood.*", "wood_project", "wood_project.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

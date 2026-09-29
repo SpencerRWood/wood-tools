@@ -6,8 +6,6 @@ from urllib import parse
 
 import pytest
 
-from wood_project import cli as project_cli
-from wood_project.commands import openproject as openproject_commands
 from wood_project.openproject import (
     OpenProjectClient,
     OpenProjectError,
@@ -209,27 +207,6 @@ def test_client_story_context_fetches_relation_fixture() -> None:
             "from": {"id": 291, "title": "Predecessor"},
             "to": {"id": 292, "title": "Story"},
         }
-    ]
-
-
-def test_wood_project_openproject_provider_failure_returns_error_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_settings(**kwargs: object) -> object:
-        raise OpenProjectError("OPENPROJECT_ACCESS_UNAVAILABLE", "provider locked")
-
-    monkeypatch.setattr(openproject_commands, "load_settings", fail_settings)
-
-    code = project_cli.main(["user", "--json"])
-
-    assert code == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "user"
-    assert payload["status"] == "error"
-    assert payload["mutation"] == "read-only"
-    assert payload["errors"] == [
-        {"code": "OPENPROJECT_ACCESS_UNAVAILABLE", "message": "provider locked"}
     ]
 
 

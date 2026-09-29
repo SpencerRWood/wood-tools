@@ -62,7 +62,7 @@ def client_from_env(base_url: str, token: str, *, project_id: str = "") -> OpenP
             project_id=project_id,
             token=token,
             token_provider="implementation-env",
-            user_agent="wood-project/implementation",
+            user_agent="wood/project-import-workbook",
         )
     )
 

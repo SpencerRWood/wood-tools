@@ -8,7 +8,6 @@ import pytest
 from wood_project.implementation import apply as implementation_apply
 from wood_project.implementation import openproject as implementation_openproject
 from wood_project.implementation import planning as implementation_planning
-from wood_project.implementation import released as implementation_released
 from wood_project.implementation import workbook as implementation_workbook
 from wood_project.implementation.packets import parse_description_packet
 
@@ -283,72 +282,6 @@ def test_planning_update_preserves_shipped_traceability() -> None:
     assert packet["primary_repository"] == "wood-tools"
     assert packet["affected_repositories"] == "codex-config"
     assert packet["released_in"] == "1.2.3"
-
-
-def test_record_released_in_updates_story_and_workbook_idempotently(
-    tmp_path: Path, monkeypatch
-) -> None:
-    path = tmp_path / "implementation.xlsx"
-    values = workbook_row(
-        2,
-        **{
-            "Project": "Platform",
-            "Version": "R1",
-            "Story ID": "S1",
-            "Subject": "Ship",
-            "OpenProject ID": "123",
-            "Primary Repository": "wood-tools",
-        },
-    ).values
-    implementation_workbook.write_xlsx(path, [values], {})
-    description = implementation_planning.compose_description(values)
-    story = {
-        "id": 123,
-        "lockVersion": 1,
-        "description": {"raw": description},
-        "_links": {"type": {"title": "Story"}, "status": {"title": "Closed"}},
-    }
-    writes = []
-
-    def get_json(path, *, query=None):
-        if path == "/api/v3/statuses":
-            return {"_embedded": {"elements": [{"name": "Closed", "isClosed": True}]}}
-        assert path == "/api/v3/work_packages/123"
-        return story
-
-    def request_json(method, path, *, query=None, body=None):
-        writes.append(body)
-        story["description"] = body["description"]
-        story["lockVersion"] += 1
-        return story
-
-    monkeypatch.setattr(
-        implementation_released.op,
-        "client_from_env",
-        lambda *_args, **_kwargs: FakeOpenProjectClient(
-            get_json=get_json, request_json=request_json
-        ),
-    )
-    monkeypatch.setenv("OPENPROJECT_URL", "https://example.test")
-    monkeypatch.setenv("OPENPROJECT_API_TOKEN", "test-token")
-    args = dict(
-        path=path,
-        sheet_name="Implementation",
-        work_package_id=123,
-        version="1.2.3",
-        env_file=tmp_path / "missing.env",
-    )
-    preview = implementation_released.record_released_in(**args, apply=False)
-    assert preview["changed"] and not writes
-    applied = implementation_released.record_released_in(**args, apply=True)
-    assert applied["workbook_updated"] and applied["openproject_updated"]
-    assert (
-        implementation_workbook.workbook_rows(path, "Implementation")[0].values["Released In"]
-        == "1.2.3"
-    )
-    assert parse_description_packet(story["description"]["raw"])["released_in"] == "1.2.3"
-    repeated = implementation_released.record_released_in(**args, apply=True)
-    assert not repeated["changed"] and len(writes) == 1
 
 
 def test_build_implementation_plan_blocks_stale_openproject_id(

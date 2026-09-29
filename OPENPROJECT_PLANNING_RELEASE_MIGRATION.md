@@ -22,7 +22,7 @@ package versions, changelogs, and GitHub Releases unchanged.
    blank for unshipped Stories. Preserve already known actual semantic-release
    values separately and restore them through the post-shipment path after the
    planning import; never populate them from R# names.
-5. Preview every workbook with `wood-project implementation plan ... --json`.
+5. Preview every workbook with `wood project import-workbook ... --json`.
    Review the complete creation/update/reuse set, parent and Version links,
    predecessor relations, repository fields, and unexpected changes. Resolve
    ambiguity and stale IDs before requesting approval to apply. Apply only the
@@ -31,12 +31,11 @@ package versions, changelogs, and GitHub Releases unchanged.
    Re-run the plan after interruption: existing Version names, Story IDs, and
    relations should be reused. Never create a second R# mapping for the same
    legacy Version. Preview again if OpenProject changed after the first plan.
-7. Export each migrated root and compare counts, IDs, hierarchy, Version links,
-   predecessor edges, repository traceability, statuses, and unshipped blank
-   `Released In` values with the inventory. For shipped Stories, use
-   `wood-project implementation record-release` with the verified actual
-   artifact version; preview, apply, and verify workbook and Story description.
-   Reapply the same value to confirm idempotency.
+7. Read each migrated root through `wood story list` and `wood story get`, then
+   compare counts, IDs, hierarchy, Version links, predecessor edges, repository
+   traceability, statuses, and unshipped blank `Released In` values with the
+   inventory. Record shipped artifact versions from the verified release evidence
+   in delivery records; do not infer them from R# names.
 8. Remove legacy compatibility only after all active projects have passed the
    comparison, owners have accepted the migrated workbooks, and no active
    automation reads the old names or 18-column layout. Keep historical exports
