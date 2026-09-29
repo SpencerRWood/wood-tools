@@ -37,7 +37,15 @@ Use `wood secret status --json` for Infisical CLI, context, authentication, and 
 
 ## Story workflow
 
-Run Story commands under the same Infisical environment. `wood story list <project-or-initiative-ref> --json` filters with `--status` and `--version` and pages with `--offset`. `wood story get <id> --json` returns the implementation packet, relations, and description chunks; use `--offset` to read further chunks. `wood story next <initiative-ref> --json` selects a dependency-ready Story in the earliest active R# release, prioritizing an eligible Story already In progress, then the lowest ID. Closed and Rejected Stories are terminal; Rejected predecessors do not satisfy dependencies. Blocked and unversioned Stories are ineligible. An unfinished earlier release holds later releases.
+Run Story commands from the target repository under the same Infisical environment, using an installed `wood` executable. In the Wood Tools checkout, use `uv run --active --frozen wood` to exercise the checked-out code. The repository root `pyproject.toml` may optionally declare:
+
+```toml
+[tool.wood.openproject]
+initiative_id = 208
+project_id = 3 # optional; verified against the Initiative's OpenProject project
+```
+
+`wood story next [ref] --json` and `wood story list [ref] --json` use that Initiative when `ref` is omitted. Pass an explicit project or Initiative reference when the repository has no mapping, or to override one. The CLI finds the Git root from the working directory, regardless of where `wood` or its virtual environment is installed. Missing or malformed context returns an actionable error. `list` filters with `--status` and `--version` and pages with `--offset`. `wood story get <id> --json` returns the implementation packet, relations, and description chunks; use `--offset` to read further chunks. `next` selects a dependency-ready Story in the earliest active R# release, prioritizing an eligible Story already In progress, then the lowest ID. Closed and Rejected Stories are terminal; Rejected predecessors do not satisfy dependencies. Blocked and unversioned Stories are ineligible. An unfinished earlier release holds later releases.
 
 `wood story create` requires project, initiative, Epic, open R# version, subject, goal, requirement IDs, and at least one `--acceptance` value. It previews by default; `--apply` creates the Story. `wood story set-status <id> <status>` checks the live Story, lock version, and allowed transition before preview or apply. `wood story start <id>` checks version and predecessors, then prepares the standard local branch for the packet's Primary Repository. `wood story block <id> --reason <text>` records a supported blocked state (`Blocked` or `On hold`) and activity; resume with `set-status <id> "In progress"`. `wood story complete <id> --evidence <json-file>` validates the supplied repository checks and CI run before closing. These lifecycle commands preview by default and mutate only with `--apply`.
 

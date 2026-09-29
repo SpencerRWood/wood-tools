@@ -11,6 +11,7 @@ from wood_project.openproject import OpenProjectClient, OpenProjectError, load_s
 from wood_project.story import workflow
 from wood_project.story.activity import add_activity, read_comment
 from wood_project.story.models import StoryWorkflowError
+from wood_project.story.repository_context import story_reference
 
 from .output import Mutation, Status, envelope
 
@@ -20,7 +21,7 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     actions = parser.add_subparsers(dest="story_command", required=True)
     for action in ("list", "next"):
         item = actions.add_parser(action)
-        item.add_argument("ref")
+        item.add_argument("ref", nargs="?")
         if action == "list":
             item.add_argument("--status")
             item.add_argument("--version")
@@ -69,13 +70,20 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
     try:
         client = OpenProjectClient(load_settings())
         if action == "list":
+            ref, configured_project_id = story_reference(args.ref)
             data = workflow.list_stories(
-                client, args.ref, status=args.status, version=args.version, offset=args.offset
+                client,
+                ref,
+                status=args.status,
+                version=args.version,
+                offset=args.offset,
+                configured_project_id=configured_project_id,
             )
         elif action == "get":
             data = workflow.get_story(client, args.id, offset=args.offset)
         elif action == "next":
-            data = workflow.next_story(client, args.ref)
+            ref, configured_project_id = story_reference(args.ref)
+            data = workflow.next_story(client, ref, configured_project_id=configured_project_id)
         elif action == "create":
             data = workflow.create_story(
                 client,
