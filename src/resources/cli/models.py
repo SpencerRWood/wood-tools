@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Any, Literal, TypedDict
 
-CommandStatus: TypeAlias = Literal["success", "warning", "error", "blocked"]
-MutationKind: TypeAlias = Literal["read-only", "mutating"]
+type CommandStatus = Literal["success", "warning", "error", "blocked"]
+type MutationKind = Literal["read-only", "mutating"]
 
 
 class OutputMessage(TypedDict, total=False):
@@ -14,7 +14,7 @@ class OutputMessage(TypedDict, total=False):
     profile: str
 
 
-EnvelopeMessage: TypeAlias = str | OutputMessage
+type EnvelopeMessage = str | OutputMessage
 
 
 class CommandEnvelope(TypedDict):

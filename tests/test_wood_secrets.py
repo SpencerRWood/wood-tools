@@ -1300,6 +1300,17 @@ def test_vaultwarden_appdata_bootstraps_existing_login_state(tmp_path: Path) -> 
     assert stat.S_IMODE(copied_data.stat().st_mode) == 0o600
 
 
+def test_vaultwarden_linux_default_source_uses_environment(tmp_path: Path) -> None:
+    config_home = tmp_path / "config"
+    provider = VaultwardenSecretProvider(
+        system_name="Linux",
+        appdata_dir=tmp_path / "runtime-appdata",
+        environ={"XDG_CONFIG_HOME": str(config_home)},
+    )
+
+    assert provider.appdata_source_dir == config_home / "Bitwarden CLI"
+
+
 def test_vaultwarden_appdata_repairs_empty_runtime_state(tmp_path: Path) -> None:
     source_dir = tmp_path / "source-appdata"
     source_dir.mkdir()

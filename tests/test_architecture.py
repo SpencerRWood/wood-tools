@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
-from wood_project.cli import build_parser
+from wood.cli import build_parser
 from wood_project.commands import COMMAND_MODULES
 
 SRC_ROOT = Path(__file__).parents[1] / "src"
+PROJECT_ROOT = SRC_ROOT.parent
 
 ALLOWED_PACKAGE_DEPENDENCIES = {
     "resources": set(),
+    "wood": {"resources"},
     "wood_config": {"resources"},
     "wood_secrets": {"resources", "wood_config"},
     "wood_project": {"resources", "wood_config", "wood_secrets"},
@@ -40,7 +43,7 @@ def test_legacy_implementation_modules_are_absent() -> None:
     assert not (SRC_ROOT / "wood_resources").exists()
     assert not (SRC_ROOT / "wood_cli").exists()
     assert not (SRC_ROOT / "woodlib").exists()
-    assert not (SRC_ROOT / "wood").exists()
+    assert (SRC_ROOT / "wood" / "cli.py").is_file()
     assert (SRC_ROOT / "resources" / "cli" / "__init__.py").is_file()
     assert (SRC_ROOT / "resources" / "packages" / "__init__.py").is_file()
 
@@ -109,7 +112,6 @@ def test_wood_project_canonical_command_modules_are_authoritative() -> None:
     assert module_names == (
         "story",
         "implementation",
-        "release",
         "openproject",
         "resources",
         "project",
@@ -129,12 +131,16 @@ def test_legacy_loop_and_backlog_routes_are_absent() -> None:
     assert [path for path in legacy_paths if path.exists()] == []
 
 
-def test_wood_project_help_presents_primary_loop_surface_first() -> None:
+def test_wood_help_exposes_only_foundation_capability() -> None:
     help_text = build_parser().format_help()
 
-    assert "Deterministic Wood Agents execution surface" in help_text
-    assert "{story,implementation,release,user,project,resource,init,show,validate,link}" in (
-        help_text.replace("\n", "")
-    )
-    assert "story-backlog" not in help_text
-    assert "backlog" not in help_text
+    assert "Wood Tools v2 agent CLI" in help_text
+    assert "{contract}" in help_text
+    assert "release" not in help_text
+
+
+def test_single_public_entrypoint_and_no_manual_release_package() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["scripts"] == {"wood": "wood.cli:main"}
+    assert not list((SRC_ROOT / "wood_project" / "release").glob("*.py"))
+    assert not (SRC_ROOT / "wood_project" / "commands" / "release.py").exists()

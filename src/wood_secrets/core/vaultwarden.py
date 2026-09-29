@@ -223,6 +223,7 @@ class VaultwardenSecretProvider(SecretProvider):
         self.executable = executable
         self.server_url = self._normalize_server_url(server_url)
         self._system_name = system_name or platform.system()
+        self._environ = environ if environ is not None else os.environ
         self.appdata_dir = (appdata_dir or DEFAULT_APPDATA_DIR).expanduser()
         self.appdata_source_dir = (
             appdata_source_dir.expanduser()
@@ -234,7 +235,6 @@ class VaultwardenSecretProvider(SecretProvider):
         self._session_store = session_store or VaultwardenSessionStore()
         self._password_prompt = password_prompt or prompt_for_password_macos
         self._stdin_isatty = stdin_isatty or sys.stdin.isatty
-        self._environ = environ if environ is not None else os.environ
 
     @staticmethod
     def _normalize_server_url(server_url: str | None) -> str | None:
@@ -287,7 +287,7 @@ class VaultwardenSecretProvider(SecretProvider):
     def _data_file_has_login_state(self, path: Path) -> bool:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return False
         if not isinstance(payload, dict):
             return False

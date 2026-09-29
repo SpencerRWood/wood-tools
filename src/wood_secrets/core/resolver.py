@@ -98,7 +98,7 @@ def build_default_registry(
             session_value = vaultwarden.get("session_file")
             if isinstance(session_value, str) and session_value.strip():
                 session_file = session_value
-    except (ConfigError, OSError, KeyError, TypeError, ValueError):
+    except ConfigError, OSError, KeyError, TypeError, ValueError:
         pass
 
     return {
