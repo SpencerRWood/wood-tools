@@ -379,12 +379,81 @@ def block_story(
     }
 
 
+def _complete_parent_epic(
+    client: OpenProjectClient,
+    story: dict[str, Any],
+    closed: dict[str, Any],
+    completed_statuses: set[str],
+) -> dict[str, Any] | None:
+    """Check live descendants after Story completion, then update only its parent Epic."""
+    epic_id = extract_id_from_href(link_href(story, "parent"), "work_packages")
+    if epic_id is None:
+        return None
+    epic = api_get_json(client, f"/api/v3/work_packages/{epic_id}")
+    if work_package_type_name(epic) != "Epic":
+        return None
+    current = work_package_status_name(epic)
+    result: dict[str, Any] = {"id": epic_id, "status": current, "automatically_completed": False}
+    if current.casefold() in completed_statuses:
+        return {**result, "reason": "already_complete"}
+    # Explicitly include every status, including closed and rejected descendants.
+    filters = [
+        {"ancestor": {"operator": "=", "values": [str(epic_id)]}},
+        {"status": {"operator": "*", "values": []}},
+    ]
+    descendants = discovery.fetch_collection(
+        client,
+        "/api/v3/work_packages",
+        query={"filters": json.dumps(filters)},
+        page_size=PAGE_SIZE,
+    )
+    stories = [child for child in descendants if work_package_type_name(child) == "Story"]
+    if not any(int(child["id"]) == int(story["id"]) for child in stories):
+        raise StoryWorkflowError(
+            "INVALID_CONTEXT", "Completed Story is missing from Epic children."
+        )
+    incomplete = [
+        int(child["id"])
+        for child in stories
+        if work_package_status_name(child).casefold() not in completed_statuses | {"rejected"}
+    ]
+    if incomplete:
+        return {
+            **result,
+            "reason": "incomplete_stories",
+            "incomplete_story_count": len(incomplete),
+            "incomplete_story_ids": sorted(incomplete)[:50],
+        }
+    href = link_href(closed, "self")
+    if not href or not isinstance(epic.get("lockVersion"), int):
+        raise StoryWorkflowError("STATUS_UPDATE_FAILED", f"Epic WP-{epic_id} is not updatable.")
+    updated = api_request_json(
+        "PATCH",
+        client,
+        f"/api/v3/work_packages/{epic_id}",
+        body={"lockVersion": epic["lockVersion"], "_links": {"status": {"href": href}}},
+    )
+    if work_package_status_name(updated).casefold() != str(closed["name"]).casefold():
+        raise StoryWorkflowError("STATUS_UPDATE_FAILED", "Epic returned a different status.")
+    return {**result, "status": work_package_status_name(updated), "automatically_completed": True}
+
+
 def complete_story(
     client: OpenProjectClient, story_id: int, *, evidence: dict[str, Any], apply: bool
 ) -> dict[str, Any]:
     story = _story(client, story_id)
-    if work_package_status_name(story).casefold() != "in progress":
-        raise StoryWorkflowError("INVALID_TRANSITION", "Only In progress Stories can be completed.")
+    statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
+    completed_statuses = {
+        str(status.get("name") or "").casefold()
+        for status in statuses
+        if status.get("isClosed") and str(status.get("name") or "").casefold() != "rejected"
+    }
+    current = work_package_status_name(story)
+    already_complete = current.casefold() in completed_statuses
+    if current.casefold() != "in progress" and not already_complete:
+        raise StoryWorkflowError(
+            "INVALID_TRANSITION", "Only In progress or already complete Stories can be completed."
+        )
     repository = _repository(work_package_description_text(story))
     checks = evidence.get("repository_checks")
     ci = evidence.get("ci")
@@ -408,14 +477,37 @@ def complete_story(
     if apply and repository:
         _verify_ci_run(str(ci["url"]), repository)
     closed_status = os.environ.get("OPENPROJECT_STORY_CLOSED_STATUS", "Closed")
-    closed = find_named_element(
-        embedded_elements(api_get_json(client, "/api/v3/statuses")), closed_status
-    )
+    closed = find_named_element(statuses, closed_status)
     if not closed.get("isClosed") or closed_status.casefold() == "rejected":
         raise StoryWorkflowError("INVALID_CONTEXT", "Configured completion status is not closed.")
-    result = _status(client, story, closed_status, apply=apply)
+    result = (
+        {
+            "id": story_id,
+            "from_status": current,
+            "to_status": current,
+            "status": current,
+            "dry_run": not apply,
+            "already_complete": True,
+        }
+        if already_complete
+        else _status(client, story, closed_status, apply=apply)
+    )
+    epic = None
+    if apply:
+        try:
+            # Refetch the Story too: a concurrent reparent or reopen must not be inferred away.
+            epic = _complete_parent_epic(
+                client, _story(client, story_id), closed, completed_statuses
+            )
+        except StoryWorkflowError as exc:
+            raise StoryWorkflowError(
+                "EPIC_COMPLETION_FAILED",
+                f"Story WP-{story_id} is complete, but its parent Epic check failed ({exc.code}). "
+                "Retry story complete with the same evidence to recheck current OpenProject state.",
+            ) from exc
     return {
         "status": result,
+        "epic": epic,
         "validation_evidence": {
             "repository_checks": [check["name"] for check in checks] if repository else [],
             "ci_url": ci["url"] if repository else None,
