@@ -23,7 +23,11 @@ def repository(tmp_path):
 
 def contract(root, checks, **values):
     header = {"version": 1, "retry_safe": True, **values}
-    lines = ["[tool.wood.verify]"]
+    lines = [
+        "[tool.wood.workflow]",
+        f"output_directory = {json.dumps(str(root.parent / 'verification-output'))}",
+        "[tool.wood.verify]",
+    ]
     for key, value in header.items():
         lines.append(f"{key} = {json.dumps(value)}")
     for check in checks:
@@ -45,6 +49,7 @@ def test_named_required_optional_checks_and_safe_retry(repository):
     assert first["passed"] is second["passed"] is True
     assert [check["state"] for check in first["checks"]] == ["passed", "failed"]
     assert first["verification_file"] != second["verification_file"]
+    assert Path(first["log_dir"]).parent == repository.parent / "verification-output"
     assert first["source_fingerprint"] == second["source_fingerprint"]
     assert Path(first["verification_file"]).stat().st_mode & 0o777 == 0o600
     result = verification.verify_record(
