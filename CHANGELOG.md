@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.17.0 (2026-09-30)
+
+### Features
+
+- **hierarchy**: Provision verified repository planning context
+  ([#50](https://github.com/SpencerRWood/wood-tools/pull/50),
+  [`7b7e705`](https://github.com/SpencerRWood/wood-tools/commit/7b7e7057ba883d68ab140f460ab67053497ca308))
+
+
 ## v0.16.0 (2026-09-30)
 
 ### Bug Fixes
