@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.11.0 (2026-09-30)
+
+### Chores
+
+- **workflow**: Remove redundant agent mechanics (WP-405)
+  ([`780b934`](https://github.com/SpencerRWood/wood-tools/commit/780b9342ca066a5c1e7cddb29cd2bd0b0c99ae03))
+
+### Features
+
+- **story**: Complete parent Epic after final active Story closes
+  ([#44](https://github.com/SpencerRWood/wood-tools/pull/44),
+  [`23b6a19`](https://github.com/SpencerRWood/wood-tools/commit/23b6a19b61ed7dd79b0e52f0cbb81284add136bd))
+
+
 ## v0.10.0 (2026-09-29)
 
 ### Features
