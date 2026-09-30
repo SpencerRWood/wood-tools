@@ -23,6 +23,10 @@ dev = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.wood.openproject]
+initiative_id = 208
+project_id = 3
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["resources", "resources.*", "wood", "wood.*", "wood_project", "wood_project.*"]

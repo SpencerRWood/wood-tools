@@ -2,13 +2,11 @@
 
 ## Scope
 - `wood` is the only public executable. The v2 CLI is intentionally breaking; do not add aliases, forwarding wrappers, or legacy configuration loaders.
-- WT2.1 establishes the shared CLI, output, audit, and release standards. Later Stories add project, Story, repository, CI, deploy, and secret behavior.
 - Keep domain logic separable from parsing and remote transport. Migrate existing internals by capability, then delete the superseded implementation and update first-party callers in that Story.
 
 ## Development
 - Use uv and Python 3.14. Run `uv sync --active` in the active environment.
-- Use `uv run --active ruff check .`, `uv run --active ruff format --check .`, `uv run --active mypy`, `uv run --active pytest`, and `uv run --active pytest --cov=wood --cov-report=term-missing`.
-- Run `uv run --active pre-commit run --all-files` before review.
+- Run `wood repo validate --json` after edits and fix reported failures before review.
 - Keep full command logs on disk and report bounded summaries.
 
 ## CLI contract
