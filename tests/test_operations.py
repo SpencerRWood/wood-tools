@@ -26,6 +26,9 @@ def repository(tmp_path: Path, *, deployed: bool = False, checks: str = '"ruff"'
         if deployed
         else "name: Release\n"
     )
+    (tmp_path / "pyproject.toml").write_text(
+        f'[tool.wood.workflow]\noutput_directory = "{tmp_path.parent / "workflow-output"}"\n'
+    )
     return tmp_path
 
 

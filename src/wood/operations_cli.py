@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from . import operations
 from .output import Status, envelope
+from .workflow_files import WorkflowFilesError
 
 
 def add_operations_parsers(commands: argparse._SubParsersAction[Any]) -> None:
@@ -61,7 +62,7 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
         else:
             status, data = operations.deploy_status(root, args.environment)
         return envelope(command=command, status=status, summary=f"{command}: {status}.", data=data)
-    except operations.OperationsError as exc:
+    except (operations.OperationsError, WorkflowFilesError) as exc:
         return envelope(
             command=command,
             status=exc.status,

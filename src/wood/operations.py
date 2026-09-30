@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .output import Status
+from .workflow_files import output_directory, run_directory, snapshot_fingerprint, write_json
 
 
 class OperationsError(Exception):
@@ -255,15 +256,25 @@ def repo_validate(root: Path) -> dict[str, object]:
         raise OperationsError("CONTRACT_INVALID", "Node checks must be a string list.", "invalid")
     checks = checks + node_checks
     results: list[dict[str, object]] = []
-    log_dir = Path(tempfile.mkdtemp(prefix="wood-repo-validate-"))
+    log_dir = run_directory(root, "wood-repo-validate-")
+    output_dir = output_directory(root)
     with tempfile.TemporaryDirectory(prefix="wood-repo-checkout-") as temp:
         checkout = Path(temp) / "checkout"
         shutil.copytree(
             root,
             checkout,
-            ignore=_copy_ignores,
+            ignore=lambda directory, names: (
+                _copy_ignores(directory, names)
+                | {
+                    name
+                    for name in names
+                    if output_dir.is_relative_to(root.resolve())
+                    and (Path(directory) / name).resolve().is_relative_to(output_dir)
+                }
+            ),
         )
         _prune_empty_directories(checkout)
+        fingerprint = snapshot_fingerprint(root, checkout, output_dir)
         # pre-commit requires a repository, and all hooks run against this disposable copy.
         initialized = _run(["git", "init", "--quiet"], checkout).returncode == 0
         initialized = (
@@ -355,11 +366,18 @@ def repo_validate(root: Path) -> dict[str, object]:
                 )
             except OSError, subprocess.TimeoutExpired:
                 results.append({"name": check, "state": "unavailable"})
-    return {
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "wood-repository-validation",
+        "repository_root": str(root.resolve()),
+        "source_fingerprint": fingerprint,
         "checks": results,
         "passed": bool(results) and all(r["state"] == "passed" for r in results),
         "log_dir": str(log_dir),
     }
+    record_path = log_dir / "validation.json"
+    write_json(record_path, record)
+    return {**record, "validation_file": str(record_path)}
 
 
 def _gh(root: Path, path: str) -> dict[str, Any] | list[Any]:
