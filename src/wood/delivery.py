@@ -28,7 +28,6 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
     slug = evidence["repository"]
     pr = evidence["pull_request"]
     merged = pr["merge_sha"]
-    info = operations.repo_info(root)
     result = {
         "repository": _available(slug, "Git origin and Story Primary Repository"),
         "branch": _available(branch, pr["url"]),
@@ -39,6 +38,16 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
         "merged_revision": _available(merged, pr["url"]),
         "semantic_release": _missing("No verified semantic release contains the merge."),
     }
+    result.update(collect_optional_delivery(root, slug, merged))
+    return result
+
+
+def collect_optional_delivery(
+    root: Path, slug: str, merged: str, environment: str | None = None
+) -> dict[str, Any]:
+    """Resolve optional authorities against the Story merge, never the local HEAD."""
+    info = operations.repo_info(root)
+    result = {"semantic_release": _missing("No verified semantic release contains the merge.")}
     release_info = info["release"]
     assert isinstance(release_info, dict)
     if not release_info["semantic_release"]:
@@ -86,7 +95,15 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
     if not applicable:
         return result
     try:
-        status, deployed = operations.deploy_status(root)
+        status, deployed = (
+            operations.deploy_status(root)
+            if environment is None
+            else operations.deploy_status(root, environment)
+        )
+        if status in {"error", "stale", "unavailable"}:
+            result["deployed_revision"] = _missing(
+                f"Deployment is {status}; no successful revision-bound deployment verified."
+            )
         sha = deployed.get("commit_sha")
         if (
             status != "success"
@@ -95,12 +112,12 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
             or not _contains(root, slug, merged, sha)
         ):
             return result
-        environment = deployed.get("environment")
-        if not isinstance(environment, str) or not environment:
+        deployed_environment = deployed.get("environment")
+        if not isinstance(deployed_environment, str) or not deployed_environment:
             return result
         source = f"https://github.com/{slug}/deployments"
         result["deployed_revision"] = _available(
-            {"revision": sha, "environment": environment}, source
+            {"revision": sha, "environment": deployed_environment}, source
         )
         digest = deployed.get("digest")
         if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
@@ -111,14 +128,14 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
             if (
                 isinstance(attestation, dict)
                 and attestation.get("revision") == sha
-                and attestation.get("environment") == environment
+                and attestation.get("environment") == deployed_environment
                 and attestation.get("status") == "passed"
                 and isinstance(url := attestation.get("url"), str)
                 and url.startswith("https://")
             ):
                 result[field] = _available(
-                    {"revision": sha, "environment": environment, "status": "passed"}, url
+                    {"revision": sha, "environment": deployed_environment, "status": "passed"}, url
                 )
-    except operations.OperationsError:
-        pass
+    except operations.OperationsError as exc:
+        result["deployed_revision"] = _missing(str(exc))
     return result
