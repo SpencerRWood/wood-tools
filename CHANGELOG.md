@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.16.0 (2026-09-30)
+
+### Bug Fixes
+
+- **tests**: Use portable verification output directory
+  ([#49](https://github.com/SpencerRWood/wood-tools/pull/49),
+  [`a2320ea`](https://github.com/SpencerRWood/wood-tools/commit/a2320ea40c70e9b19f10c9404feea51fdafd3249))
+
+### Features
+
+- **repo**: Execute repository-defined verification checks
+  ([#49](https://github.com/SpencerRWood/wood-tools/pull/49),
+  [`a2320ea`](https://github.com/SpencerRWood/wood-tools/commit/a2320ea40c70e9b19f10c9404feea51fdafd3249))
+
+
 ## v0.15.0 (2026-09-30)
 
 ### Features
