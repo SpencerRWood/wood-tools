@@ -20,6 +20,7 @@ from wood_project.planning_release import release_number
 
 from . import discovery
 from .branches import create_branch, repo_state
+from .epics import completed_status_names, epic_stories, incomplete_stories
 from .models import StoryWorkflowError
 from .openproject import (
     api_get_json,
@@ -396,27 +397,12 @@ def _complete_parent_epic(
     result: dict[str, Any] = {"id": epic_id, "status": current, "automatically_completed": False}
     if current.casefold() in completed_statuses:
         return {**result, "reason": "already_complete"}
-    # Explicitly include every status, including closed and rejected descendants.
-    filters = [
-        {"ancestor": {"operator": "=", "values": [str(epic_id)]}},
-        {"status": {"operator": "*", "values": []}},
-    ]
-    descendants = discovery.fetch_collection(
-        client,
-        "/api/v3/work_packages",
-        query={"filters": json.dumps(filters)},
-        page_size=PAGE_SIZE,
-    )
-    stories = [child for child in descendants if work_package_type_name(child) == "Story"]
+    stories = epic_stories(client, epic_id)
     if not any(int(child["id"]) == int(story["id"]) for child in stories):
         raise StoryWorkflowError(
             "INVALID_CONTEXT", "Completed Story is missing from Epic children."
         )
-    incomplete = [
-        int(child["id"])
-        for child in stories
-        if work_package_status_name(child).casefold() not in completed_statuses | {"rejected"}
-    ]
+    incomplete = [int(child["id"]) for child in incomplete_stories(stories, completed_statuses)]
     if incomplete:
         return {
             **result,
@@ -443,11 +429,7 @@ def complete_story(
 ) -> dict[str, Any]:
     story = _story(client, story_id)
     statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
-    completed_statuses = {
-        str(status.get("name") or "").casefold()
-        for status in statuses
-        if status.get("isClosed") and str(status.get("name") or "").casefold() != "rejected"
-    }
+    completed_statuses = completed_status_names(statuses)
     current = work_package_status_name(story)
     already_complete = current.casefold() in completed_statuses
     if current.casefold() != "in progress" and not already_complete:

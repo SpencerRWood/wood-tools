@@ -53,8 +53,8 @@ def test_wood_help_exposes_diagnostics() -> None:
     help_text = build_parser().format_help()
 
     assert "Wood Tools v2 agent CLI" in help_text
-    assert "{contract,secret,doctor,project,story,repo,ci,deploy}" in help_text
-    assert "release" not in help_text
+    assert "{contract,secret,doctor,project,story,epic,release,repo,ci,deploy}" in help_text
+    assert "Inspect OpenProject releases" in help_text
 
 
 def test_single_public_entrypoint_and_no_manual_release_package() -> None:
