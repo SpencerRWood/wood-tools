@@ -8,13 +8,14 @@ from typing import Any, cast
 
 from . import operations
 from .output import Status, envelope
+from .verification import repo_verify
 from .workflow_files import WorkflowFilesError
 
 
 def add_operations_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     repo = commands.add_parser("repo", help="Inspect repository standards and validation")
     repo_actions = repo.add_subparsers(dest="repo_command", required=True)
-    for name in ("info", "standards", "validate"):
+    for name in ("info", "standards", "validate", "verify"):
         parser = repo_actions.add_parser(name)
         parser.add_argument("--json", dest="operations_json", action="store_true")
     ci = commands.add_parser("ci", help="Inspect centralized validation")
@@ -43,6 +44,9 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
                 data = operations.repo_standards(root)
                 if not data["conformant"]:
                     status = "invalid"
+            elif action == "verify":
+                data = repo_verify(root)
+                status = "success" if data["passed"] else "error"
             else:
                 data = operations.repo_validate(root)
                 if not data["passed"]:
@@ -61,7 +65,30 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
             )
         else:
             status, data = operations.deploy_status(root, args.environment)
-        return envelope(command=command, status=status, summary=f"{command}: {status}.", data=data)
+        warnings = []
+        if group == "repo" and action == "verify":
+            if not data["source_unchanged"]:
+                warnings.append(
+                    {
+                        "code": "VERIFICATION_SOURCE_CHANGED",
+                        "message": "Verification commands changed repository source.",
+                    }
+                )
+            checks = cast(list[dict[str, object]], data["checks"])
+            if any(not check["required"] and check["state"] != "passed" for check in checks):
+                warnings.append(
+                    {
+                        "code": "OPTIONAL_VERIFICATION_FAILED",
+                        "message": "Optional checks did not pass; inspect their logs.",
+                    }
+                )
+        return envelope(
+            command=command,
+            status=status,
+            summary=f"{command}: {status}.",
+            data=data,
+            warnings=warnings,
+        )
     except (operations.OperationsError, WorkflowFilesError) as exc:
         return envelope(
             command=command,

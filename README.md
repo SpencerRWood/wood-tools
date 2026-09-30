@@ -88,6 +88,38 @@ After `story complete --apply` closes a Story, it reads its current parent and a
 
 Repeating completion of an already-complete Story safely rechecks its Epic without rewriting the Story. An already-complete Epic is left alone. Evidence is still required on retries. If the Epic check or update fails after the Story closes, the command reports that partial outcome; rerun with the same evidence to retry against current OpenProject state. Status writes use OpenProject lock versions; the Story and Epic updates are separate API operations.
 
+### Repository verification
+
+`wood repo verify --json` runs repository-owned runtime/application checks declared in the root `pyproject.toml`. Wood Tools treats each command's exit code as its result; it does not interpret application output or implement application-specific verification. This is separate from `wood repo validate` and its development checks.
+
+```toml
+[tool.wood.verify]
+version = 1
+retry_safe = true
+
+[[tool.wood.verify.checks]]
+name = "runtime"
+argv = ["uv", "run", "--active", "--frozen", "python", "scripts/verify_runtime.py"]
+required = true
+timeout_seconds = 30
+directory = "."
+
+[[tool.wood.verify.checks]]
+name = "reconciliation"
+argv = ["uv", "run", "--active", "--frozen", "python", "scripts/verify_reconciliation.py"]
+required = false
+```
+
+The repository supplies these scripts. `retry_safe = true` is the repository author's explicit promise that all checks are safe to repeat, including after partial failure; checks should inspect state or use idempotent operations. Wood Tools does not infer or enforce application side-effect semantics and does not retry automatically. It validates the entire contract before starting anything and invokes argument arrays directly without a shell. Commands inherit the invoking environment, use no interactive stdin, and run in declaration order from their declared directory. Directories must exist within the repository, including after resolving symlinks. Unknown fields fail validation.
+
+Declare 1–20 checks with unique names of at most 60 letters, digits, underscores, or hyphens, starting with a letter or digit. Each `argv` contains 1–50 nonempty strings of at most 500 characters. `required` defaults to true; `directory` defaults to `.`; `timeout_seconds` defaults to 30 and must be an integer from 1 to 60. Combined timeouts cannot exceed 300 seconds. All checks run even if an earlier check fails. A timeout kills the process group so children do not remain running before a retry.
+
+Results include each check's name, required flag, `passed`/`failed`/`command_error`/`timed_out` state, exit code, private full log path and hash. Raw command arguments and output stay out of the JSON envelope. Optional failures produce a warning; required failures produce an error exit. If all checks are optional, their failures do not block the result. A check that changes Git source inputs makes the overall result fail. Missing or malformed contracts return a clear error. Every invocation creates a separate private record and logs under `tool.wood.workflow.output_directory` and returns `data.verification_file`.
+
+For a Story whose PR source declares verification, supply that saved record to `wood story evidence` using `--verification <verification.json>` alongside `--validation`, `--pr`, and `--ci-run`. Run verification against the exact implementation contents before committing, or against the PR source checkout. Evidence verifies the source fingerprint, source-revision contract, required checks, and log hashes; posting and completion reverify them without executing commands. Changing or losing the record/logs requires a new verification run. Optional check outcomes remain in the evidence. Repositories without a verification contract retain the existing validation/CI workflow and omit `--verification`.
+
+Records attest to the observed execution and source contents, not continued runtime health. Rerun verification when the target runtime changes; saving a record does not turn it into a durable runtime attestation for `wood delivery status`.
+
 ### Generated delivery inputs
 
 `wood repo validate --json` saves a complete `validation.json` record and returns its path as `data.validation_file`, alongside the full check logs. The record fingerprints the validated Git inputs, including new and modified files before commit. After the implementation PR merges, generate delivery inputs with:
