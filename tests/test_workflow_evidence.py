@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from test_story_cli import _story, settings
 
-from wood import evidence, operations, workflow_files
+from wood import evidence, operations, verification, workflow_files
 from wood.cli import main
 from wood_project.openproject import OpenProjectClient
 from wood_project.story import workflow
@@ -92,7 +93,7 @@ def delivered(tmp_path, monkeypatch):
     return state
 
 
-def generate(state, *, apply=True):
+def generate(state, *, apply=True, verification_path=None):
     return evidence.generate_evidence(
         OpenProjectClient(settings()),
         410,
@@ -100,7 +101,96 @@ def generate(state, *, apply=True):
         pr_number=44,
         run_id=123,
         apply=apply,
+        verification_path=verification_path,
     )
+
+
+@pytest.fixture
+def verified_delivery(delivered):
+    root = delivered["root"]
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + "\n[tool.wood.verify]\nversion = 1\nretry_safe = true\n"
+        '[[tool.wood.verify.checks]]\nname = "runtime"\nargv = '
+        + json.dumps([sys.executable, "-c", "pass"])
+        + "\n"
+    )
+    git(root, "add", "pyproject.toml")
+    git(root, "commit", "--quiet", "-m", "declare verification")
+    revision = git(root, "rev-parse", "HEAD")
+    delivered["pr"]["head"]["sha"] = revision
+    delivered["pr"]["merge_commit_sha"] = revision
+    delivered["run"]["head_sha"] = revision
+    delivered["record"] = operations.repo_validate(root)
+    delivered["verification"] = verification.repo_verify(root)
+    return delivered
+
+
+def test_declared_verification_required_by_story_source(verified_delivery):
+    with pytest.raises(StoryWorkflowError, match="provide --verification"):
+        generate(verified_delivery)
+
+
+def test_verification_consumed_and_reverified_without_execution(verified_delivery, monkeypatch):
+    path = Path(verified_delivery["verification"]["verification_file"])
+    result = generate(verified_delivery, verification_path=path)
+    assert "matching_repository_verification" in result["required_criteria"]
+    assert (
+        "Repository verification required checks passed: runtime"
+        in Path(result["update_file"]).read_text()
+    )
+    record = workflow_files.read_json(Path(result["evidence_file"]))
+
+    def execute(*_args):
+        pytest.fail("Evidence consumption must not execute checks")
+
+    monkeypatch.setattr(verification, "repo_verify", execute)
+    evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, record)
+    Path(verified_delivery["verification"]["checks"][0]["log_path"]).write_text("tampered")
+    with pytest.raises(workflow_files.WorkflowFilesError, match="Verification record or logs"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, record)
+
+
+def test_verification_cli_input_and_failure_blocks_evidence(verified_delivery, capsys):
+    path = verified_delivery["verification"]["verification_file"]
+    args = [
+        "story",
+        "evidence",
+        "410",
+        "--validation",
+        verified_delivery["record"]["validation_file"],
+        "--verification",
+        path,
+        "--pr",
+        "44",
+        "--ci-run",
+        "123",
+        "--json",
+    ]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["verification"]["path"] == path
+    record = workflow_files.read_json(Path(path))
+    record["passed"] = False
+    workflow_files.write_json(Path(path), record)
+    assert main(args) == 2
+    assert (
+        json.loads(capsys.readouterr().out)["errors"][0]["code"] == "VERIFICATION_EVIDENCE_INVALID"
+    )
+
+
+def test_later_contract_removal_does_not_bypass_source_requirements(verified_delivery):
+    root = verified_delivery["root"]
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().split("[tool.wood.verify]", 1)[0])
+    git(root, "add", "pyproject.toml")
+    git(root, "commit", "--quiet", "-m", "remove contract later")
+    with pytest.raises(StoryWorkflowError, match="provide --verification"):
+        generate(verified_delivery)
+
+
+def test_verification_cannot_attach_to_source_without_contract(delivered, tmp_path):
+    with pytest.raises(StoryWorkflowError, match="does not declare"):
+        generate(delivered, verification_path=tmp_path / "verification.json")
 
 
 def test_generation_binds_precommit_validation_to_merged_files(delivered):

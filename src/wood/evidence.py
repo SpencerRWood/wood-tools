@@ -15,6 +15,7 @@ from wood_project.story.openproject import work_package_description_text
 
 from . import operations
 from .delivery import collect_delivery
+from .verification import load_contract, verify_record
 from .workflow_files import (
     WorkflowFilesError,
     output_directory,
@@ -56,6 +57,7 @@ def _verify(
     validation_path: Path,
     pr_number: int,
     run_id: int,
+    verification_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if pr_number <= 0 or run_id <= 0:
         raise _invalid("PR and CI run IDs must be positive integers.")
@@ -160,6 +162,22 @@ def _verify(
             "merge_sha": merge_sha,
         },
     }
+    source_project = operations._run(["git", "show", f"{source_sha}:pyproject.toml"], root)
+    contract = load_contract(
+        root,
+        optional=True,
+        source_text=source_project.stdout if source_project.returncode == 0 else "",
+    )
+    if contract is not None:
+        if verification_path is None:
+            raise _invalid(
+                "Story source declares verification; provide --verification from repo verify."
+            )
+        evidence["verification"] = verify_record(
+            root, verification_path, fingerprint, contract=contract
+        )
+    elif verification_path is not None:
+        raise _invalid("Story source does not declare a verification contract.")
     return evidence, story, record, pr
 
 
@@ -171,10 +189,11 @@ def generate_evidence(
     pr_number: int,
     run_id: int,
     apply: bool,
+    verification_path: Path | None = None,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
     evidence, story, record, pr = _verify(
-        client, root, story_id, validation_path, pr_number, run_id
+        client, root, story_id, validation_path, pr_number, run_id, verification_path
     )
     delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
@@ -188,6 +207,11 @@ def generate_evidence(
         f"CI passed: {evidence['ci']['url']}\n"
         "Evidence verified against the current merged PR and CI state.\n"
     )
+    if "verification" in evidence:
+        names = ", ".join(
+            check["name"] for check in evidence["verification"]["checks"] if check["required"]
+        )
+        update += f"Repository verification required checks passed: {names or 'none declared'}\n"
     if len(update.encode("utf-8")) > MAX_COMMENT_BYTES:
         raise _invalid("Implementation update exceeds the supported activity size.")
     result: dict[str, Any] = {
@@ -206,6 +230,9 @@ def generate_evidence(
             "posted_implementation_summary",
         ],
     }
+    if "verification" in evidence:
+        result["verification"] = evidence["verification"]
+        result["required_criteria"].append("matching_repository_verification")
     if apply:
         directory = run_directory(root, f"wood-story-{story_id}-evidence-")
         update_path = directory / "implementation-update.md"
@@ -252,6 +279,7 @@ def verify_generated_evidence(
             validation_path,
             pr_number,
             run_id,
+            Path(evidence["verification"]["path"]) if "verification" in evidence else None,
         )
         for key, value in fresh.items():
             if evidence.get(key) != value:

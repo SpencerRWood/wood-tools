@@ -45,6 +45,7 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     )
     item.add_argument("id", type=int)
     item.add_argument("--validation", type=Path, required=True)
+    item.add_argument("--verification", type=Path)
     item.add_argument("--pr", type=int, required=True)
     item.add_argument("--ci-run", type=int, required=True)
     item.add_argument("--apply", action="store_true")
@@ -121,6 +122,7 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
                 client,
                 args.id,
                 validation_path=args.validation,
+                verification_path=args.verification,
                 pr_number=args.pr,
                 run_id=args.ci_run,
                 apply=apply,
