@@ -13,7 +13,10 @@ from wood_project.story.activity import add_activity, read_comment
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.repository_context import story_reference
 
+from . import evidence as story_evidence
+from . import operations
 from .output import Mutation, Status, envelope
+from .workflow_files import WorkflowFilesError, read_json
 
 
 def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
@@ -30,6 +33,15 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item = actions.add_parser("get")
     item.add_argument("id", type=int)
     item.add_argument("--offset", type=int, default=0)
+    item.add_argument("--json", dest="story_json", action="store_true")
+    item = actions.add_parser(
+        "evidence", help="Generate verified delivery inputs for a merged Story"
+    )
+    item.add_argument("id", type=int)
+    item.add_argument("--validation", type=Path, required=True)
+    item.add_argument("--pr", type=int, required=True)
+    item.add_argument("--ci-run", type=int, required=True)
+    item.add_argument("--apply", action="store_true")
     item.add_argument("--json", dest="story_json", action="store_true")
     item = actions.add_parser("create")
     item.add_argument("--project", type=int, required=True)
@@ -58,7 +70,9 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     activity_actions = activity.add_subparsers(dest="activity_command", required=True)
     add = activity_actions.add_parser("add")
     add.add_argument("id", type=int)
-    add.add_argument("--file", type=Path, required=True)
+    source = add.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", type=Path)
+    source.add_argument("--evidence", type=Path)
     add.add_argument("--apply", action="store_true")
     add.add_argument("--json", dest="story_json", action="store_true")
 
@@ -84,6 +98,15 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
         elif action == "next":
             ref, configured_project_id = story_reference(args.ref)
             data = workflow.next_story(client, ref, configured_project_id=configured_project_id)
+        elif action == "evidence":
+            data = story_evidence.generate_evidence(
+                client,
+                args.id,
+                validation_path=args.validation,
+                pr_number=args.pr,
+                run_id=args.ci_run,
+                apply=apply,
+            )
         elif action == "create":
             data = workflow.create_story(
                 client,
@@ -105,7 +128,13 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
         elif action == "block":
             data = workflow.block_story(client, args.id, args.reason, apply=apply)
         elif action == "activity":
-            data = add_activity(client, args.id, read_comment(args.file), apply=apply)
+            if args.evidence:
+                generated = read_json(args.evidence)
+                story_evidence.verify_generated_evidence(client, args.id, generated)
+                comment_path = Path(generated["implementation_update"]["path"])
+            else:
+                comment_path = args.file
+            data = add_activity(client, args.id, read_comment(comment_path), apply=apply)
         else:
             try:
                 evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
@@ -117,6 +146,8 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
                 raise StoryWorkflowError(
                     "INVALID_EVIDENCE", "Validation evidence must be an object."
                 )
+            if evidence.get("kind") == story_evidence.KIND:
+                story_evidence.verify_generated_evidence(client, args.id, evidence)
             data = workflow.complete_story(client, args.id, evidence=evidence, apply=apply)
         mutation: Mutation = (
             "read-only" if action in {"list", "get", "next"} else "mutating" if apply else "preview"
@@ -132,6 +163,14 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
             summary=summary,
             data=data,
             next_actions=[data["next_action"]] if "next_action" in data else [],
+        )
+    except (operations.OperationsError, WorkflowFilesError) as exc:
+        return envelope(
+            command=command,
+            status=exc.status,
+            mutation="mutating" if apply else "read-only",
+            summary=str(exc),
+            errors=[{"code": exc.code, "message": str(exc)}],
         )
     except StoryWorkflowError as exc:
         status: Status = (

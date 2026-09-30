@@ -53,6 +53,32 @@ After `story complete --apply` closes a Story, it reads its current parent and a
 
 Repeating completion of an already-complete Story safely rechecks its Epic without rewriting the Story. An already-complete Epic is left alone. Evidence is still required on retries. If the Epic check or update fails after the Story closes, the command reports that partial outcome; rerun with the same evidence to retry against current OpenProject state. Status writes use OpenProject lock versions; the Story and Epic updates are separate API operations.
 
+### Generated delivery inputs
+
+`wood repo validate --json` saves a complete `validation.json` record and returns its path as `data.validation_file`, alongside the full check logs. The record fingerprints the validated Git inputs, including new and modified files before commit. After the implementation PR merges, generate delivery inputs with:
+
+```text
+wood story evidence <id> --validation <validation-file> --pr <number> --ci-run <run-id> --json
+wood story evidence <id> --validation <validation-file> --pr <number> --ci-run <run-id> --apply --json
+wood story activity add <id> --evidence <evidence-file> --json
+wood story activity add <id> --evidence <evidence-file> --apply --json
+wood story complete <id> --evidence <evidence-file> --json
+wood story complete <id> --evidence <evidence-file> --apply --json
+```
+
+Inject OpenProject credentials through Infisical. Use `data.evidence_file` from generation for the activity and completion commands. `data.update_file` is the generated implementation-update Markdown; callers can also use the existing activity `--file` option. Evidence generation previews without creating files and `--apply` writes only local files. PR management remains through `gh`.
+
+Generation requires a clean checkout containing the merged PR, a `feature/op-<id>-` source branch for the selected Story, a matching Primary Repository, all repository-required passing checks and their logs, and a successful `validate.yml` run on the PR source or merge SHA. The validated content fingerprint must match the PR source revision; committing unchanged validated files does not require another validation run. The PR source revision must exist locally (fetch it if needed). Generated evidence binds the Story, repository, PR, source and merge revisions, validation record, and CI run. Both `--evidence` consumers recheck live PR/CI results and the generated files before preview or apply. Altered or missing inputs must be regenerated. The generated update includes the Story subject, PR, revisions, checks, and CI; separately record material limitations or release/deployment details when applicable.
+
+Configure all validation logs and generated delivery files in the current repository's root `pyproject.toml`:
+
+```toml
+[tool.wood.workflow]
+output_directory = "/private/tmp"
+```
+
+The default is `/private/tmp` when omitted. Relative paths resolve from the repository root; each operation creates a unique private run directory. JSON and update files have owner-only permissions. An invalid or unwritable path produces a structured error instead of silently changing directories. Choose a writable override on systems without `/private/tmp`; ignore a repository-relative output directory in Git. Disposable test checkouts remain temporary. Keep the validation record and logs through delivery: operating-system cleanup may remove temporary files. Regenerate the evidence if its files disappear; if its validation record or logs disappear, validate the exact PR implementation contents again (not unrelated later release changes). Existing manually supplied completion evidence and activity files remain available for unsupported workflows.
+
 `wood story activity add <id> --file <path> --json` previews a UTF-8 comment of up to 4096 bytes. Add `--apply` to post it and verify the activity's Story and exact comment by readback. An `Implementation update (WP-<id>)` first-line heading makes retries inspect all activity pages: identical text reuses the existing activity ID, while different text blocks a duplicate. This command posts an activity only; Story closure still uses `wood story complete` and its validation gates.
 
 For a Story with a Primary Repository, completion evidence must contain nonempty `repository_checks` with `{ "name": "...", "status": "passed" }` entries and `ci` with `{ "url": "https://github.com/OWNER/REPO/actions/runs/ID", "status": "passed" }`. On apply, the CLI reads that GitHub Actions run and requires a completed, successful conclusion. A Story without a repository requires `validation_summary`. The closed status defaults to `Closed` and can be set with `OPENPROJECT_STORY_CLOSED_STATUS`; it must be marked closed in OpenProject. The CLI returns the next action and does not commit, push, merge, open a PR, or create a release.

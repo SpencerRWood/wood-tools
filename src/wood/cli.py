@@ -94,6 +94,7 @@ def _contract() -> dict[str, object]:
                 "story block",
                 "story activity add",
                 "story complete",
+                "story evidence",
                 "repo info",
                 "repo validate",
                 "repo standards",
