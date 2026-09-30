@@ -37,6 +37,37 @@ Use `wood secret status --json` for Infisical CLI, context, authentication, and 
 
 ## Story workflow
 
+### Epic and planning Release inspection
+
+```sh
+wood epic list --json
+wood epic get 'Foundation & Standards' --json
+wood epic get 389 --json
+wood release list --json
+wood release get R1 --json
+wood release get 20 --json
+```
+
+These commands read current OpenProject state and never mutate it. Release means an
+OpenProject planning version; publishing tags and GitHub Releases remains owned by
+semantic-release. Run under Infisical, using the checkout's `uv run --active --frozen wood`
+during development. Project context comes from the repository's
+`[tool.wood.openproject].project_id`; override it with `--project <id>`.
+Lookup accepts numeric IDs or exact names within that project. Duplicate names
+return an ambiguous result with candidate IDs. Other work-package types cannot be
+selected as Epics. Both lists accept `--status <name>` and `--offset <n>`.
+
+All API pages are fetched before filtering or calculating totals. Results show at
+most 50 rows with `total`, `offset`, and `next_offset`; Epic get uses `--offset` for
+child Stories. Epic get reports live child Story statuses, incomplete counts,
+`completion_ready`, and `already_complete`. Closed status definitions and Rejected
+handling are shared with Story completion. Unknown or active statuses block
+readiness, including on later pages; an Epic without Stories is not ready. Already
+complete Epics are still inspected without writes. Missing API pages fail the
+command instead of reporting readiness. These reads are observations, not a
+transactional guarantee: Story completion always rechecks live state before writing.
+Release inspection reports status and available start/end dates.
+
 Run Story commands from the target repository under the same Infisical environment, using an installed `wood` executable. In the Wood Tools checkout, use `uv run --active --frozen wood` to exercise the checked-out code. The repository root `pyproject.toml` may optionally declare:
 
 ```toml

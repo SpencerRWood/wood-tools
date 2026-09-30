@@ -32,8 +32,10 @@ def fetch_collection(
     *,
     query: dict[str, str],
     page_size: int,
+    require_total: bool = False,
 ) -> list[dict[str, Any]]:
     elements: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
     offset = 1
     while True:
         page_query = dict(query)
@@ -41,8 +43,25 @@ def fetch_collection(
         page_query["offset"] = str(offset)
         document = api_get_json(client, path, query=page_query)
         page = embedded_elements(document)
+        for item in page:
+            identifier = item.get("id")
+            if isinstance(identifier, int):
+                if identifier in seen_ids:
+                    raise StoryWorkflowError(
+                        "INCOMPLETE_COLLECTION",
+                        "OpenProject returned duplicate collection entries.",
+                    )
+                seen_ids.add(identifier)
         elements.extend(page)
-        total = int(document.get("total") or len(elements))
+        reported_total = document.get("total")
+        if (require_total and reported_total is None) or (
+            reported_total is not None
+            and (type(reported_total) is not int or reported_total < len(elements))
+        ):
+            raise StoryWorkflowError(
+                "INCOMPLETE_COLLECTION", "OpenProject returned an invalid collection total."
+            )
+        total = reported_total if reported_total is not None else len(elements)
         if len(elements) >= total:
             return elements
         if not page:
