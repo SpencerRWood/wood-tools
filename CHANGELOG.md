@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.13.0 (2026-09-30)
+
+### Features
+
+- Add live Epic and planning Release inspection (WP-411)
+  ([#46](https://github.com/SpencerRWood/wood-tools/pull/46),
+  [`ef957bc`](https://github.com/SpencerRWood/wood-tools/commit/ef957bcfd5fdfa727958d0524d42f322f0b94614))
+
+
 ## v0.12.0 (2026-09-30)
 
 ### Features
