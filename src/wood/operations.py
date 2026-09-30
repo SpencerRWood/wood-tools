@@ -490,6 +490,16 @@ def ci_failures(root: Path) -> tuple[Status, dict[str, object]]:
     }
 
 
+def _delivery_attestation(payload: object, field: str) -> dict[str, str] | None:
+    value = payload.get(field) if isinstance(payload, dict) else None
+    if not isinstance(value, dict):
+        return None
+    keys = ("revision", "environment", "status", "url")
+    if not all(isinstance(value.get(key), str) for key in keys):
+        return None
+    return {key: value[key] for key in keys}
+
+
 def deploy_status(root: Path, environment: str | None = None) -> tuple[Status, dict[str, object]]:
     applicable = _workflows(root)["deployment"]
     if not applicable:
@@ -563,6 +573,8 @@ def deploy_status(root: Path, environment: str | None = None) -> tuple[Status, d
         "latest_release": tag,
         "commit_sha": deployment.get("sha"),
         "digest": digest,
+        "infrastructure_promotion": _delivery_attestation(payload, "infrastructure_promotion"),
+        "runtime_verification": _delivery_attestation(payload, "runtime_verification"),
         "state": state,
         "status_url": latest.get("target_url"),
         "stale": stale,

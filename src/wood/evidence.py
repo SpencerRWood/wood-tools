@@ -14,6 +14,7 @@ from wood_project.story.models import StoryWorkflowError
 from wood_project.story.openproject import work_package_description_text
 
 from . import operations
+from .delivery import collect_delivery
 from .workflow_files import (
     WorkflowFilesError,
     output_directory,
@@ -172,9 +173,10 @@ def generate_evidence(
     apply: bool,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
-    evidence, story, record, _pr = _verify(
+    evidence, story, record, pr = _verify(
         client, root, story_id, validation_path, pr_number, run_id
     )
+    delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
     update = (
         f"Implementation update (WP-{story_id})\n\n"
@@ -196,6 +198,13 @@ def generate_evidence(
         "log_dir": record["log_dir"],
         "pr_url": evidence["pull_request"]["url"],
         "ci_url": evidence["ci"]["url"],
+        "delivery": delivery,
+        "required_criteria": [
+            "matching_repository_validation",
+            "merged_story_pr",
+            "passed_revision_ci",
+            "posted_implementation_summary",
+        ],
     }
     if apply:
         directory = run_directory(root, f"wood-story-{story_id}-evidence-")
@@ -210,6 +219,12 @@ def generate_evidence(
         evidence["implementation_update"] = {
             "path": str(update_path),
             "sha256": _file_hash(update_path),
+        }
+        delivery_path = directory / "delivery-snapshot.json"
+        write_json(delivery_path, delivery)
+        evidence["delivery_snapshot"] = {
+            "path": str(delivery_path),
+            "sha256": _file_hash(delivery_path),
         }
         evidence_path = directory / "completion-evidence.json"
         write_json(evidence_path, evidence)
@@ -246,5 +261,12 @@ def verify_generated_evidence(
         update = evidence["implementation_update"]
         if _file_hash(Path(update["path"])) != update["sha256"]:
             raise _invalid("Generated implementation update changed; regenerate it.")
+        snapshot = evidence.get("delivery_snapshot")
+        if snapshot is not None:
+            if (
+                not isinstance(snapshot, dict)
+                or _file_hash(Path(snapshot["path"])) != snapshot["sha256"]
+            ):
+                raise _invalid("Delivery snapshot changed; regenerate it.")
     except (KeyError, TypeError, ValueError) as exc:
         raise _invalid("Generated evidence structure is invalid; regenerate it.") from exc
