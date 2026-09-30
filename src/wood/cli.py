@@ -10,6 +10,7 @@ from typing import Never
 
 from resources.cli.audit import write_audit_event
 
+from .delivery_status import add_delivery_parser, run_delivery_command
 from .diagnostics import doctor, secret_command
 from .operations_cli import add_operations_parsers, run_operations_command
 from .output import EXIT_CODES, envelope, exit_code, render
@@ -68,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_story_parser(commands)
     add_planning_parsers(commands)
     add_operations_parsers(commands)
+    add_delivery_parser(commands)
     return parser
 
 
@@ -109,6 +111,7 @@ def _contract() -> dict[str, object]:
                 "ci status",
                 "ci failures",
                 "deploy status",
+                "delivery status",
             ],
             "exit_codes": EXIT_CODES,
             "mutation_kinds": ["read-only", "preview", "mutating"],
@@ -132,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
                 "story_json",
                 "planning_json",
                 "operations_json",
+                "delivery_json",
             )
         )
         if parsed.command is None:
@@ -167,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = run_planning_command(parsed)
         elif parsed.command in {"repo", "ci", "deploy"}:
             payload = run_operations_command(parsed, Path.cwd())
+        elif parsed.command == "delivery":
+            payload = run_delivery_command(parsed, Path.cwd())
         else:
             payload = _contract()
     except _ArgumentError:
