@@ -121,11 +121,15 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
         mutation: Mutation = (
             "read-only" if action in {"list", "get", "next"} else "mutating" if apply else "preview"
         )
+        summary = f"Story {action} completed."
+        epic = data.get("epic")
+        if action == "complete" and isinstance(epic, dict) and epic.get("automatically_completed"):
+            summary += f" Parent Epic WP-{epic['id']} automatically completed ({epic['status']})."
         return envelope(
             command=command,
             status="success",
             mutation=mutation,
-            summary=f"Story {action} completed.",
+            summary=summary,
             data=data,
             next_actions=[data["next_action"]] if "next_action" in data else [],
         )

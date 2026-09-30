@@ -246,6 +246,7 @@ def test_start_requires_closed_predecessors(monkeypatch) -> None:
 
 def test_complete_requires_validation_evidence(monkeypatch) -> None:
     monkeypatch.setattr(workflow, "_story", lambda *_args: _story(status="In progress"))
+    _fake_api(monkeypatch, _story(status="In progress"))
     with pytest.raises(workflow.StoryWorkflowError, match="validation evidence"):
         workflow.complete_story(OpenProjectClient(settings()), 301, evidence={}, apply=False)
 

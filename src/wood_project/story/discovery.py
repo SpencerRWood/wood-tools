@@ -43,9 +43,13 @@ def fetch_collection(
         page = embedded_elements(document)
         elements.extend(page)
         total = int(document.get("total") or len(elements))
-        if len(elements) >= total or not page:
+        if len(elements) >= total:
             return elements
-        offset += len(page)
+        if not page:
+            raise StoryWorkflowError(
+                "INCOMPLETE_COLLECTION", "OpenProject returned an incomplete collection."
+            )
+        offset += 1
 
 
 def fetch_descendants(
