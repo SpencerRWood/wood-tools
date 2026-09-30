@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.15.0 (2026-09-30)
+
+### Features
+
+- **delivery**: Reconcile authoritative Story delivery status
+  ([#48](https://github.com/SpencerRWood/wood-tools/pull/48),
+  [`87350a9`](https://github.com/SpencerRWood/wood-tools/commit/87350a93c4e0f9c1ba38e2d66397526fde0a4be2))
+
+
 ## v0.14.0 (2026-09-30)
 
 ### Features
