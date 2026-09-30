@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.12.0 (2026-09-30)
+
+### Features
+
+- **story**: Generate verified workflow evidence and delivery inputs
+  ([#45](https://github.com/SpencerRWood/wood-tools/pull/45),
+  [`dd796bc`](https://github.com/SpencerRWood/wood-tools/commit/dd796bc97c8f0f83dcf102f6c0ee7eecdf784d56))
+
+
 ## v0.11.0 (2026-09-30)
 
 ### Chores
