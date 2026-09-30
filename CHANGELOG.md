@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.14.0 (2026-09-30)
+
+### Features
+
+- **story**: Inspect summaries and normalize delivery evidence (WP-413)
+  ([#47](https://github.com/SpencerRWood/wood-tools/pull/47),
+  [`a3b1bf9`](https://github.com/SpencerRWood/wood-tools/commit/a3b1bf9ec59519df4254139d6c6a3bc7c0a88ce9))
+
+
 ## v0.13.0 (2026-09-30)
 
 ### Features
