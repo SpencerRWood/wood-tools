@@ -54,7 +54,8 @@ def test_wood_help_exposes_diagnostics() -> None:
 
     assert "Wood Tools v2 agent CLI" in help_text
     assert (
-        "{contract,secret,doctor,project,story,epic,release,repo,ci,deploy,delivery}" in help_text
+        "{contract,secret,doctor,project,story,epic,release,repo,ci,deploy,delivery,hierarchy}"
+        in help_text
     )
     assert "Inspect OpenProject releases" in help_text
 
