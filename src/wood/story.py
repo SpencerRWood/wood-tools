@@ -9,7 +9,13 @@ from typing import Any
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
 from wood_project.story import workflow
-from wood_project.story.activity import add_activity, read_comment
+from wood_project.story.activity import (
+    add_activity,
+    inspect_activities,
+    read_comment,
+    require_summary,
+    upsert_summary,
+)
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.repository_context import story_reference
 
@@ -68,6 +74,10 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
         item.add_argument("--json", dest="story_json", action="store_true")
     activity = actions.add_parser("activity")
     activity_actions = activity.add_subparsers(dest="activity_command", required=True)
+    listing = activity_actions.add_parser("list")
+    listing.add_argument("id", type=int)
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--json", dest="story_json", action="store_true")
     add = activity_actions.add_parser("add")
     add.add_argument("id", type=int)
     source = add.add_mutually_exclusive_group(required=True)
@@ -75,11 +85,19 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     source.add_argument("--evidence", type=Path)
     add.add_argument("--apply", action="store_true")
     add.add_argument("--json", dest="story_json", action="store_true")
+    summary = activity_actions.add_parser("summary")
+    summary.add_argument("id", type=int)
+    source = summary.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", type=Path)
+    source.add_argument("--evidence", type=Path)
+    summary.add_argument("--expected-sha256", required=True)
+    summary.add_argument("--apply", action="store_true")
+    summary.add_argument("--json", dest="story_json", action="store_true")
 
 
 def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
     action = args.story_command
-    command = f"story {action}" + (" add" if action == "activity" else "")
+    command = f"story {action}" + (f" {args.activity_command}" if action == "activity" else "")
     apply = getattr(args, "apply", False)
     try:
         client = OpenProjectClient(load_settings())
@@ -128,13 +146,24 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
         elif action == "block":
             data = workflow.block_story(client, args.id, args.reason, apply=apply)
         elif action == "activity":
-            if args.evidence:
+            if args.activity_command == "list":
+                data = inspect_activities(client, args.id, offset=args.offset)
+            elif args.evidence:
                 generated = read_json(args.evidence)
                 story_evidence.verify_generated_evidence(client, args.id, generated)
                 comment_path = Path(generated["implementation_update"]["path"])
             else:
                 comment_path = args.file
-            data = add_activity(client, args.id, read_comment(comment_path), apply=apply)
+            if args.activity_command == "summary":
+                data = upsert_summary(
+                    client,
+                    args.id,
+                    read_comment(comment_path),
+                    expected_sha256=args.expected_sha256,
+                    apply=apply,
+                )
+            elif args.activity_command == "add":
+                data = add_activity(client, args.id, read_comment(comment_path), apply=apply)
         else:
             try:
                 evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
@@ -148,9 +177,17 @@ def run_story_command(args: argparse.Namespace) -> dict[str, Any]:
                 )
             if evidence.get("kind") == story_evidence.KIND:
                 story_evidence.verify_generated_evidence(client, args.id, evidence)
+                require_summary(
+                    client, args.id, read_comment(Path(evidence["implementation_update"]["path"]))
+                )
             data = workflow.complete_story(client, args.id, evidence=evidence, apply=apply)
         mutation: Mutation = (
-            "read-only" if action in {"list", "get", "next"} else "mutating" if apply else "preview"
+            "read-only"
+            if action in {"list", "get", "next"}
+            or (action == "activity" and args.activity_command == "list")
+            else "mutating"
+            if apply
+            else "preview"
         )
         summary = f"Story {action} completed."
         epic = data.get("epic")

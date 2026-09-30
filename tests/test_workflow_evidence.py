@@ -124,6 +124,24 @@ def test_preview_does_not_create_generated_files(delivered):
     assert set(delivered["output"].rglob("*")) == before
 
 
+def test_delivery_snapshot_is_separate_and_hash_bound(delivered):
+    result = generate(delivered)
+    record = workflow_files.read_json(Path(result["evidence_file"]))
+    snapshot = Path(record["delivery_snapshot"]["path"])
+    assert workflow_files.read_json(snapshot) == result["delivery"]
+    assert "runtime_verification" in result["delivery"]
+    snapshot.write_text("{}")
+    with pytest.raises(StoryWorkflowError, match="Delivery snapshot changed"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, record)
+
+
+def test_completion_requires_posted_matching_summary(delivered, monkeypatch, capsys):
+    result = generate(delivered)
+    monkeypatch.setattr("wood_project.story.activity._activities", lambda *_args: [])
+    assert main(["story", "complete", "410", "--evidence", result["evidence_file"], "--json"]) == 3
+    assert json.loads(capsys.readouterr().out)["errors"][0]["code"] == "VALIDATION_REQUIRED"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -241,6 +259,7 @@ def test_cli_generation_activity_and_complete_consume_outputs(delivered, monkeyp
     assert activity_calls[0][0].startswith("Implementation update (WP-410)")
     assert activity_calls[0][1] is False
     calls = []
+    monkeypatch.setattr("wood.story.require_summary", lambda *_args: None)
     monkeypatch.setattr(
         workflow,
         "complete_story",
