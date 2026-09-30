@@ -39,6 +39,53 @@ Use `wood secret status --json` for Infisical CLI, context, authentication, and 
 
 `wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name. Inject `OPENPROJECT_URL` and `OPENPROJECT_API_TOKEN` via Infisical for these commands; `OPENPROJECT_PROJECT_ID` is optional.
 
+## Deterministic hierarchy provisioning
+
+`wood hierarchy plan --json` discovers an existing Project and plans one Initiative,
+open planning Release, and Epic. `wood hierarchy ensure --json` previews the same
+plan. Both use `[tool.wood.openproject]` IDs when selectors are omitted. Override
+them with `--project <id|identifier|exact-name>` and
+`--initiative`, `--release`, or `--epic <id|exact-name>`.
+An unknown name proposes creation; an unknown numeric ID fails. Projects must
+already exist. Example, under the usual Infisical credential injection:
+
+```sh
+wood hierarchy plan --project 3 --initiative Wood-Tools --release R1 \
+  --epic 'Deterministic Delivery-Control Surface' --json
+wood hierarchy ensure --project 3 --initiative Wood-Tools --release R1 \
+  --epic 'Deterministic Delivery-Control Surface' --apply --plan-hash <hash> --json
+```
+
+The plan lists reuse IDs and exact POST endpoints and `body_json` for creations.
+`planned:initiative` and `planned:release` links are resolved to verified creation
+IDs during apply. It also shows the proposed four-ID mapping, mapping file/action,
+and `plan_hash`. Names are exact and at most 120 characters; creation requests must
+fit the bounded preview. All discovery pages must be complete. Duplicate names
+fail as ambiguous; explicit IDs disambiguate existing objects. Closed objects,
+shared Releases defined by another Project, and Epics with a different Initiative
+parent or Release fail instead of being silently changed or duplicated.
+
+Mutation requires `ensure --apply --plan-hash <reviewed-hash>`. Changed plans or
+repository files fail before application. Apply re-discovers before each creation,
+reads back both created and reused objects, verifies IDs and relationships, and
+rechecks the live hierarchy before atomically saving `project_id`, `initiative_id`,
+`release_id`, and `epic_id` in the root `pyproject.toml`. The writer preserves other
+tables, mapping keys, and comments. It requires a standard
+`[tool.wood.openproject]` table with unquoted integer ID assignments; inline, dotted,
+or otherwise unsupported mapping syntax must be converted before planning.
+A missing `pyproject.toml` is created only on apply. A retry with a fresh plan
+reuses existing objects and leaves an identical mapping untouched.
+
+If an apply fails partway, `data.applied` retains known IDs and their verification
+state; inspect a new plan before retrying. Verified objects are retained rather
+than rolled back. A local advisory lock serializes cooperating writers for the
+same checkout. OpenProject provides no atomic name-uniqueness constraint, so
+writers in different checkouts or external clients can race between discovery
+and creation. Avoid simultaneous hierarchy provisioning; subsequent discovery
+rejects duplicates. Local file preconditions likewise cannot exclude an external
+edit between the final check and replacement. These commands provision planning
+objects, not Stories or software releases.
+
 ## Story workflow
 
 ### Epic and planning Release inspection
