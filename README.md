@@ -1,6 +1,6 @@
 # Wood Tools
 
-Wood Tools v2 is a single `wood` command for deterministic agent workflows. Secret readiness and aggregate diagnostics are part of [WP-397](https://projects.woodhost.cloud/work_packages/397). Project discovery and Implementation Workbook import are part of [WP-398](https://projects.woodhost.cloud/work_packages/398).
+Wood Tools provides the `wood` command for deterministic agent workflows.
 
 ## Install and inspect
 
@@ -11,7 +11,7 @@ uv sync --active
 uv run --active wood contract --json
 ```
 
-`wood` is the only installed public executable. The v1 project, resource, and template command routers and their unused packages have been removed. The OpenProject transport and workbook logic used by the v2 commands remain internal.
+`wood` is the only installed public executable. OpenProject transport and workbook logic remain internal to the supported commands.
 
 ## Repository and operations inspection
 
@@ -71,6 +71,6 @@ Every informational command supports `--json`. The version 2 envelope has `schem
 
 ## Development and release
 
-The declared checks are Ruff, Ruff format, mypy, pytest, coverage of the v2 `wood` foundation, and pre-commit. Run them with `uv run --active ...`; the commands are listed in [AGENTS.md](AGENTS.md).
+Run `wood repo validate --json` for the checks declared by this repository. Inspect the returned log paths for failures.
 
 [Validation](.github/workflows/validate.yml) and [release](.github/workflows/release.yml) call the current `SpencerRWood/workflows@v1` contract with capabilities in [.github/release.toml](.github/release.toml). Python semantic-release owns version changes, tags, and GitHub Releases. Wood Tools contains no manual release mutation command.
