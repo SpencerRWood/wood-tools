@@ -28,6 +28,8 @@ def authority(monkeypatch):
             "base": {"ref": "main", "repo": {"full_name": "owner/wood-tools"}},
         },
         "run": {"id": 7, "status": "completed", "conclusion": "success", "head_sha": "a" * 40},
+        "release_run": None,
+        "release_jobs": [],
         "calls": [],
         "optional": {
             name: _missing("Not configured.", applicable=False)
@@ -61,6 +63,10 @@ def authority(monkeypatch):
             return state["search"]
         if "/pulls/" in path:
             return state["pr"]
+        if "workflows/release.yml/" in path:
+            return {"workflow_runs": [state["release_run"]] if state["release_run"] else []}
+        if "/attempts/" in path:
+            return {"total_count": len(state["release_jobs"]), "jobs": state["release_jobs"]}
         return {"workflow_runs": [state["run"]] if state["run"] else []}
 
     monkeypatch.setattr(operations, "_gh", gh)
@@ -81,7 +87,9 @@ def test_delivered_cli_and_normalized_fields(authority, capsys):
     assert data["fields"]["pull_request"]["value"] == {"number": 9, "state": "merged"}
     assert data["fields"]["release"]["value"]["version"] == "v1.0.0"
     assert data["fields"]["verification_state"]["state"] == "not_applicable"
-    assert len(authority["calls"]) == 3
+    assert data["fields"]["merged_revision"]["value"] == "b" * 40
+    assert data["observed_at"].endswith("+00:00")
+    assert len(authority["calls"]) == 4
 
 
 @pytest.mark.parametrize(
@@ -224,6 +232,88 @@ def test_bounded_output_and_deterministic_result(authority, capsys):
     assert main(["delivery", "status", "414", "--json"]) == 0
     first = capsys.readouterr().out
     assert main(["delivery", "status", "414", "--json"]) == 0
-    assert first == capsys.readouterr().out
+    second = json.loads(capsys.readouterr().out)
+    previous = json.loads(first)
+    previous["data"].pop("observed_at")
+    second["data"].pop("observed_at")
+    assert previous == second
     assert len(json.loads(first)["data"]["blocker"]) == 500
     assert len(first) < 5000
+
+
+def release_attempt(authority, *, conclusion="failure"):
+    authority["release_run"] = {
+        "id": 73,
+        "run_attempt": 6,
+        "head_sha": "b" * 40,
+        "status": "completed",
+        "conclusion": conclusion,
+    }
+    authority["release_jobs"] = [
+        {
+            "id": 102,
+            "run_id": 73,
+            "name": "promotion / Validate and merge exact dev image PR",
+            "status": "completed",
+            "conclusion": conclusion,
+            "steps": [{"name": "Create exact infrastructure PR", "conclusion": conclusion}],
+        }
+    ]
+
+
+def test_release_attempt_identifies_rag_promotion_blocker(authority, capsys):
+    release_attempt(authority)
+    authority["optional"]["container_image_digest"] = _missing("No deployment record.")
+    assert main(["delivery", "status", "414", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["delivery_stage"] == "infrastructure_promotion"
+    assert data["release_jobs"][0]["failed_steps"] == ["Create exact infrastructure PR"]
+    assert data["fields"]["release_run"]["value"]["attempt"] == 6
+    assert "--attempt 6 --job 102 --log-failed" in data["next_action"]
+
+
+def test_validation_failure_still_precedes_promotion_failure(authority):
+    release_attempt(authority)
+    authority["run"]["conclusion"] = "failure"
+    result = reconcile()
+    assert result["delivery_stage"] == "ci"
+    assert result["fields"]["release_run"]["state"] == "available"
+    assert result["release_jobs"][0]["conclusion"] == "failure"
+
+
+def test_successful_release_retains_missing_deployment_authority(authority):
+    release_attempt(authority, conclusion="success")
+    for name in ("container_image_digest", "deployed_revision", "runtime_verification"):
+        authority["optional"][name] = _missing("No verified deployment evidence.")
+    result = reconcile()
+    assert result["fields"]["release_run"]["value"]["conclusion"] == "success"
+    assert result["fields"]["verification_state"]["state"] == "unavailable"
+    assert result["delivery_stage"] == "container_image"
+
+
+def test_disabled_release_never_queries_pipeline(authority, monkeypatch):
+    monkeypatch.setattr(
+        operations,
+        "repo_info",
+        lambda root: {"release": {"semantic_release": False}, "deployment": {"applicable": False}},
+    )
+    authority["optional"]["semantic_release"] = _missing("Disabled.", applicable=False)
+    result = reconcile()
+    assert result["fields"]["release_run"]["state"] == "not_applicable"
+    assert not any("workflows/release.yml/" in path for path in authority["calls"])
+
+
+def test_unavailable_release_authority_preserves_known_links(authority, monkeypatch):
+    original = operations._gh
+
+    def gh(root, path):
+        if "workflows/release.yml/" in path:
+            raise operations.OperationsError("UNAVAILABLE", "GitHub API request failed.")
+        return original(root, path)
+
+    monkeypatch.setattr(operations, "_gh", gh)
+    result = reconcile()
+    assert result["delivery_stage"] == "release"
+    assert result["fields"]["ci"]["value"]["state"] == "success"
+    assert result["fields"]["release"]["state"] == "available"
+    assert result["fields"]["release_run"]["state"] == "unavailable"
