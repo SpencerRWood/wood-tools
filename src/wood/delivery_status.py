@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -16,6 +17,7 @@ from wood_project.story.openproject import work_package_description_text
 from . import operations
 from .delivery import _available, _missing, collect_optional_delivery
 from .output import envelope
+from .release_pipeline import collect_release_pipeline
 
 
 def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
@@ -57,9 +59,11 @@ def reconcile(
         for name in (
             "repository",
             "source_revision",
+            "merged_revision",
             "pull_request",
             "ci",
             "release",
+            "release_run",
             "image_digest",
             "infrastructure_promotion",
             "deployment_environment",
@@ -69,6 +73,9 @@ def reconcile(
     }
     result: dict[str, Any] = {
         "story_id": story_id,
+        "observed_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "release_jobs": [],
+        "release_jobs_truncated": False,
         "story": _available(story_id, client.settings.base_url + f"/work_packages/{story_id}"),
         "fields": fields,
         "delivery_stage": "repository",
@@ -99,6 +106,9 @@ def reconcile(
         assert isinstance(deployment, dict) and isinstance(release, dict)
         if not release["semantic_release"]:
             fields["release"] = _missing("Semantic release is not configured.", applicable=False)
+            fields["release_run"] = _missing(
+                "Semantic release is not configured.", applicable=False
+            )
         if not deployment["applicable"]:
             for name in (
                 "image_digest",
@@ -165,7 +175,9 @@ def reconcile(
         fields["source_revision"] = _available(head["sha"], url)
         result["delivery_stage"] = "ci"
         merged = pr.get("merge_commit_sha") if state == "merged" else None
+        pipeline = None
         if isinstance(merged, str) and _revision(merged):
+            fields["merged_revision"] = _available(merged, url)
             optional = collect_optional_delivery(root, slug, merged, environment)
             for target, source in (
                 ("release", "semantic_release"),
@@ -181,6 +193,16 @@ def reconcile(
                 if deployed["state"] == "available"
                 else dict(deployed)
             )
+            if release["semantic_release"]:
+                release_revisions = [merged]
+                if fields["release"]["state"] == "available":
+                    revision = fields["release"]["value"].get("revision")
+                    if _revision(revision):
+                        release_revisions.append(revision)
+                pipeline = collect_release_pipeline(root, slug, release_revisions)
+                fields["release_run"] = pipeline["field"]
+                result["release_jobs"] = pipeline["jobs"]
+                result["release_jobs_truncated"] = pipeline["jobs_truncated"]
         revisions = {head["sha"], merged} if _revision(merged) else {head["sha"]}
         runs = _document(
             root,
@@ -233,6 +255,9 @@ def reconcile(
                 "Repair the missing GitHub merge revision linkage.",
             )
         result["delivery_stage"] = "release"
+        if pipeline is not None and pipeline["blocker"] is not None:
+            blocker = pipeline["blocker"]
+            return stop(blocker["stage"], blocker["reason"], blocker["action"])
         for field, stage, action in (
             (
                 "release",
