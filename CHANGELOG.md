@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.18.0 (2026-10-01)
+
+### Features
+
+- **delivery**: Report revision-bound release attempt blockers
+  ([#52](https://github.com/SpencerRWood/wood-tools/pull/52),
+  [`b068952`](https://github.com/SpencerRWood/wood-tools/commit/b0689522bc4cf21f0d17759d5cf753d1712fc1a3))
+
+
 ## v0.17.1 (2026-10-01)
 
 ### Bug Fixes
