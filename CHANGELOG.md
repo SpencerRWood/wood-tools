@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.17.1 (2026-10-01)
+
+### Bug Fixes
+
+- **openproject**: Normalize inverse workbook predecessor relations
+  ([#51](https://github.com/SpencerRWood/wood-tools/pull/51),
+  [`80ae92a`](https://github.com/SpencerRWood/wood-tools/commit/80ae92a3b3e908844d13c290300738cebf124f7e))
+
+
 ## v0.17.0 (2026-09-30)
 
 ### Features
