@@ -333,7 +333,10 @@ def test_build_implementation_plan_blocks_stale_openproject_id(
         )
 
 
-def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch) -> None:
+@pytest.mark.parametrize("inverse_relation", [False, True])
+def test_apply_plan_verifies_created_and_updated_openproject_writes(
+    monkeypatch, inverse_relation: bool
+) -> None:
     requested: list[tuple[str, str]] = []
 
     def work_package(
@@ -419,10 +422,10 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
         if path == "/api/v3/relations/44":
             return {
                 "id": 44,
-                "type": "precedes",
+                "type": "follows" if inverse_relation else "precedes",
                 "_links": {
-                    "from": {"href": "/api/v3/work_packages/33"},
-                    "to": {"href": "/api/v3/work_packages/34"},
+                    "from": {"href": f"/api/v3/work_packages/{34 if inverse_relation else 33}"},
+                    "to": {"href": f"/api/v3/work_packages/{33 if inverse_relation else 34}"},
                 },
             }
         raise AssertionError(path)
@@ -489,9 +492,44 @@ def test_apply_plan_verifies_created_and_updated_openproject_writes(monkeypatch)
     assert applied["stories"][0]["verified"] is True
     assert applied["stories"][1]["verified"] is True
     assert applied["relations"][0]["verified"] is True
+    assert applied["relations"][0]["from_work_package_id"] == 33
+    assert applied["relations"][0]["to_work_package_id"] == 34
+    assert applied["relations"][0]["relation_type"] == "precedes"
     assert ("GET", "/api/v3/versions/12") in requested
     assert ("GET", "/api/v3/work_packages/33") in requested
     assert ("GET", "/api/v3/relations/44") in requested
+
+
+@pytest.mark.parametrize(
+    ("relation_type", "from_id", "to_id", "expected"),
+    [
+        ("precedes", 33, 34, (33, 34)),
+        ("follows", 34, 33, (33, 34)),
+        ("follows", 33, 34, (34, 33)),
+        ("relates", 33, 34, None),
+        ("follows", None, 33, None),
+    ],
+)
+def test_existing_predecessors_preserve_direction_and_reuse_inverse_relations(
+    relation_type, from_id, to_id, expected
+) -> None:
+    relation = {
+        "type": relation_type,
+        "_links": {
+            "from": {"href": f"/api/v3/work_packages/{from_id}"},
+            "to": {"href": f"/api/v3/work_packages/{to_id}"},
+        },
+    }
+
+    def get_json(path, *, query=None):
+        assert path in {"/api/v3/work_packages/33/relations", "/api/v3/work_packages/34/relations"}
+        return {"_embedded": {"elements": [relation]}}
+
+    found = implementation_planning.existing_precedes_relations(
+        FakeOpenProjectClient(get_json=get_json),
+        [{"id": i, "_links": {"type": {"title": "Story"}}} for i in (33, 34)],
+    )
+    assert found == ({expected} if expected is not None else set())
 
 
 def test_apply_plan_stops_dependent_actions_after_story_failure(monkeypatch) -> None:
