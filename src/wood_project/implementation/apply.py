@@ -10,7 +10,7 @@ from wood_project.openproject import OpenProjectClient
 
 from . import openproject as op
 from . import workbook as workbook_module
-from .planning import WorkbookRow, link_href, story_key
+from .planning import WorkbookRow, link_href, precedes_pair, story_key
 
 read_xlsx_rows = workbook_module.read_xlsx_rows
 
@@ -250,19 +250,23 @@ def apply_plan(
             if isinstance(relation_id, int)
             else created
         )
-        if (
-            relation_link_id(verified, "from"),
-            relation_link_id(verified, "to"),
-            verified.get("type"),
-        ) != (from_id, to_id, item["relation_type"]):
+        if item["relation_type"] == "precedes":
+            matches = precedes_pair(verified) == (from_id, to_id)
+        else:
+            matches = (
+                relation_link_id(verified, "from"),
+                relation_link_id(verified, "to"),
+                verified.get("type"),
+            ) == (from_id, to_id, item["relation_type"])
+        if not matches:
             raise op.ScriptError("WORKBOOK_UPLOAD_FAILED", "Relation verification failed.")
         applied["relations"].append(
             {
                 "action": "create",
                 "id": verified.get("id"),
-                "from_work_package_id": relation_link_id(verified, "from") or from_id,
-                "to_work_package_id": relation_link_id(verified, "to") or to_id,
-                "relation_type": verified.get("type") or item["relation_type"],
+                "from_work_package_id": from_id,
+                "to_work_package_id": to_id,
+                "relation_type": item["relation_type"],
                 "verified": True,
             }
         )

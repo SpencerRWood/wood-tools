@@ -1025,6 +1025,19 @@ def planned_story_work_package_id(stories: list[dict[str, Any]], key: str) -> in
     return None
 
 
+def precedes_pair(relation: dict[str, Any]) -> tuple[int, int] | None:
+    """Normalize OpenProject's inverse follows representation to predecessor order."""
+    relation_type = relation.get("type")
+    if relation_type not in {"precedes", "follows"}:
+        return None
+    from_match = re.search(r"/work_packages/(\d+)$", link_href(relation, "from"))
+    to_match = re.search(r"/work_packages/(\d+)$", link_href(relation, "to"))
+    if not from_match or not to_match:
+        return None
+    from_id, to_id = int(from_match.group(1)), int(to_match.group(1))
+    return (to_id, from_id) if relation_type == "follows" else (from_id, to_id)
+
+
 def existing_precedes_relations(
     client: OpenProjectClient,
     descendants: list[dict[str, Any]],
@@ -1038,12 +1051,9 @@ def existing_precedes_relations(
     for story_id in story_ids:
         document = client.get_json(f"/api/v3/work_packages/{story_id}/relations")
         for relation in embedded_elements(document):
-            if relation.get("type") != "precedes":
-                continue
-            to_href = str(((relation.get("_links") or {}).get("to") or {}).get("href") or "")
-            match = re.search(r"/work_packages/(\d+)$", to_href)
-            if match:
-                relations.add((story_id, int(match.group(1))))
+            pair = precedes_pair(relation)
+            if pair is not None:
+                relations.add(pair)
     return relations
 
 
