@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   release:
-    # Immutable Story 517 recovery implementation (workflows PR #31).
-    uses: SpencerRWood/workflows/.github/workflows/release.yml@a424bdf1dd4d8e924ceaccd9069164a77c6f4707
+    # Immutable Story 517 recovery implementation (workflows PRs #31 and #32).
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@51100f648c0ebdb3291ef67165e0277990e32c64
     with:
       recovery_tag: ${{ inputs.recovery_tag || '' }}
