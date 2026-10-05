@@ -268,7 +268,7 @@ Every informational command supports `--json`. The version 2 envelope has `schem
 
 Run `wood repo validate --json` for the checks declared by this repository. Inspect the returned log paths for failures.
 
-[Validation](.github/workflows/validate.yml) calls `SpencerRWood/workflows@v1`; [release](.github/workflows/release.yml) pins the reviewed shared recovery implementation from workflows PR #31. Both use capabilities in [.github/release.toml](.github/release.toml). Python semantic-release owns version changes, tags, and GitHub Releases. Wood Tools contains no manual release mutation command.
+[Validation](.github/workflows/validate.yml) calls `SpencerRWood/workflows@v1`; [release](.github/workflows/release.yml) pins the reviewed shared recovery implementation from workflows PRs #31 and #32. Both use capabilities in [.github/release.toml](.github/release.toml). Python semantic-release owns version changes, tags, and GitHub Releases. Wood Tools contains no manual release mutation command.
 
 For a partial release (version commit pushed but tag or GitHub release missing),
 dispatch **Release on main** with `recovery_tag` set to the intended tag. This
