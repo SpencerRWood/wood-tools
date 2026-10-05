@@ -46,7 +46,9 @@ def collect_optional_delivery(
     root: Path, slug: str, merged: str, environment: str | None = None
 ) -> dict[str, Any]:
     """Resolve optional authorities against the Story merge, never the local HEAD."""
-    info = operations.repo_info(root)
+    # Applicability is policy in the merged contract, not an uncommitted waiver
+    # or a newer checkout's policy applied retroactively to an older Story.
+    info = operations.repo_info(root, revision=merged)
     result = {"semantic_release": _missing("No verified semantic release contains the merge.")}
     release_info = info["release"]
     assert isinstance(release_info, dict)
@@ -80,18 +82,23 @@ def collect_optional_delivery(
     deployment_info = info["deployment"]
     assert isinstance(deployment_info, dict)
     applicable = bool(deployment_info["applicable"])
+    requirements = deployment_info["requirements"]
+    assert isinstance(requirements, dict)
     for field in (
         "container_image_digest",
         "infrastructure_promotion",
         "deployed_revision",
         "runtime_verification",
     ):
-        result[field] = _missing(
+        required = applicable and (field == "deployed_revision" or requirements[field])
+        reason = (
             "No verified provider evidence."
+            if required
+            else "Merged repository contract does not require this delivery evidence."
             if applicable
-            else "No deployment workflow is configured.",
-            applicable=applicable,
+            else "No deployment workflow is configured."
         )
+        result[field] = _missing(reason, applicable=required)
     if not applicable:
         return result
     try:
@@ -120,13 +127,18 @@ def collect_optional_delivery(
             {"revision": sha, "environment": deployed_environment}, source
         )
         digest = deployed.get("digest")
-        if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        if (
+            requirements["container_image_digest"]
+            and isinstance(digest, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+        ):
             result["container_image_digest"] = _available(digest, source)
         # Generic providers can expose revision-bound promotion/runtime attestations.
         for field in ("infrastructure_promotion", "runtime_verification"):
             attestation = deployed.get(field)
             if (
-                isinstance(attestation, dict)
+                requirements[field]
+                and isinstance(attestation, dict)
                 and attestation.get("revision") == sha
                 and attestation.get("environment") == deployed_environment
                 and attestation.get("status") == "passed"

@@ -303,6 +303,24 @@ def test_disabled_release_never_queries_pipeline(authority, monkeypatch):
     assert not any("workflows/release.yml/" in path for path in authority["calls"])
 
 
+def test_configuration_delivery_stops_at_real_runtime_gap(authority):
+    authority["optional"].update(
+        {
+            "container_image_digest": _missing("Configuration release.", applicable=False),
+            "infrastructure_promotion": _missing("Direct deployment.", applicable=False),
+            "deployed_revision": _available(
+                {"revision": "b" * 40, "environment": "dev"}, "https://example.test/deployment"
+            ),
+            "runtime_verification": _missing("Independent runtime evidence is missing."),
+        }
+    )
+    result = reconcile()
+    assert result["delivery_stage"] == "runtime_verification"
+    assert result["fields"]["image_digest"]["state"] == "not_applicable"
+    assert result["fields"]["deployed_revision"]["state"] == "available"
+    assert result["fields"]["verification_state"]["state"] == "unavailable"
+
+
 def test_unavailable_release_authority_preserves_known_links(authority, monkeypatch):
     original = operations._gh
 
