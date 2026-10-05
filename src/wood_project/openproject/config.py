@@ -26,7 +26,6 @@ def load_settings(environ: Mapping[str, str] | None = None) -> OpenProjectSettin
         )
     return OpenProjectSettings(
         base_url=values["OPENPROJECT_URL"].strip(),
-        project_id=values.get("OPENPROJECT_PROJECT_ID", "").strip(),
         token=values["OPENPROJECT_API_TOKEN"],
         token_provider="injected-environment",
         user_agent=_default_user_agent(),

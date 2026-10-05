@@ -143,28 +143,27 @@ class OpenProjectClient:
             with self._transport(req, timeout=self._timeout) as response:
                 raw = response.read()
         except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
             raise OpenProjectError(
                 "OPENPROJECT_LOOKUP_FAILED",
-                f"OpenProject API error {exc.code} for {path}: {body[:200]}",
+                f"OpenProject API request failed (HTTP {exc.code}).",
             ) from exc
         except URLError as exc:
             raise OpenProjectError(
                 "OPENPROJECT_ACCESS_UNAVAILABLE",
-                f"OpenProject connection failed for {path}: {exc.reason}",
+                "OpenProject connection failed; check URL, credentials, and access.",
             ) from exc
 
         if not raw:
             raise OpenProjectError(
                 "OPENPROJECT_LOOKUP_FAILED",
-                f"OpenProject returned an empty response for {path}.",
+                "OpenProject returned an empty response.",
             )
         try:
             return json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise OpenProjectError(
                 "OPENPROJECT_LOOKUP_FAILED",
-                f"OpenProject returned invalid JSON for {path}: {exc}",
+                "OpenProject returned invalid JSON.",
             ) from exc
 
     def get_json(
@@ -178,9 +177,8 @@ class OpenProjectClient:
     def me(self) -> dict[str, Any]:
         return summarize_user(self.get_json("/api/v3/users/me"))
 
-    def project(self, project_id: str | None = None) -> dict[str, Any]:
-        selected = project_id or self.settings.project_id
-        return summarize_project(self.get_json(f"/api/v3/projects/{parse.quote(str(selected))}"))
+    def project(self, project_id: str) -> dict[str, Any]:
+        return summarize_project(self.get_json(f"/api/v3/projects/{parse.quote(project_id)}"))
 
     def work_package(self, work_package_id: int) -> dict[str, Any]:
         return summarize_work_package(self.get_json(f"/api/v3/work_packages/{work_package_id}"))

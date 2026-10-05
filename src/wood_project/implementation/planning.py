@@ -443,7 +443,8 @@ def resolve_project(
     if not workbook_project:
         raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
-            "Workbook metadata must identify Project when OPENPROJECT_PROJECT_ID is not set.",
+            "Configure [tool.wood.openproject].project_id, pass --project, "
+            "or identify Project in the workbook.",
         )
 
     matches = [
@@ -468,21 +469,6 @@ def resolve_project(
         "AMBIGUOUS_OPENPROJECT_MATCH",
         f"Workbook Project {workbook_project!r} matched multiple OpenProject projects: {ids}.",
     )
-
-
-def env_initiative_id(env: dict[str, str]) -> int | None:
-    for key in op.ROOT_ID_ENV_KEYS:
-        raw_value = op.env_value(env, key)
-        if not raw_value:
-            continue
-        try:
-            return int(raw_value)
-        except ValueError as err:
-            raise op.ScriptError(
-                "INVALID_ROOT_WORK_PACKAGE_ID",
-                f"{key} must be an integer.",
-            ) from err
-    return None
 
 
 def workbook_initiative_id(metadata: dict[str, str]) -> int | None:
@@ -579,16 +565,17 @@ def resolve_initiative_plan(
         )
 
     metadata_root_id = workbook_initiative_id(metadata)
+    selected_root_id = explicit_initiative_id or configured_initiative_id
     if (
-        explicit_initiative_id is not None
+        selected_root_id is not None
         and metadata_root_id is not None
-        and explicit_initiative_id != metadata_root_id
+        and selected_root_id != metadata_root_id
     ):
         raise op.ScriptError(
             "WORKBOOK_SCHEMA_MISMATCH",
             "Selected Initiative conflicts with workbook Sync Metadata root ID.",
         )
-    root_id = explicit_initiative_id or metadata_root_id or configured_initiative_id
+    root_id = selected_root_id or metadata_root_id
     if root_id is not None:
         existing = client.get_json(f"/api/v3/work_packages/{root_id}")
         existing_subject = op.work_package_subject(existing)

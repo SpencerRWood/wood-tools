@@ -40,7 +40,33 @@ Discovery searches up to 50 Story branch PR candidates; incomplete searches and 
 
 ## Infisical runtime
 
-The checked-in `.infisical.json` selects the local Infisical project and domain. Infisical injects the OpenProject URL and token into the child process; Wood Tools only reports readiness and variable presence. Discover project and initiative IDs with `wood project list --json` when needed:
+The checked-in `.infisical.json` selects the local Infisical project and domain.
+Only `OPENPROJECT_URL` and `OPENPROJECT_API_TOKEN` are globally required.
+The URL is non-secret global configuration and may be set in the environment;
+the token remains secret-backed and is injected into the child process by Infisical.
+Never put the token in `.env`, `pyproject.toml`, configuration files, logs, or artifacts.
+Wood Tools does not load token values from files and only reports variable presence.
+Discover project and initiative IDs with `wood project list --json`; discovery
+works with URL/token alone, including outside a repository or with a malformed mapping.
+
+Repository planning context belongs in the current Git root's `pyproject.toml`:
+
+```toml
+[tool.wood.openproject]
+project_id = 3
+initiative_id = 208
+```
+
+Resolution uses supported explicit CLI selectors first, then the repository mapping,
+then `OPENPROJECT_PROJECT_ID` / `OPENPROJECT_INITIATIVE_ID` as legacy fallback for
+missing mapping keys. These IDs are non-secret and are not runtime prerequisites;
+environment values never replace mapped IDs. Mapping IDs must be positive integers.
+Malformed mappings fail with an actionable error for commands needing that context.
+Epic and Release inspection require only project context; Story list/next require
+an Initiative mapping unless an explicit reference is supplied. Story get/lifecycle
+and delivery use their explicit Story ID and live relationships.
+
+Run readiness checks under the same secret injection:
 
 ```sh
 infisical run --env=dev --path=/openproject -- uv run --active wood doctor --json
@@ -52,7 +78,7 @@ Use `wood secret status --json` for Infisical CLI, context, authentication, and 
 
 `wood project list --json` lists accessible projects with their Initiative associations. Use `--initiative <id|name>` to filter and `--offset` to page through more than 50 projects. `wood project status <id|identifier|exact name> --json` reports R# planning versions and Story counts; `--initiative <id|name>` scopes the Story counts. Ambiguous names return candidate IDs.
 
-`wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name. Inject `OPENPROJECT_URL` and `OPENPROJECT_API_TOKEN` via Infisical for these commands; `OPENPROJECT_PROJECT_ID` is optional.
+`wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name and override repository context. Repository project/Initiative IDs (or legacy fallback) take precedence over workbook defaults; workbook values remain available when no context is configured. A workbook Project that conflicts with the selected context is rejected. Use the global URL and Infisical-injected token for these commands.
 
 ## Deterministic hierarchy provisioning
 

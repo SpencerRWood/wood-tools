@@ -16,6 +16,7 @@ from wood_project.openproject import (
     embedded_elements,
     load_settings,
 )
+from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.planning_release import release_number, release_sort_key
 
 from .output import Status, envelope
@@ -174,8 +175,15 @@ def import_workbook(
     rows = workbook.workbook_rows(path, sheet_name)
     metadata = workbook.workbook_metadata(path)
     workbook_project = planning.unique_workbook_value(rows, "Project")
-    configured_project_id = ""
-    selected_project_ref = project_ref or workbook_project
+    context = repository_context(
+        keys=tuple(
+            key
+            for key, ref in (("project_id", project_ref), ("initiative_id", initiative_ref))
+            if ref is None
+        )
+    )
+    configured_project_id = str(context.project_id or "")
+    selected_project_ref = project_ref
     if selected_project_ref:
         configured_project_id = str(
             _resolve(_projects(client), selected_project_ref, kind="Project")["id"]
@@ -206,7 +214,7 @@ def import_workbook(
         rows=rows,
         metadata=metadata,
         explicit_initiative_id=selected_initiative_id,
-        configured_initiative_id=None,
+        configured_initiative_id=context.initiative_id,
     )
     phases = planning.build_implementation_plan(
         rows=rows,
@@ -346,13 +354,13 @@ def run_project_command(
             summary="OpenProject project context loaded.",
             data=data,
         )
-    except ProjectLookupError as err:
+    except (ProjectLookupError, RepositoryContextError) as err:
         status: Status = "ambiguous" if err.code == "AMBIGUOUS_SELECTOR" else "invalid"
         return envelope(
             command=command,
             status=status,
             summary=str(err),
-            data={"candidates": err.candidates},
+            data={"candidates": err.candidates} if isinstance(err, ProjectLookupError) else {},
             errors=[{"code": err.code, "message": str(err)}],
         )
     except implementation_op.ScriptError as err:

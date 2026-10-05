@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
+from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.story.discovery import fetch_collection
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.openproject import extract_id_from_href, work_package_type_name
@@ -58,7 +59,7 @@ def add_hierarchy_parser(commands: argparse._SubParsersAction[Any]) -> None:
     actions = parser.add_subparsers(dest="hierarchy_action", required=True)
     for action in ("plan", "ensure"):
         item = actions.add_parser(action)
-        item.add_argument("--project", help="Project ID, identifier, or exact name")
+        item.add_argument("--project", help="Override repository project: ID, identifier, or name")
         for kind in ("initiative", "release", "epic"):
             item.add_argument(f"--{kind}", help="ID or exact name; omitted uses repository mapping")
         if action == "ensure":
@@ -164,7 +165,18 @@ def plan_hierarchy(
     client: OpenProjectClient, root: Path, args: argparse.Namespace
 ) -> dict[str, Any]:
     text, mapping = _read(root)
-    project_ref = args.project or str(mapping.get("project_id") or "")
+    try:
+        context = repository_context(
+            root=root,
+            keys=tuple(
+                key
+                for key, ref in (("project_id", args.project), ("initiative_id", args.initiative))
+                if ref is None
+            ),
+        )
+    except RepositoryContextError as exc:
+        raise HierarchyError(exc.code, str(exc)) from exc
+    project_ref = args.project or str(context.project_id or "")
     if not project_ref:
         raise HierarchyError("INVALID_CONTEXT", "Pass --project or configure project_id.")
     project = _choose(_collection(client, "/api/v3/projects"), project_ref, "Project")
@@ -184,7 +196,8 @@ def plan_hierarchy(
     operations = []
     ids: dict[str, int | str] = {"project_id": project_id}
     for kind in ("initiative", "release", "epic"):
-        ref = getattr(args, kind) or str(mapping.get(f"{kind}_id") or "")
+        mapped_id = context.initiative_id if kind == "initiative" else mapping.get(f"{kind}_id")
+        ref = getattr(args, kind) or str(mapped_id or "")
         if not ref:
             raise HierarchyError("INVALID_CONTEXT", f"Pass --{kind} or configure {kind}_id.")
         items = (

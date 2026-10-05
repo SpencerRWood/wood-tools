@@ -16,6 +16,7 @@ from wood_project.openproject import (
     link_href,
     summarize_work_package,
 )
+from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.planning_release import release_number
 
 from . import discovery
@@ -102,7 +103,11 @@ def _root(client: OpenProjectClient, ref: str) -> tuple[int, int | None]:
         return 0, int(matches[0]["id"])
     if len(matches) > 1:
         raise StoryWorkflowError("AMBIGUOUS_SELECTOR", "Project reference is ambiguous.")
-    filters = [{"project": {"operator": "=", "values": [str(client.settings.project_id)]}}]
+    try:
+        project_id = repository_context(keys=("project_id",)).project_id
+    except RepositoryContextError as exc:
+        raise StoryWorkflowError(exc.code, str(exc)) from exc
+    filters = [{"project": {"operator": "=", "values": [str(project_id)]}}] if project_id else []
     packages = discovery.fetch_collection(
         client,
         "/api/v3/work_packages",
@@ -115,7 +120,9 @@ def _root(client: OpenProjectClient, ref: str) -> tuple[int, int | None]:
         if work_package_type_name(wp) == "Initiative" and wp.get("subject") == ref
     ]
     if len(matches) == 1:
-        return int(matches[0]["id"]), int(client.settings.project_id)
+        return int(matches[0]["id"]), extract_id_from_href(
+            link_href(matches[0], "project"), "projects"
+        )
     if len(matches) > 1:
         raise StoryWorkflowError("AMBIGUOUS_SELECTOR", "Initiative reference is ambiguous.")
     raise StoryWorkflowError("NOT_FOUND", "Project or Initiative reference did not match.")
@@ -223,14 +230,6 @@ def next_story(
                 "Project has multiple Initiatives; pass an Initiative reference.",
             )
         root_id = int(initiatives[0]["id"])
-    if (
-        project_id
-        and client.settings.project_id
-        and str(project_id) != str(client.settings.project_id)
-    ):
-        raise StoryWorkflowError(
-            "PROJECT_MISMATCH", "Selected Initiative belongs to another project."
-        )
     return discovery.discover_next_story(
         client=client,
         root_work_package_id=root_id,

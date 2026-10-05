@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from test_story_cli import settings
@@ -76,7 +77,9 @@ def remote(monkeypatch):
 
     monkeypatch.setattr(OpenProjectClient, "request_json", request)
     monkeypatch.setattr("wood.planning.load_settings", settings)
-    monkeypatch.setattr("wood.planning.story_reference", lambda _: ("208", 3))
+    monkeypatch.setattr(
+        "wood.planning.repository_context", lambda **_: SimpleNamespace(project_id=3)
+    )
     monkeypatch.setenv("WOOD_AUDIT_LOG", "off")
     return state
 
@@ -198,7 +201,9 @@ def test_invalid_options(remote, capsys, args):
 
 
 def test_project_mapping_required(remote, monkeypatch, capsys):
-    monkeypatch.setattr("wood.planning.story_reference", lambda _: ("208", None))
+    monkeypatch.setattr(
+        "wood.planning.repository_context", lambda **_: SimpleNamespace(project_id=None)
+    )
     code, _ = invoke(capsys, "epic", "list")
     assert code == 2
 
@@ -219,10 +224,10 @@ def test_repeated_child_page_fails_without_readiness(remote, capsys):
 
 
 def test_explicit_project_avoids_repository_lookup(remote, monkeypatch, capsys):
-    def unexpected(_):
+    def unexpected(**_):
         raise AssertionError("explicit project should override context")
 
-    monkeypatch.setattr("wood.planning.story_reference", unexpected)
+    monkeypatch.setattr("wood.planning.repository_context", unexpected)
     code, _ = invoke(capsys, "release", "get", "20", "--project", "3")
     assert code == 0
 
