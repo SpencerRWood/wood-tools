@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.0 (2026-10-05)
+
+### Features
+
+- **openproject**: Resolve repository context from pyproject.toml
+  ([#54](https://github.com/SpencerRWood/wood-tools/pull/54),
+  [`9b02e92`](https://github.com/SpencerRWood/wood-tools/commit/9b02e92d93e7374275e013d0cdbd796cd3bab0fb))
+
+
 ## v0.18.1 (2026-10-05)
 
 ### Bug Fixes
