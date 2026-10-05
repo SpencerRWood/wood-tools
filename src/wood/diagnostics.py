@@ -12,6 +12,9 @@ from pathlib import Path
 from urllib import request
 from urllib.error import HTTPError, URLError
 
+from wood_project.openproject.credentials import resolve_environment
+from wood_project.openproject.models import OpenProjectError
+
 from .output import envelope
 from .runtime import (
     REQUIRED_VARIABLES,
@@ -113,6 +116,11 @@ def openproject_connectivity(environ: Mapping[str, str]) -> dict[str, object]:
 
 
 def doctor(root: Path, environ: Mapping[str, str]) -> dict[str, object]:
+    credential_error = None
+    try:
+        environ = resolve_environment(root, environ)
+    except OpenProjectError as exc:
+        credential_error = exc
     checks: dict[str, dict[str, object]] = {
         "repository": repository_readiness(root),
         "infisical": infisical_readiness(root, environ),
@@ -139,10 +147,15 @@ def doctor(root: Path, environ: Mapping[str, str]) -> dict[str, object]:
     actions = [
         str(checks[name]["next_action"]) for name in unavailable if checks[name]["next_action"]
     ]
+    if credential_error is not None:
+        actions.insert(0, credential_error.message)
     return envelope(
         command="doctor",
         status="unavailable" if unavailable else "success",
         summary="Readiness checks need attention." if unavailable else "Readiness checks passed.",
         data={"checks": checks, "unavailable": unavailable},
         next_actions=list(dict.fromkeys(actions)),
+        errors=[{"code": credential_error.code, "message": credential_error.message}]
+        if credential_error is not None
+        else [],
     )

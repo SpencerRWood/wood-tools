@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
+from .credentials import resolve_environment
 from .models import OpenProjectError, OpenProjectSettings
 
 
@@ -15,7 +17,7 @@ def _default_user_agent() -> str:
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> OpenProjectSettings:
-    values = os.environ if environ is None else environ
+    values = resolve_environment(Path.cwd(), os.environ) if environ is None else environ
     missing = [
         name for name in ("OPENPROJECT_URL", "OPENPROJECT_API_TOKEN") if not values.get(name)
     ]
@@ -27,7 +29,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> OpenProjectSettin
     return OpenProjectSettings(
         base_url=values["OPENPROJECT_URL"].strip(),
         token=values["OPENPROJECT_API_TOKEN"],
-        token_provider="injected-environment",
+        token_provider=(
+            "infisical"
+            if environ is None and not os.environ.get("OPENPROJECT_API_TOKEN")
+            else "injected-environment"
+        ),
         user_agent=_default_user_agent(),
     )
 

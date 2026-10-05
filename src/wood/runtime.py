@@ -9,6 +9,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from wood_project.openproject.credentials import infisical_settings
+from wood_project.openproject.models import OpenProjectError
+
 type State = Literal["ready", "unavailable", "not_applicable"]
 
 REQUIRED_VARIABLES = ("OPENPROJECT_URL", "OPENPROJECT_API_TOKEN")
@@ -25,7 +28,11 @@ def variable_presence(environ: Mapping[str, str], names: tuple[str, ...]) -> dic
 
 
 def infisical_context(root: Path, environ: Mapping[str, str]) -> dict[str, object]:
-    path = root / ".infisical.json"
+    try:
+        directory, _, _ = infisical_settings(root, environ)
+    except OpenProjectError:
+        return {"configured": False}
+    path = directory / ".infisical.json"
     configured = False
     if path.is_file():
         try:
