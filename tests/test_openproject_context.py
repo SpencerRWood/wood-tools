@@ -12,6 +12,7 @@ from wood.cli import main
 from wood.runtime import openproject_prerequisites
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
 from wood_project.openproject.context import RepositoryContextError, repository_context
+from wood_project.story.models import StoryWorkflowError
 from wood_project.story.repository_context import story_reference
 
 
@@ -25,7 +26,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_mapping_wins_over_legacy_values(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mapping_ignores_environment_ids(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "pyproject.toml").write_text(
         "[tool.wood.openproject]\nproject_id = 45\ninitiative_id = 812\n"
     )
@@ -39,12 +40,20 @@ def test_mapping_wins_over_legacy_values(repo: Path, monkeypatch: pytest.MonkeyP
     assert story_reference("999", cwd=child) == ("999", None)
 
 
-def test_legacy_fallback_for_missing_keys(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_environment_ids_do_not_fill_missing_keys(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "45")
     monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", "812")
-    assert story_reference(None) == ("812", 45)
+    context = repository_context()
+    assert context.project_id is None and context.initiative_id is None
+    with pytest.raises(StoryWorkflowError, match="Configure initiative_id"):
+        story_reference(None)
     (repo / "pyproject.toml").write_text("[tool.wood.openproject]\nproject_id = 46\n")
-    assert story_reference(None) == ("812", 46)
+    context = repository_context()
+    assert context.project_id == 46 and context.initiative_id is None
+    with pytest.raises(StoryWorkflowError, match="Configure initiative_id"):
+        story_reference(None)
 
 
 def test_only_requested_mapping_is_required(repo: Path) -> None:
@@ -56,11 +65,19 @@ def test_only_requested_mapping_is_required(repo: Path) -> None:
         repository_context()
 
 
-@pytest.mark.parametrize("legacy", ["bad-token-value", "0", "-3"])
-def test_invalid_legacy_id_is_value_free(repo: Path, legacy: str) -> None:
-    with pytest.raises(RepositoryContextError) as error:
-        repository_context(environ={"OPENPROJECT_PROJECT_ID": legacy})
-    assert legacy not in str(error.value)
+@pytest.mark.parametrize("value", ["45", "bad-token-value", "0", "-3"])
+def test_environment_ids_are_never_parsed(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("OPENPROJECT_PROJECT_ID", value)
+    monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", value)
+    context = repository_context()
+    assert context.project_id is None and context.initiative_id is None
+    with pytest.raises(StoryWorkflowError) as error:
+        story_reference(None)
+    assert value not in str(error.value)
 
 
 def test_runtime_prerequisites_exclude_repository_ids() -> None:
@@ -72,7 +89,7 @@ def test_runtime_prerequisites_exclude_repository_ids() -> None:
 
 
 @pytest.mark.parametrize("kind", ["epic", "release"])
-@pytest.mark.parametrize("source", ["repository", "legacy", "explicit"])
+@pytest.mark.parametrize("source", ["repository", "environment_only", "explicit"])
 def test_planning_project_context_without_initiative(
     repo: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -83,7 +100,7 @@ def test_planning_project_context_without_initiative(
     if source == "repository":
         (repo / "pyproject.toml").write_text("[tool.wood.openproject]\nproject_id = 45\n")
         monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "99")
-    elif source == "legacy":
+    elif source == "environment_only":
         monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "45")
     else:
         (repo / "pyproject.toml").write_text("[tool.wood.openproject\n")
@@ -105,6 +122,12 @@ def test_planning_project_context_without_initiative(
 
     monkeypatch.setattr(OpenProjectClient, "request_json", request_json)
     selectors = ["--project", "45"] if source == "explicit" else []
+    if source == "environment_only":
+        assert main([kind, "list", "--json"]) == 2
+        result = json.loads(capsys.readouterr().out)
+        assert result["errors"][0]["code"] == "INVALID_CONTEXT"
+        assert not requests
+        return
     assert main([kind, "list", *selectors, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["data"]["project_id"] == 45

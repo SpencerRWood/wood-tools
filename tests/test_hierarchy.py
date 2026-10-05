@@ -14,14 +14,14 @@ from wood_project.openproject import OpenProjectClient, OpenProjectError
 SELECTORS = ["--project", "3", "--initiative", "Tools", "--release", "R1", "--epic", "Delivery"]
 
 
-def test_legacy_context_fallback_and_repository_precedence(remote, monkeypatch, capsys):
+def test_environment_context_is_ignored_and_mapping_required(remote, monkeypatch, capsys):
     monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "3")
     monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", "208")
     args = ["--release", "20", "--epic", "412"]
     code, result = invoke(capsys, args=args)
-    assert code == 0
-    assert result["data"]["mapping"]["project_id"] == 3
-    assert result["data"]["mapping"]["initiative_id"] == 208
+    assert code == 2
+    assert result["errors"][0]["code"] == "INVALID_CONTEXT"
+    assert not remote["calls"]
     remote["path"].write_text("[tool.wood.openproject]\nproject_id = 3\ninitiative_id = 208\n")
     monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "99")
     monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", "999")
