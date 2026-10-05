@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.1 (2026-10-05)
+
+### Bug Fixes
+
+- **release**: Enable validated workflow recovery
+  ([#55](https://github.com/SpencerRWood/wood-tools/pull/55),
+  [`fd2d764`](https://github.com/SpencerRWood/wood-tools/commit/fd2d764094cde3357dca79e036865eb264ae651f))
+
+
 ## v0.19.0 (2026-10-05)
 
 ### Features
