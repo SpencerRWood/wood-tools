@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Never
 
 from resources.cli.audit import write_audit_event
+from wood_project.openproject.credentials import credential_next_actions
 
 from .delivery_status import add_delivery_parser, run_delivery_command
 from .diagnostics import doctor, secret_command
@@ -82,6 +83,7 @@ def _contract() -> dict[str, object]:
         summary="Wood Tools v2 CLI foundation is ready.",
         data={
             "public_executable": "wood",
+            "openproject_credentials": "injected-environment-or-infisical",
             "capabilities": [
                 "contract",
                 "secret status",
@@ -191,6 +193,13 @@ def main(argv: list[str] | None = None) -> int:
             errors=[{"code": "INVALID_INPUT", "message": "Use a supported command and option."}],
             next_actions=["Run wood --help for available commands."],
         )
+    errors = payload.get("errors", [])
+    if isinstance(errors, list):
+        for error in errors:
+            if isinstance(error, dict) and isinstance(error.get("code"), str):
+                if actions := credential_next_actions(error["code"]):
+                    payload["next_actions"] = actions
+                    break
     try:
         # The v2 audit record keeps the command outcome, not raw arguments.
         # Future capabilities may accept sensitive positional values.

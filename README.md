@@ -43,7 +43,10 @@ Discovery searches up to 50 Story branch PR candidates; incomplete searches and 
 The checked-in `.infisical.json` selects the local Infisical project and domain.
 Only `OPENPROJECT_URL` and `OPENPROJECT_API_TOKEN` are globally required.
 The URL is non-secret global configuration and may be set in the environment;
-the token remains secret-backed and is injected into the child process by Infisical.
+the token remains secret-backed. Plain `wood` commands automatically fetch missing
+URL/token values using the authenticated Infisical CLI, keeping them in memory
+for that invocation. Existing injected values take precedence. There is no token
+cache, `.env` loader, or credential file.
 Never put the token in `.env`, `pyproject.toml`, configuration files, logs, or artifacts.
 Wood Tools does not load token values from files and only reports variable presence.
 Discover project and initiative IDs with `wood project list --json`; discovery
@@ -68,10 +71,30 @@ Epic and Release inspection require only project context; Story list/next requir
 an Initiative mapping unless an explicit reference is supplied. Story get/lifecycle
 and delivery use their explicit Story ID and live relationships.
 
-Run readiness checks under the same secret injection:
+Authenticate Infisical once. For use across repositories and shell sessions, create
+`~/.config/wood/infisical.toml` (or `$XDG_CONFIG_HOME/wood/infisical.toml`) with
+only these non-secret selectors:
+
+```toml
+project_config_dir = "/absolute/path/to/authorized/infisical/context"
+environment = "dev"
+secret_path = "/openproject"
+```
+
+`project_config_dir` must contain the authorized `.infisical.json`. Without this
+global file, Wood uses the current directory's Infisical context, environment
+`dev`, and path `/openproject`. `INFISICAL_PROJECT_ID` also supports explicit
+project selection with Infisical authentication. A malformed global file or a
+failed fetch stops with a structured, value-free error; it does not fall back to
+another context. Local repository, CI, contract, and help commands do not fetch
+OpenProject credentials. Explicit mappings passed to the Python `load_settings`
+API remain deterministic and are not supplemented from Infisical.
+
+Run readiness and planning commands directly:
 
 ```sh
-infisical run --env=dev --path=/openproject -- uv run --active wood doctor --json
+wood doctor --json
+wood story next --json
 ```
 
 Use `wood secret status --json` for Infisical CLI, context, authentication, and OpenProject prerequisites; `wood secret requirements --json` for required names; and `wood secret check --json` for injected variable presence. `--name NAME` can be repeated on `check` and `requirements`. These commands do not retrieve or print values. `wood doctor` adds repository, OpenProject connectivity, tool, and Python checks. An unavailable check exits 4 and includes a concise next action.
@@ -90,7 +113,7 @@ plan. Both use `[tool.wood.openproject]` IDs when selectors are omitted. Overrid
 them with `--project <id|identifier|exact-name>` and
 `--initiative`, `--release`, or `--epic <id|exact-name>`.
 An unknown name proposes creation; an unknown numeric ID fails. Projects must
-already exist. Example, under the usual Infisical credential injection:
+already exist. Example:
 
 ```sh
 wood hierarchy plan --project 3 --initiative Wood-Tools --release R1 \
@@ -144,7 +167,7 @@ wood release get 20 --json
 
 These commands read current OpenProject state and never mutate it. Release means an
 OpenProject planning version; publishing tags and GitHub Releases remains owned by
-semantic-release. Run under Infisical, using the checkout's `uv run --active --frozen wood`
+semantic-release. Run plain `wood` commands, using the checkout's `uv run --active --frozen wood`
 during development. Project context comes from the repository's
 `[tool.wood.openproject].project_id`; override it with `--project <id>`.
 Lookup accepts numeric IDs or exact names within that project. Duplicate names
@@ -162,7 +185,7 @@ command instead of reporting readiness. These reads are observations, not a
 transactional guarantee: Story completion always rechecks live state before writing.
 Release inspection reports status and available start/end dates.
 
-Run Story commands from the target repository under the same Infisical environment, using an installed `wood` executable. In the Wood Tools checkout, use `uv run --active --frozen wood` to exercise the checked-out code. The repository root `pyproject.toml` may optionally declare:
+Run plain Story commands from the target repository using an installed `wood` executable. In the Wood Tools checkout, use `uv run --active --frozen wood` to exercise the checked-out code. The repository root `pyproject.toml` may optionally declare:
 
 ```toml
 [tool.wood.openproject]
@@ -223,7 +246,7 @@ wood story complete <id> --evidence <evidence-file> --json
 wood story complete <id> --evidence <evidence-file> --apply --json
 ```
 
-Inject OpenProject credentials through Infisical. Use `data.evidence_file` from generation for the activity and completion commands. `data.update_file` is the generated implementation-update Markdown; callers can also use the existing activity `--file` option. Evidence generation previews without creating files and `--apply` writes only local files. PR management remains through `gh`.
+Use `data.evidence_file` from generation for the activity and completion commands. `data.update_file` is the generated implementation-update Markdown; callers can also use the existing activity `--file` option. Evidence generation previews without creating files and `--apply` writes only local files. PR management remains through `gh`.
 
 Generation requires a clean checkout containing the merged PR, a `feature/op-<id>-` source branch for the selected Story, a matching Primary Repository, all repository-required passing checks and their logs, and a successful `validate.yml` run on the PR source or merge SHA. The validated content fingerprint must match the PR source revision; committing unchanged validated files does not require another validation run. The PR source revision must exist locally (fetch it if needed). Generated evidence binds the Story, repository, PR, source and merge revisions, validation record, and CI run. Both `--evidence` consumers recheck live PR/CI results and the generated files before preview or apply. Altered or missing inputs must be regenerated. The generated update includes the Story subject, PR, revisions, checks, and CI; separately record material limitations or release/deployment details when applicable.
 
