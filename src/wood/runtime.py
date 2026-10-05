@@ -12,7 +12,6 @@ from typing import Literal, TypedDict
 type State = Literal["ready", "unavailable", "not_applicable"]
 
 REQUIRED_VARIABLES = ("OPENPROJECT_URL", "OPENPROJECT_API_TOKEN")
-CONTEXT_VARIABLES = ("OPENPROJECT_PROJECT_ID", "OPENPROJECT_INITIATIVE_ID")
 
 
 class Check(TypedDict):
@@ -71,12 +70,11 @@ def infisical_readiness(root: Path, environ: Mapping[str, str]) -> dict[str, obj
 
 
 def openproject_prerequisites(environ: Mapping[str, str]) -> dict[str, object]:
-    present = variable_presence(environ, REQUIRED_VARIABLES + CONTEXT_VARIABLES)
+    present = variable_presence(environ, REQUIRED_VARIABLES)
     missing = [name for name in REQUIRED_VARIABLES if not present[name]]
     return {
         "state": "ready" if not missing else "unavailable",
         "required_names": list(REQUIRED_VARIABLES),
-        "context_names": list(CONTEXT_VARIABLES),
         "presence": present,
         "next_action": (
             None if not missing else "Run wood under Infisical with OpenProject variables injected."

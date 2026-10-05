@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Any
 
 from wood_project.openproject import (
-    OpenProjectClient,
-    OpenProjectSettings,
     extract_id_from_href,
     link_title,
-)
-
-ROOT_ID_ENV_KEYS = (
-    "OPENPROJECT_INITIATIVE_ID",
-    "OPENPROJECT_ROOT_WORK_PACKAGE_ID",
-    "OPENPROJECT_ROOT_ID",
 )
 
 
@@ -24,47 +14,6 @@ class ScriptError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-
-    env: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in raw_line:
-            continue
-        key, value = raw_line.split("=", 1)
-        env[key.strip()] = value.strip().strip('"').strip("'")
-    return env
-
-
-def require_env(env: dict[str, str], keys: list[str]) -> None:
-    missing = [key for key in keys if not env_value(env, key)]
-    if missing:
-        raise ScriptError(
-            "OPENPROJECT_ACCESS_UNAVAILABLE",
-            f"Missing required OpenProject configuration: {', '.join(missing)}. "
-            "Set it in the environment or a resolved env file.",
-        )
-
-
-def env_value(env: dict[str, str], key: str) -> str:
-    value = os.environ.get(key) or env.get(key) or ""
-    return value.strip()
-
-
-def client_from_env(base_url: str, token: str, *, project_id: str = "") -> OpenProjectClient:
-    return OpenProjectClient(
-        OpenProjectSettings(
-            base_url=base_url,
-            project_id=project_id,
-            token=token,
-            token_provider="implementation-env",
-            user_agent="wood/project-import-workbook",
-        )
-    )
 
 
 def find_named_element(elements: list[dict[str, Any]], expected_name: str) -> dict[str, Any]:

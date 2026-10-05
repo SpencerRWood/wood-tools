@@ -38,7 +38,7 @@ def test_load_settings_uses_injected_environment_without_leaking_value() -> None
     )
 
     assert settings.base_url == "https://openproject.example.test"
-    assert settings.project_id == "wood"
+    assert not hasattr(settings, "project_id")
     assert settings.token == "super-secret-token"
     assert settings.token_provider == "injected-environment"
     assert "super-secret-token" not in repr(settings)
@@ -81,7 +81,6 @@ def test_client_uses_read_only_get_requests_and_summarizes_work_package() -> Non
 
     settings = OpenProjectSettings(
         base_url="https://openproject.example.test/",
-        project_id="wood",
         token="super-secret-token",
         token_provider="env",
         user_agent="wood-tools-test/1",
@@ -123,7 +122,6 @@ def test_client_request_json_supports_mutations() -> None:
     client = OpenProjectClient(
         OpenProjectSettings(
             base_url="https://openproject.example.test",
-            project_id="wood",
             token="super-secret-token",
             token_provider="env",
             user_agent="wood-tools-test/1",
@@ -185,7 +183,6 @@ def test_client_story_context_fetches_relation_fixture() -> None:
     client = OpenProjectClient(
         OpenProjectSettings(
             base_url="https://openproject.example.test",
-            project_id="wood",
             token="super-secret-token",
             token_provider="env",
             user_agent="wood-tools-test/1",
@@ -214,7 +211,6 @@ def test_story_context_pages_all_relations(monkeypatch: pytest.MonkeyPatch) -> N
     client = OpenProjectClient(
         OpenProjectSettings(
             base_url="https://openproject.example.test",
-            project_id="3",
             token="secret",
             token_provider="test",
             user_agent="test/1",

@@ -30,7 +30,7 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     actions = parser.add_subparsers(dest="story_command", required=True)
     for action in ("list", "next"):
         item = actions.add_parser(action)
-        item.add_argument("ref", nargs="?")
+        item.add_argument("ref", nargs="?", help="Override repository Initiative with ID or name")
         if action == "list":
             item.add_argument("--status")
             item.add_argument("--version")

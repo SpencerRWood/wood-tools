@@ -19,7 +19,6 @@ def disable_audit(monkeypatch: pytest.MonkeyPatch) -> None:
 def settings() -> OpenProjectSettings:
     return OpenProjectSettings(
         base_url="https://openproject.example.test",
-        project_id="3",
         token="secret-token",
         token_provider="test",
         user_agent="wood-tools-test/1",

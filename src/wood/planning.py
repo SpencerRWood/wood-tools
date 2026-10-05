@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
+from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.story.discovery import fetch_collection
 from wood_project.story.epics import completed_status_names, epic_stories, incomplete_stories
 from wood_project.story.models import StoryWorkflowError
@@ -15,7 +16,6 @@ from wood_project.story.openproject import (
     work_package_status_name,
     work_package_type_name,
 )
-from wood_project.story.repository_context import story_reference
 
 from .output import Status, envelope
 from .project import ProjectLookupError, _resolve
@@ -29,7 +29,9 @@ def add_planning_parsers(commands: argparse._SubParsersAction[Any]) -> None:
             item = actions.add_parser(action)
             if action == "get":
                 item.add_argument("ref", help="Numeric ID or exact name")
-            item.add_argument("--project", type=int, help="OpenProject project ID")
+            item.add_argument(
+                "--project", type=int, help="Override repository OpenProject project ID"
+            )
             item.add_argument("--status", help="Exact status filter (list only)")
             item.add_argument("--offset", type=int, default=0)
             item.add_argument("--json", dest="planning_json", action="store_true")
@@ -70,10 +72,10 @@ def inspect_planning(client: OpenProjectClient, args: argparse.Namespace) -> dic
         raise ProjectLookupError("INVALID_INPUT", "Use --status with list only.")
     project_id = args.project
     if project_id is None:
-        _, project_id = story_reference(None)
+        project_id = repository_context(keys=("project_id",)).project_id
         if project_id is None:
             raise ProjectLookupError(
-                "INVALID_CONTEXT", "Pass --project with an OpenProject project ID."
+                "INVALID_CONTEXT", "Configure [tool.wood.openproject].project_id or pass --project."
             )
     if kind == "epic":
         path = "/api/v3/work_packages"
@@ -122,7 +124,12 @@ def run_planning_command(args: argparse.Namespace) -> dict[str, Any]:
         return envelope(
             command=command, status="success", summary=f"{command}: success.", data=data
         )
-    except (ProjectLookupError, StoryWorkflowError, OpenProjectError) as exc:
+    except (
+        ProjectLookupError,
+        StoryWorkflowError,
+        OpenProjectError,
+        RepositoryContextError,
+    ) as exc:
         status: Status = (
             "ambiguous"
             if exc.code == "AMBIGUOUS_SELECTOR"

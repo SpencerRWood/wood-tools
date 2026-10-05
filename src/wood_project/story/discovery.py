@@ -75,11 +75,12 @@ def fetch_descendants(
     client: OpenProjectClient,
     root_work_package_id: int,
     page_size: int,
-    project_id: int | None = None,
+    project_id: int | None,
 ) -> list[dict[str, Any]]:
-    selected_project = project_id or int(client.settings.project_id)
+    if project_id is None:
+        raise StoryWorkflowError("OPENPROJECT_LOOKUP_FAILED", "Initiative has no project link.")
     filters = [
-        {"project": {"operator": "=", "values": [str(selected_project)]}},
+        {"project": {"operator": "=", "values": [str(project_id)]}},
         {"ancestor": {"operator": "=", "values": [str(root_work_package_id)]}},
     ]
     return fetch_collection(
@@ -198,16 +199,9 @@ def discover_next_story(
     root_id = root_work_package_id
     root = api_get_json(client, f"/api/v3/work_packages/{root_id}")
     root_project_id = extract_id_from_href(link_href(root, "project"), "projects")
-    selected_project_id = (
-        int(client.settings.project_id) if client.settings.project_id else root_project_id
-    )
+    selected_project_id = root_project_id
     if selected_project_id is None:
         raise StoryWorkflowError("OPENPROJECT_LOOKUP_FAILED", "Initiative has no project link.")
-    if root_project_id is not None and root_project_id != selected_project_id:
-        raise StoryWorkflowError(
-            "OPENPROJECT_LOOKUP_FAILED",
-            f"WP-{root_id} belongs to project {root_project_id}, not {selected_project_id}.",
-        )
 
     statuses = embedded_elements(api_get_json(client, "/api/v3/statuses"))
     closed_status_names = {str(status.get("name")) for status in statuses if status.get("isClosed")}
@@ -220,11 +214,7 @@ def discover_next_story(
         and release_number(str(version.get("name") or "")) is not None
     }
 
-    descendants = (
-        fetch_descendants(client, root_id, page_size)
-        if client.settings.project_id
-        else fetch_descendants(client, root_id, page_size, selected_project_id)
-    )
+    descendants = fetch_descendants(client, root_id, page_size, selected_project_id)
     stories = [wp for wp in descendants if work_package_type_name(wp) == story_type]
     if not stories:
         raise StoryWorkflowError("NO_STORY_FOUND", f"No {story_type} work packages found.")

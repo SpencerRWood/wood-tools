@@ -14,6 +14,23 @@ from wood_project.openproject import OpenProjectClient, OpenProjectError
 SELECTORS = ["--project", "3", "--initiative", "Tools", "--release", "R1", "--epic", "Delivery"]
 
 
+def test_legacy_context_fallback_and_repository_precedence(remote, monkeypatch, capsys):
+    monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "3")
+    monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", "208")
+    args = ["--release", "20", "--epic", "412"]
+    code, result = invoke(capsys, args=args)
+    assert code == 0
+    assert result["data"]["mapping"]["project_id"] == 3
+    assert result["data"]["mapping"]["initiative_id"] == 208
+    remote["path"].write_text("[tool.wood.openproject]\nproject_id = 3\ninitiative_id = 208\n")
+    monkeypatch.setenv("OPENPROJECT_PROJECT_ID", "99")
+    monkeypatch.setenv("OPENPROJECT_INITIATIVE_ID", "999")
+    code, result = invoke(capsys, args=args)
+    assert code == 0
+    assert result["data"]["mapping"]["project_id"] == 3
+    assert result["data"]["mapping"]["initiative_id"] == 208
+
+
 def package(identifier, name, kind, parent=None, release=None):
     links = {
         "project": {"href": "/api/v3/projects/3"},

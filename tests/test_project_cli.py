@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -76,6 +77,11 @@ def test_project_status_resolves_identifier_and_scopes_story_counts(
 def test_import_workbook_plan_hash_blocks_stale_apply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.wood.openproject]\nproject_id = 3\ninitiative_id = 208\n"
+    )
     path = tmp_path / "implementation.xlsx"
     path.write_bytes(b"reviewed-workbook")
     values = {column: "" for column in workbook.IMPLEMENTATION_WORKBOOK_COLUMNS}
@@ -96,14 +102,20 @@ def test_import_workbook_plan_hash_blocks_stale_apply(
         "relations": [],
     }
     writes: list[str] = []
+    resolved_projects: list[dict[str, object]] = []
+    resolved_initiatives: list[dict[str, object]] = []
     monkeypatch.setattr(project_module.workbook, "workbook_rows", lambda path, sheet: [row])
     monkeypatch.setattr(project_module.workbook, "workbook_metadata", lambda path: {})
     monkeypatch.setattr(project_module, "_projects", lambda value: [project(3, "wood", "Wood")])
     monkeypatch.setattr(
-        project_module.planning, "resolve_project", lambda **kwargs: project(3, "wood", "Wood")
+        project_module.planning,
+        "resolve_project",
+        lambda **kwargs: resolved_projects.append(kwargs) or project(3, "wood", "Wood"),
     )
     monkeypatch.setattr(
-        project_module.planning, "resolve_initiative_plan", lambda **kwargs: phases["initiative"]
+        project_module.planning,
+        "resolve_initiative_plan",
+        lambda **kwargs: resolved_initiatives.append(kwargs) or phases["initiative"],
     )
     monkeypatch.setattr(
         project_module.planning, "build_implementation_plan", lambda **kwargs: phases
@@ -129,6 +141,8 @@ def test_import_workbook_plan_hash_blocks_stale_apply(
 
     options = {"sheet_name": "Implementation", "project_ref": None, "initiative_ref": None}
     preview = project_module.import_workbook(client, path, apply=False, plan_hash=None, **options)
+    assert resolved_projects[-1]["configured_project_id"] == "3"
+    assert resolved_initiatives[-1]["configured_initiative_id"] == 208
     assert preview["mutation"] == "preview"
     digest = preview["data"]["plan_hash"]
     path.write_bytes(b"changed-workbook")
