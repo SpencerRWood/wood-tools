@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      recovery_tag:
+        description: Expected partial release tag; leave empty for normal release reconciliation.
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -10,4 +16,7 @@ permissions:
 
 jobs:
   release:
-    uses: SpencerRWood/workflows/.github/workflows/release.yml@v1
+    # Immutable Story 517 recovery implementation (workflows PR #31).
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@a424bdf1dd4d8e924ceaccd9069164a77c6f4707
+    with:
+      recovery_tag: ${{ inputs.recovery_tag || '' }}
