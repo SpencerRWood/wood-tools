@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.19.2 (2026-10-05)
+
+### Bug Fixes
+
+- **openproject**: Remove legacy environment context fallback
+  ([#56](https://github.com/SpencerRWood/wood-tools/pull/56),
+  [`4213371`](https://github.com/SpencerRWood/wood-tools/commit/42133713a1bb034c8923c3b5c57f4dbc71091ba2))
+
+### Chores
+
+- **ci**: Pin complete release reconciliation
+  ([#57](https://github.com/SpencerRWood/wood-tools/pull/57),
+  [`f526a17`](https://github.com/SpencerRWood/wood-tools/commit/f526a17955cc620853addd752feaa659b2073d1a))
+
+
 ## v0.19.1 (2026-10-05)
 
 ### Bug Fixes
