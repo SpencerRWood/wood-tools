@@ -57,10 +57,12 @@ project_id = 3
 initiative_id = 208
 ```
 
-Resolution uses supported explicit CLI selectors first, then the repository mapping,
-then `OPENPROJECT_PROJECT_ID` / `OPENPROJECT_INITIATIVE_ID` as legacy fallback for
-missing mapping keys. These IDs are non-secret and are not runtime prerequisites;
-environment values never replace mapped IDs. Mapping IDs must be positive integers.
+Resolution uses supported explicit CLI selectors first, then the repository mapping.
+`OPENPROJECT_PROJECT_ID` and `OPENPROJECT_INITIATIVE_ID` are ignored; there are no
+environment-ID overrides, deprecated-setting fallbacks, or compatibility wrappers.
+Configure missing required mappings or use supported explicit CLI selectors.
+These IDs are non-secret and are not runtime prerequisites.
+Mapping IDs must be positive integers.
 Malformed mappings fail with an actionable error for commands needing that context.
 Epic and Release inspection require only project context; Story list/next require
 an Initiative mapping unless an explicit reference is supplied. Story get/lifecycle
@@ -78,7 +80,7 @@ Use `wood secret status --json` for Infisical CLI, context, authentication, and 
 
 `wood project list --json` lists accessible projects with their Initiative associations. Use `--initiative <id|name>` to filter and `--offset` to page through more than 50 projects. `wood project status <id|identifier|exact name> --json` reports R# planning versions and Story counts; `--initiative <id|name>` scopes the Story counts. Ambiguous names return candidate IDs.
 
-`wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name and override repository context. Repository project/Initiative IDs (or legacy fallback) take precedence over workbook defaults; workbook values remain available when no context is configured. A workbook Project that conflicts with the selected context is rejected. Use the global URL and Infisical-injected token for these commands.
+`wood project import-workbook <path> --json` validates the 21-column `Implementation` sheet and previews the ordered project/root/version/Epic/Story/relation plan. The preview includes a plan hash and up to 50 operations; use `--operation-offset` to inspect subsequent operations. To apply the reviewed plan, rerun with `--apply --plan-hash <hash>`. The command resolves IDs again, rejects a stale plan hash, applies changes in dependency order, verifies writes, and records created IDs in the workbook. `--project` and `--initiative` accept a numeric ID, stable identifier where available, or exact name and override repository context. Repository project/Initiative IDs take precedence over workbook defaults; workbook values remain available when no context is configured. A workbook Project that conflicts with the selected context is rejected. Environment ID variables are ignored. Use the global URL and Infisical-injected token for these commands.
 
 ## Deterministic hierarchy provisioning
 

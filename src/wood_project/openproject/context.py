@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import tomllib
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,15 +22,13 @@ def repository_context(
     *,
     cwd: Path | None = None,
     root: Path | None = None,
-    environ: Mapping[str, str] | None = None,
     keys: tuple[str, ...] = ("project_id", "initiative_id"),
 ) -> RepositoryContext:
-    """Resolve requested IDs from Git-root TOML, then legacy environment fallback.
+    """Resolve requested IDs exclusively from the repository's Git-root TOML.
 
     Missing mappings are optional here; consumers enforce the IDs they need.
     Malformed mappings fail closed without including file contents or values.
     """
-    values = os.environ if environ is None else environ
     if not keys:
         return RepositoryContext()
     mapping: dict[str, object] = {}
@@ -61,18 +57,11 @@ def repository_context(
         ) from exc
     resolved: dict[str, int | None] = {}
     for key in keys:
-        if key in mapping:
-            identifier = mapping[key]
-            if type(identifier) is not int or identifier <= 0:
-                raise RepositoryContextError(f"The mapping's {key} must be a positive integer.")
-        else:
-            name = "OPENPROJECT_" + key.upper()
-            raw = values.get(name, "").strip()
-            if not raw:
-                resolved[key] = None
-                continue
-            if len(raw) > 18 or not raw.isascii() or not raw.isdecimal() or int(raw) <= 0:
-                raise RepositoryContextError(f"Legacy {name} must be a positive integer.")
-            identifier = int(raw)
+        if key not in mapping:
+            resolved[key] = None
+            continue
+        identifier = mapping[key]
+        if type(identifier) is not int or identifier <= 0:
+            raise RepositoryContextError(f"The mapping's {key} must be a positive integer.")
         resolved[key] = identifier
     return RepositoryContext(**resolved)
