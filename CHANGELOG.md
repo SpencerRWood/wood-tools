@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.18.1 (2026-10-05)
+
+### Bug Fixes
+
+- **delivery**: Honor merged repository evidence applicability
+  ([#53](https://github.com/SpencerRWood/wood-tools/pull/53),
+  [`7549ed7`](https://github.com/SpencerRWood/wood-tools/commit/7549ed71f9b4d082f1f6fdddf8af8d4896ba8b26))
+
+
 ## v0.18.0 (2026-10-01)
 
 ### Features
