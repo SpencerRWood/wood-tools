@@ -19,6 +19,11 @@ def providers(monkeypatch):
         "commit": {"sha": "b" * 40},
         "comparison": {"status": "ahead"},
         "deployment_status": "success",
+        "requirements": {
+            "container_image_digest": True,
+            "infrastructure_promotion": True,
+            "runtime_verification": True,
+        },
         "deployment": {
             "commit_sha": merged,
             "environment": "production",
@@ -28,9 +33,12 @@ def providers(monkeypatch):
     monkeypatch.setattr(
         operations,
         "repo_info",
-        lambda _root: {
+        lambda _root, **_kwargs: {
             "release": {"semantic_release": state["release_enabled"]},
-            "deployment": {"applicable": state["deployment_enabled"]},
+            "deployment": {
+                "applicable": state["deployment_enabled"],
+                "requirements": state["requirements"],
+            },
         },
     )
 
@@ -103,6 +111,35 @@ def test_not_applicable_is_distinct_from_unavailable(providers):
         "runtime_verification",
     ):
         assert result[field]["state"] == "not_applicable"
+
+
+def test_configuration_release_keeps_runtime_gap_visible(providers):
+    providers["requirements"].update(container_image_digest=False, infrastructure_promotion=False)
+    result = collect(providers)
+    assert result["container_image_digest"]["state"] == "not_applicable"
+    assert result["infrastructure_promotion"]["state"] == "not_applicable"
+    assert result["deployed_revision"]["state"] == "available"
+    assert result["runtime_verification"]["state"] == "unavailable"
+
+
+def test_required_runtime_stays_unavailable_when_deployment_stale(providers):
+    providers["requirements"].update(container_image_digest=False, infrastructure_promotion=False)
+    providers["deployment_status"] = "stale"
+    result = collect(providers)
+    assert result["container_image_digest"]["state"] == "not_applicable"
+    assert result["deployed_revision"]["state"] == "unavailable"
+    assert result["runtime_verification"]["state"] == "unavailable"
+
+
+def test_explicitly_disabled_provider_is_not_upgraded_by_payload(providers):
+    providers["requirements"]["runtime_verification"] = False
+    providers["deployment"]["runtime_verification"] = {
+        "revision": "a" * 40,
+        "environment": "production",
+        "status": "passed",
+        "url": "https://example.test/evidence",
+    }
+    assert collect(providers)["runtime_verification"]["state"] == "not_applicable"
 
 
 @pytest.mark.parametrize("status", ["stale", "error", "unavailable"])

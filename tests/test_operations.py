@@ -40,15 +40,134 @@ def test_library_and_service_repository_info(tmp_path: Path) -> None:
     assert operations.repo_info(library)["deployment"] == {
         "applicable": False,
         "evidence": None,
+        "requirements": {
+            "container_image_digest": False,
+            "infrastructure_promotion": False,
+            "runtime_verification": False,
+        },
     }
     assert operations.repo_info(service)["deployment"] == {
         "applicable": True,
         "evidence": "GitHub deployments",
+        "requirements": {
+            "container_image_digest": True,
+            "infrastructure_promotion": True,
+            "runtime_verification": True,
+        },
     }
     assert operations.deploy_status(library)[0] == "not_applicable"
     standards = operations.repo_standards(library)
     assert standards["conformant"] is True
     assert any(c["requirement"] == "optional" for c in standards["checks"])
+
+
+def test_configuration_delivery_requirements_are_explicit(tmp_path: Path) -> None:
+    root = repository(tmp_path, deployed=True)
+    with (root / ".github/release.toml").open("a") as stream:
+        stream.write("\n[delivery]\ncontainer_image = false\ninfrastructure_promotion = false\n")
+    assert operations.repo_info(root)["deployment"]["requirements"] == {  # type: ignore[index]
+        "container_image_digest": False,
+        "infrastructure_promotion": False,
+        "runtime_verification": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        '[delivery]\ncontainer_image = "false"',
+        "[delivery]\ncontainer_image = 0",
+        "[delivery]\nunknown = false",
+        "[delivery]\nruntime_verification = []",
+        "delivery = false",
+    ],
+)
+def test_invalid_delivery_policy_fails_closed(tmp_path: Path, section: str) -> None:
+    root = repository(tmp_path, deployed=True)
+    path = root / ".github/release.toml"
+    # A scalar section belongs at the document root rather than under [release].
+    path.write_text(
+        section + "\n" + path.read_text()
+        if section == "delivery = false"
+        else path.read_text() + "\n" + section + "\n"
+    )
+    with pytest.raises(operations.OperationsError) as caught:
+        operations.repo_info(root)
+    assert caught.value.code == "CONTRACT_INVALID"
+    assert operations.repo_standards(root)["conformant"] is False
+
+
+def test_new_checkout_policy_cannot_waive_merged_revision_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path, deployed=True)
+    path = root / ".github/release.toml"
+    original = path.read_text()
+    path.write_text(original + "\n[delivery]\ncontainer_image = false\n")
+    sha = "a" * 40
+    calls = []
+
+    def git(args, _root):
+        calls.append(args)
+        if args[1] == "ls-tree":
+            output = ".github/workflows/release.yml\n"
+        elif args[-1].endswith("release.yml"):
+            output = "uses: SpencerRWood/workflows/.github/workflows/deploy-ansible.yml@v1\n"
+        else:
+            output = original
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    monkeypatch.setattr(operations, "_run", git)
+    # Removing deployment from the current checkout must not waive historical evidence.
+    (root / ".github/workflows/release.yml").write_text("name: Release\n")
+    assert (
+        operations.repo_info(root, revision=sha)["deployment"]["requirements"][  # type: ignore[index]
+            "container_image_digest"
+        ]
+        is True
+    )
+    assert calls == [
+        ["git", "show", f"{sha}:.github/release.toml"],
+        ["git", "ls-tree", "-r", "--name-only", sha, "--", ".github/workflows"],
+        ["git", "show", f"{sha}:.github/workflows/release.yml"],
+    ]
+
+
+def test_missing_revision_workflows_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path, deployed=True)
+    contract = (root / ".github/release.toml").read_text()
+    monkeypatch.setattr(
+        operations,
+        "_run",
+        lambda args, _root: subprocess.CompletedProcess(
+            args, 1 if args[1] == "ls-tree" else 0, contract, ""
+        ),
+    )
+    with pytest.raises(operations.OperationsError) as caught:
+        operations.repo_info(root, revision="a" * 40)
+    assert caught.value.code == "WORKFLOWS_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("revision", ["main", "--help", ""])
+def test_contract_revision_must_be_full_commit_sha(tmp_path: Path, revision: str) -> None:
+    root = repository(tmp_path)
+    with pytest.raises(operations.OperationsError) as caught:
+        operations.repo_info(root, revision=revision)
+    assert caught.value.code == "CONTRACT_INVALID"
+
+
+def test_missing_revision_contract_is_not_current_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(
+        operations, "_run", lambda *args: subprocess.CompletedProcess([], 1, "", "")
+    )
+    with pytest.raises(operations.OperationsError) as caught:
+        operations.repo_info(root, revision="a" * 40)
+    assert caught.value.code == "CONTRACT_MISSING"
 
 
 def test_validation_runs_in_disposable_checkout(

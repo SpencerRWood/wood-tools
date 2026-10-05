@@ -41,15 +41,33 @@ def repository_root(cwd: Path) -> Path:
     return Path(result.stdout.strip())
 
 
-def _contract(root: Path) -> dict[str, Any]:
+def _contract(root: Path, revision: str | None = None) -> dict[str, Any]:
     path = root / ".github" / "release.toml"
-    if not path.is_file():
+    if revision is not None:
+        if not re.fullmatch(r"[0-9a-f]{40,64}", revision):
+            raise OperationsError(
+                "CONTRACT_INVALID", "Contract revision must be a commit SHA.", "invalid"
+            )
+        source = _run(["git", "show", f"{revision}:.github/release.toml"], root)
+        if source.returncode:
+            raise OperationsError(
+                "CONTRACT_MISSING", "Revision-bound release contract is unavailable."
+            )
+        content = source.stdout
+    elif not path.is_file():
         raise OperationsError(
             "CONTRACT_MISSING", "Repository has no .github/release.toml.", "unsupported"
         )
+    else:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise OperationsError(
+                "CONTRACT_INVALID", "Release contract cannot be read.", "invalid"
+            ) from exc
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        data = tomllib.loads(content)
+    except ValueError as exc:
         raise OperationsError(
             "CONTRACT_INVALID", "Release contract cannot be read.", "invalid"
         ) from exc
@@ -59,16 +77,37 @@ def _contract(root: Path) -> dict[str, Any]:
             "Release contract version or validation is unsupported.",
             "unsupported",
         )
+    _delivery_requirements(data, False)
     return data
 
 
-def _workflows(root: Path) -> dict[str, bool]:
+def _workflows(root: Path, revision: str | None = None) -> dict[str, bool]:
     folder = root / ".github" / "workflows"
-    files = [p for p in folder.glob("*.y*ml") if p.is_file()]
-    texts = [p.read_text(encoding="utf-8") for p in files]
+    if revision is None:
+        files = [p for p in folder.glob("*.y*ml") if p.is_file()]
+        names = {p.name for p in files}
+        texts = [p.read_text(encoding="utf-8") for p in files]
+    else:
+        tree = _run(
+            ["git", "ls-tree", "-r", "--name-only", revision, "--", ".github/workflows"], root
+        )
+        if tree.returncode:
+            raise OperationsError(
+                "WORKFLOWS_UNAVAILABLE", "Revision-bound workflows are unavailable."
+            )
+        paths = [p for p in tree.stdout.splitlines() if Path(p).suffix in {".yml", ".yaml"}]
+        names = {Path(p).name for p in paths}
+        texts = []
+        for path in paths:
+            source = _run(["git", "show", f"{revision}:{path}"], root)
+            if source.returncode:
+                raise OperationsError(
+                    "WORKFLOWS_UNAVAILABLE", "Revision-bound workflows are unavailable."
+                )
+            texts.append(source.stdout)
     return {
-        "validate": (folder / "validate.yml").is_file(),
-        "release": (folder / "release.yml").is_file(),
+        "validate": "validate.yml" in names,
+        "release": "release.yml" in names,
         "deployment": any(
             token in text
             for text in texts
@@ -99,9 +138,27 @@ def _repo_type(root: Path, contract: dict[str, Any], workflows: dict[str, bool])
     return "infrastructure"
 
 
-def repo_info(root: Path) -> dict[str, object]:
-    contract = _contract(root)
-    workflows = _workflows(root)
+def _delivery_requirements(contract: dict[str, Any], applicable: bool) -> dict[str, bool]:
+    section = contract.get("delivery", {})
+    names = {
+        "container_image_digest": "container_image",
+        "infrastructure_promotion": "infrastructure_promotion",
+        "runtime_verification": "runtime_verification",
+    }
+    if (
+        not isinstance(section, dict)
+        or set(section) - set(names.values())
+        or any(type(value) is not bool for value in section.values())
+    ):
+        raise OperationsError(
+            "CONTRACT_INVALID", "Delivery requirements must be known boolean fields.", "invalid"
+        )
+    return {field: applicable and section.get(name, True) for field, name in names.items()}
+
+
+def repo_info(root: Path, *, revision: str | None = None) -> dict[str, object]:
+    contract = _contract(root, revision)
+    workflows = _workflows(root, revision)
     validation = contract["validation"]
     checks = validation.get("checks")
     if not isinstance(checks, list) or not all(isinstance(x, str) for x in checks):
@@ -127,6 +184,7 @@ def repo_info(root: Path) -> dict[str, object]:
         "deployment": {
             "applicable": workflows["deployment"],
             "evidence": "GitHub deployments" if workflows["deployment"] else None,
+            "requirements": _delivery_requirements(contract, workflows["deployment"]),
         },
         "workflows": workflows,
     }

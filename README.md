@@ -25,6 +25,17 @@ The report includes `observed_at` in UTC, a verified `merged_revision`, and a `r
 
 Release-run success is workflow evidence only. It never supplies an image digest, a deployment revision, or runtime health on its own. A successful RAG-style release/promotion attempt with no GitHub deployment record still reports unavailable deployment fields. `release_run` is supplemental to the existing release/deployment authorities; absence of a discoverable run does not invalidate independently verified delivery facts. Observation time records this query, not the freshness of a previously published runtime attestation.
 
+Configuration repositories that deploy directly can declare evidence applicability in `.github/release.toml`:
+
+```toml
+[delivery]
+container_image = false
+infrastructure_promotion = false
+runtime_verification = true
+```
+
+These optional boolean fields default to `true` for repositories with deployment workflows. Explicit `false` reports that field as `not_applicable`; missing required provider evidence remains `unavailable`. Unknown keys and non-boolean values fail closed. Deployed revision is always required when deployment applies. Delivery reconciliation reads both the contract and workflows at the Story's merged revision, so uncommitted or newer policy cannot waive historical requirements. Missing revision-bound files do not fall back to current checkout policy. Consumer policy changes therefore affect subsequent merges, rather than retroactively changing earlier Story observations. Runtime evidence remains independent of successful deployment health steps.
+
 Discovery searches up to 50 Story branch PR candidates; incomplete searches and multiple candidates require `--pr <number>`. Explicit PR selection still verifies the Story branch and repository main. CI is queried for the PR source revision, with merge-revision fallback when no source run exists. A merged PR resolves optional release and deployment links even if CI is blocked. Release and successful deployment revisions must contain the Story merge; promotion and runtime attestations must match the deployed revision and environment. Supply `--environment <name>` for deployment selection. Missing provider evidence stays unavailable; disabled release/deployment workflows are not applicable. The latest release/deployment providers do not search historical delivery records. This point-in-time observation does not replace repository validation or Story completion evidence.
 
 ## Infisical runtime
