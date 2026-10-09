@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -19,8 +20,7 @@ from wood_project.openproject import (
 from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.planning_release import release_number
 
-from . import discovery
-from .branches import create_branch, repo_state
+from . import discovery, session
 from .epics import completed_status_names, epic_stories, incomplete_stories
 from .models import StoryWorkflowError
 from .openproject import (
@@ -294,10 +294,16 @@ def set_story_status(
 
 
 def _ready(
-    client: OpenProjectClient, story: dict[str, Any], *, allow_on_hold: bool = False
+    client: OpenProjectClient,
+    story: dict[str, Any],
+    *,
+    allow_on_hold: bool = False,
+    allow_in_progress: bool = False,
 ) -> None:
     story_id = int(story["id"])
     allowed = {"new", "on hold", "blocked"} if allow_on_hold else {"new"}
+    if allow_in_progress:
+        allowed.add("in progress")
     if work_package_status_name(story).casefold() not in allowed:
         raise StoryWorkflowError("NOT_READY", "Story is not ready to enter In progress.")
     version_name = work_package_version_name(story)
@@ -316,37 +322,138 @@ def _ready(
             raise StoryWorkflowError("DEPENDENCY_BLOCKED", f"WP-{predecessor} is not Closed.")
 
 
-def start_story(client: OpenProjectClient, story_id: int, *, apply: bool) -> dict[str, Any]:
-    story = _story(client, story_id)
-    _ready(client, story)
-    description = work_package_description_text(story)
-    repository = _repository(description)
-    branch = None
-    if repository:
-        state = repo_state()
-        if Path(state["path"]).name != repository:
+def start_story(
+    client: OpenProjectClient,
+    story_id: int,
+    *,
+    apply: bool,
+    owner: str,
+    worktree: Path,
+    project_id: int | None = None,
+    initiative_id: int | None = None,
+) -> dict[str, Any]:
+    owner = session.owner_id(owner)
+    root, directory = session.locations()
+    with session.locked(directory, apply=apply):
+        story = _story(client, story_id)
+        _ready(client, story, allow_on_hold=True, allow_in_progress=True)
+        primary = Path(session.worktrees(root)[0]["worktree"]).resolve()
+        repository = _repository(work_package_description_text(story))
+        if not repository or primary.name != repository:
             raise StoryWorkflowError(
-                "REPOSITORY_MISMATCH", f"Current repository does not match {repository}."
+                "REPOSITORY_MISMATCH", "Primary checkout must match the Story's Primary Repository."
             )
-        branch = create_branch(
-            work_package_id=story_id,
-            title=str(story.get("subject") or ""),
-            apply=False,
-            allow_dirty=False,
+        try:
+            context = repository_context(
+                root=primary,
+                keys=tuple(
+                    key
+                    for key, value in (("project_id", project_id), ("initiative_id", initiative_id))
+                    if value is None
+                ),
+            )
+        except RepositoryContextError as exc:
+            raise StoryWorkflowError(exc.code, str(exc)) from exc
+        selected_project = project_id if project_id is not None else context.project_id
+        selected_initiative = initiative_id if initiative_id is not None else context.initiative_id
+        if any(
+            value is not None and value <= 0 for value in (selected_project, selected_initiative)
+        ):
+            raise StoryWorkflowError(
+                "INVALID_INPUT", "Project and Initiative IDs must be positive."
+            )
+        project_id = extract_id_from_href(link_href(story, "project"), "projects")
+        if selected_project is not None and selected_project != project_id:
+            raise StoryWorkflowError(
+                "REPOSITORY_MISMATCH", "Story project differs from repository mapping."
+            )
+        if selected_initiative is not None:
+            ancestor = story
+            seen = {story_id}
+            for _ in range(20):
+                parent = extract_id_from_href(link_href(ancestor, "parent"), "work_packages")
+                if parent == selected_initiative:
+                    break
+                if parent is None or parent in seen:
+                    raise StoryWorkflowError(
+                        "REPOSITORY_MISMATCH", "Story is outside the mapped Initiative."
+                    )
+                seen.add(parent)
+                ancestor = api_get_json(client, f"/api/v3/work_packages/{parent}")
+            else:
+                raise StoryWorkflowError(
+                    "REPOSITORY_MISMATCH", "Story ancestry exceeds the inspection bound."
+                )
+        record = session.read_record(directory, story_id)
+        owned = record is not None and record["state"] == "claimed"
+        branch = f"feature/op-{story_id}-{discovery.slugify(str(story.get('subject') or ''))}"
+        server = client.settings.base_url.rstrip("/")
+        if owned:
+            session.require_owner(record, owner)
+            assert record is not None
+            if (
+                record["server"] != server
+                or record["branch"] != branch
+                or record["worktree"] != str(worktree.resolve())
+                or record["repository"] != str(primary)
+                or record["project_id"] != project_id
+                or record["initiative_id"] != selected_initiative
+            ):
+                raise StoryWorkflowError(
+                    "CLAIM_CONFLICT", "Recorded Story/worktree identity differs."
+                )
+        plan = session.plan_worktree(root, worktree, branch, owned=owned)
+        if not owned:
+            record = session.new_record(
+                story_id=story_id,
+                subject=str(story.get("subject") or ""),
+                owner=owner,
+                server=server,
+                repository=str(primary),
+                worktree=plan["path"],
+                project_id=project_id,
+                initiative_id=selected_initiative,
+            )
+            previous = session.read_record(directory, story_id)
+            if previous is not None:
+                if any(
+                    previous[key] != record[key]
+                    for key in ("server", "repository", "branch", "worktree")
+                ):
+                    raise StoryWorkflowError(
+                        "CLAIM_CONFLICT", "Released claim has a different Story/worktree identity."
+                    )
+                record["records"] = previous["records"]
+                record["phase"] = previous["phase"]
+                record["next_action"] = previous["next_action"]
+        assert record is not None
+        if work_package_status_name(story).casefold() != "in progress":
+            _status(client, story, "In progress", apply=False)
+        if apply:
+            # Persist recovery identity before either Git or OpenProject mutation.
+            session.save(directory, story_id, record)
+            session.prepare(root, plan)
+        status = (
+            {"id": story_id, "status": "In progress", "dry_run": not apply, "resumed": True}
+            if work_package_status_name(story).casefold() == "in progress"
+            else _status(client, story, "In progress", apply=apply)
         )
-    status = _status(client, story, "In progress", apply=apply)
-    if apply and branch:
-        branch = create_branch(
-            work_package_id=story_id,
-            title=str(story.get("subject") or ""),
-            apply=True,
-            allow_dirty=False,
-        )
-    return {
-        "status": status,
-        "branch": branch,
-        "next_action": "Implement the Story and run repository checks.",
-    }
+        if apply:
+            if record["phase"] == "starting":
+                record["phase"] = "implementation"
+                record["next_action"] = (
+                    "Implement the Story and run wood repo validate --json in its worktree."
+                )
+            record["updated_at"] = datetime.now(UTC).isoformat()
+            session.save(directory, story_id, record)
+        return {
+            "status": status,
+            "worktree": plan,
+            "session": record,
+            "session_file": str(session.record_path(directory, story_id)),
+            "next_action": record["next_action"],
+            "dry_run": not apply,
+        }
 
 
 def block_story(

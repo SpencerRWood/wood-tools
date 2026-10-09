@@ -225,7 +225,7 @@ def test_public_story_list_is_filtered_and_bounded(monkeypatch, capsys) -> None:
     assert result["data"]["stories"][0]["id"] == 301
 
 
-def test_start_requires_closed_predecessors(monkeypatch) -> None:
+def test_start_requires_closed_predecessors(monkeypatch, tmp_path) -> None:
     story = _story()
     monkeypatch.setattr(
         workflow,
@@ -239,8 +239,15 @@ def test_start_requires_closed_predecessors(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(discovery, "fetch_predecessor_map", lambda *_args: {301: {300}})
+    monkeypatch.setattr(workflow.session, "locations", lambda: (tmp_path, tmp_path / "state"))
     with pytest.raises(workflow.StoryWorkflowError, match="not Closed"):
-        workflow.start_story(OpenProjectClient(settings()), 301, apply=False)
+        workflow.start_story(
+            OpenProjectClient(settings()),
+            301,
+            apply=False,
+            owner="test",
+            worktree=tmp_path / "worktree",
+        )
 
 
 def test_complete_requires_validation_evidence(monkeypatch) -> None:
@@ -362,26 +369,6 @@ def test_next_excludes_rejected_blocked_and_unversioned(monkeypatch) -> None:
         page_size=100,
     )
     assert result["story"]["id"] == 4
-
-
-def test_start_prepares_standard_branch_after_readiness(monkeypatch) -> None:
-    calls: list[bool] = []
-    monkeypatch.setattr(workflow, "_story", lambda *_args: _story())
-    monkeypatch.setattr(workflow, "_ready", lambda *_args: None)
-    monkeypatch.setattr(workflow, "repo_state", lambda: {"path": "/tmp/wood-tools"})
-    monkeypatch.setattr(
-        workflow, "_status", lambda *_args, **kwargs: {"dry_run": not kwargs["apply"]}
-    )
-    monkeypatch.setattr(
-        workflow,
-        "create_branch",
-        lambda **kwargs: (
-            calls.append(kwargs["apply"]) or {"branch": "feature/op-301-ship-story-workflow"}
-        ),
-    )
-    result = workflow.start_story(OpenProjectClient(settings()), 301, apply=True)
-    assert calls == [False, True]
-    assert result["branch"]["branch"] == "feature/op-301-ship-story-workflow"
 
 
 def test_block_records_reason_after_status_change(monkeypatch) -> None:
