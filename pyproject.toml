@@ -94,3 +94,8 @@ line-ending = "auto"
 
 [project.scripts]
 wood = "wood.cli:main"
+
+[tool.wood.architecture]
+domain = "engineering"
+capability = "developer-tooling"
+kind = "cli"
