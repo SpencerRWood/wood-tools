@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.20.1 (2026-10-09)
+
+### Bug Fixes
+
+- Include architecture metadata in released artifacts
+  ([`a5bbdfe`](https://github.com/SpencerRWood/wood-tools/commit/a5bbdfe35a318bf44981418c56e4ee29944c1212))
+
+
 ## v0.20.0 (2026-10-09)
 
 ### Features
