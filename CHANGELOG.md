@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.20.0 (2026-10-09)
+
+### Features
+
+- **openproject**: Acquire credentials automatically from Infisical
+  ([#58](https://github.com/SpencerRWood/wood-tools/pull/58),
+  [`e6e8882`](https://github.com/SpencerRWood/wood-tools/commit/e6e888208cd2b4059bacfd2ca06dc5618e01a96b))
+
+- **story**: Add isolated worktrees and durable agent claims
+  ([#60](https://github.com/SpencerRWood/wood-tools/pull/60),
+  [`125b7b6`](https://github.com/SpencerRWood/wood-tools/commit/125b7b6f9f5b2b14e43a438e95ff39418c8e9099))
+
+
 ## v0.19.2 (2026-10-05)
 
 ### Bug Fixes
