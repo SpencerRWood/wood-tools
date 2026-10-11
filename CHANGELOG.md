@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.21.0 (2026-10-11)
+
+### Continuous Integration
+
+- Pin guarded release workflow and matching helpers
+  ([`f451979`](https://github.com/SpencerRWood/wood-tools/commit/f4519791689b9216a7433e4315a584a075278a89))
+
+### Documentation
+
+- Adopt release-branch development governance
+  ([`649f123`](https://github.com/SpencerRWood/wood-tools/commit/649f123b5d765fa6f0224f3d37d65e2a177b76a5))
+
+### Features
+
+- Support approved release integration targets
+  ([`a1ee806`](https://github.com/SpencerRWood/wood-tools/commit/a1ee806691274cc882f57940f3c97349d81c38c7))
+
+
 ## v0.20.1 (2026-10-09)
 
 ### Bug Fixes
