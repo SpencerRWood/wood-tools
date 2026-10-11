@@ -203,7 +203,40 @@ def test_generation_binds_precommit_validation_to_merged_files(delivered):
     assert Path(result["evidence_file"]).is_relative_to(delivered["output"])
     assert Path(result["log_dir"]).is_relative_to(delivered["output"])
     evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+
+
+@pytest.mark.parametrize("prefix", ["feature", "feat", "fix"])
+def test_release_evidence_accepts_actual_target_without_publication(delivered, monkeypatch, prefix):
+    root = delivered["root"]
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + '\n[tool.wood.branching]\nstrategy = "release"\n'
+        'release_id = 20\nrelease_branch = "release/v1.2.3"\n'
+        'scope_reference = "fixture:approved-scope"\n'
+    )
+    delivered["story"]["_links"]["version"]["href"] = "/api/v3/versions/20"
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "Approved fixture adoption")
+    revision = git(root, "rev-parse", "HEAD")
+    delivered["pr"]["head"].update(sha=revision, ref=f"{prefix}/op-410-implementation")
+    delivered["pr"]["merge_commit_sha"] = revision
+    delivered["pr"]["base"]["ref"] = "release/v1.2.3"
+    delivered["run"]["head_sha"] = revision
+    delivered["record"] = operations.repo_validate(root)
+    monkeypatch.setattr(
+        "wood.delivery.collect_optional_delivery",
+        lambda *_args: pytest.fail("Story evidence must not require publication or deployment"),
+    )
+    result = generate(delivered)
+    generated = workflow_files.read_json(Path(result["evidence_file"]))
+    assert generated["pull_request"]["target_branch"] == "release/v1.2.3"
+    assert generated["branching"]["release_id"] == 20
+    assert result["delivery"]["semantic_release"]["state"] == "not_applicable"
+    assert "Integration branch: release/v1.2.3" in Path(result["update_file"]).read_text()
     evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+    delivered["pr"]["base"]["ref"] = "main"
+    with pytest.raises(StoryWorkflowError, match="designated integration branch"):
+        generate(delivered)
 
 
 def test_preview_does_not_create_generated_files(delivered):

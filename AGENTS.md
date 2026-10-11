@@ -1,5 +1,10 @@
 # Repository Guidance
 
+## Branching strategy
+
+- This repository uses **trunk-based development**. Create short-lived change branches from current `main` and target PRs to `main`.
+- Follow the [canonical branching and delivery policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md), available through the installed codex-config source path. Verify the strategy, release association, fetched base and PR target before implementation and record them in Story evidence. Story completion does not authorize publication or deployment; retain existing review, CI, security and rollback requirements.
+
 ## Scope
 - `wood` is the only public executable. The v2 CLI is intentionally breaking; do not add aliases, forwarding wrappers, or legacy configuration loaders.
 - Keep domain logic separable from parsing and remote transport. Migrate existing internals by capability, then delete the superseded implementation and update first-party callers in that Story.

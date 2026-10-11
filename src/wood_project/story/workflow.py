@@ -20,7 +20,7 @@ from wood_project.openproject import (
 from wood_project.openproject.context import RepositoryContextError, repository_context
 from wood_project.planning_release import release_number
 
-from . import discovery, session
+from . import branching, discovery, session
 from .epics import completed_status_names, epic_stories, incomplete_stories
 from .models import StoryWorkflowError
 from .openproject import (
@@ -230,13 +230,24 @@ def next_story(
                 "Project has multiple Initiatives; pass an Initiative reference.",
             )
         root_id = int(initiatives[0]["id"])
-    return discovery.discover_next_story(
+    try:
+        root = Path(session.git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    except StoryWorkflowError:
+        root = Path.cwd()
+    plan = branching.configuration(root)
+    result = discovery.discover_next_story(
         client=client,
         root_work_package_id=root_id,
         target_status="New",
         story_type="Story",
         page_size=PAGE_SIZE,
+        release_id=plan.get("release_id"),
     )
+    if plan["strategy"] == "release":
+        selected = result["story"]
+        selected["branch"] = f"feat/op-{selected['id']}-{discovery.slugify(selected['subject'])}"
+        result["branching"] = plan
+    return result
 
 
 def _status(
@@ -299,7 +310,7 @@ def _ready(
     *,
     allow_on_hold: bool = False,
     allow_in_progress: bool = False,
-) -> None:
+) -> dict[str, Any]:
     story_id = int(story["id"])
     allowed = {"new", "on hold", "blocked"} if allow_on_hold else {"new"}
     if allow_in_progress:
@@ -320,6 +331,7 @@ def _ready(
         previous = api_get_json(client, f"/api/v3/work_packages/{predecessor}")
         if work_package_status_name(previous).casefold() != "closed":
             raise StoryWorkflowError("DEPENDENCY_BLOCKED", f"WP-{predecessor} is not Closed.")
+    return version
 
 
 def start_story(
@@ -331,12 +343,15 @@ def start_story(
     worktree: Path,
     project_id: int | None = None,
     initiative_id: int | None = None,
+    base_branch: str | None = None,
+    target_branch: str | None = None,
+    branch_prefix: str | None = None,
 ) -> dict[str, Any]:
     owner = session.owner_id(owner)
     root, directory = session.locations()
     with session.locked(directory, apply=apply):
         story = _story(client, story_id)
-        _ready(client, story, allow_on_hold=True, allow_in_progress=True)
+        planning_version = _ready(client, story, allow_on_hold=True, allow_in_progress=True)
         primary = Path(session.worktrees(root)[0]["worktree"]).resolve()
         repository = _repository(work_package_description_text(story))
         if not repository or primary.name != repository:
@@ -386,11 +401,44 @@ def start_story(
                 )
         record = session.read_record(directory, story_id)
         owned = record is not None and record["state"] == "claimed"
-        branch = f"feature/op-{story_id}-{discovery.slugify(str(story.get('subject') or ''))}"
+        branch_plan = branching.select(
+            root, story=story, base_branch=base_branch, target_branch=target_branch
+        )
+        if branch_plan["strategy"] == "release":
+            if (
+                extract_id_from_href(link_href(planning_version, "definingProject"), "projects")
+                != project_id
+            ):
+                raise StoryWorkflowError(
+                    "RELEASE_MISMATCH", "Mapped release must belong to the Story project."
+                )
+        prefix = branch_prefix or (
+            record["branch"].split("/", 1)[0]
+            if owned and record
+            else "feat"
+            if branch_plan["strategy"] == "release"
+            else "feature"
+        )
+        if prefix not in {"feature", "feat", "fix"}:
+            raise StoryWorkflowError(
+                "INVALID_INPUT", "Choose feature, feat or fix as branch prefix."
+            )
+        branch = f"{prefix}/op-{story_id}-{discovery.slugify(str(story.get('subject') or ''))}"
         server = client.settings.base_url.rstrip("/")
         if owned:
             session.require_owner(record, owner)
             assert record is not None
+            saved = record.get("branching")
+            if (
+                saved is None
+                and branch_plan["strategy"] != "trunk"
+                or saved is not None
+                and any(saved.get(key) != value for key, value in branch_plan.items())
+            ):
+                raise StoryWorkflowError(
+                    "CLAIM_CONFLICT",
+                    "Recorded branching scope differs; do not migrate an active claim.",
+                )
             if (
                 record["server"] != server
                 or record["branch"] != branch
@@ -402,7 +450,18 @@ def start_story(
                 raise StoryWorkflowError(
                     "CLAIM_CONFLICT", "Recorded Story/worktree identity differs."
                 )
-        plan = session.plan_worktree(root, worktree, branch, owned=owned)
+        branch_plan = branching.resolve_base(root, branch_plan)
+        if owned and record and branch_plan["strategy"] == "release":
+            session.git(
+                root,
+                "merge-base",
+                "--is-ancestor",
+                record["branching"]["base_revision"],
+                branch_plan["base_revision"],
+            )
+        plan = session.plan_worktree(
+            root, worktree, branch, owned=owned, base_revision=branch_plan["base_revision"]
+        )
         if not owned:
             record = session.new_record(
                 story_id=story_id,
@@ -414,6 +473,8 @@ def start_story(
                 project_id=project_id,
                 initiative_id=selected_initiative,
             )
+            record["branch"] = branch
+            record["branching"] = branch_plan
             previous = session.read_record(directory, story_id)
             if previous is not None:
                 if any(
@@ -448,6 +509,7 @@ def start_story(
             session.save(directory, story_id, record)
         return {
             "status": status,
+            "branching": record.get("branching", branch_plan),
             "worktree": plan,
             "session": record,
             "session_file": str(session.record_path(directory, story_id)),

@@ -195,6 +195,7 @@ def discover_next_story(
     target_status: str,
     story_type: str,
     page_size: int,
+    release_id: int | None = None,
 ) -> dict[str, Any]:
     root_id = root_work_package_id
     root = api_get_json(client, f"/api/v3/work_packages/{root_id}")
@@ -212,10 +213,19 @@ def discover_next_story(
         for version in versions
         if str(version.get("status") or "").casefold() == "open"
         and release_number(str(version.get("name") or "")) is not None
+        and (release_id is None or version.get("id") == release_id)
     }
 
     descendants = fetch_descendants(client, root_id, page_size, selected_project_id)
-    stories = [wp for wp in descendants if work_package_type_name(wp) == story_type]
+    stories = [
+        wp
+        for wp in descendants
+        if work_package_type_name(wp) == story_type
+        and (
+            release_id is None
+            or extract_id_from_href(link_href(wp, "version"), "versions") == release_id
+        )
+    ]
     if not stories:
         raise StoryWorkflowError("NO_STORY_FOUND", f"No {story_type} work packages found.")
 

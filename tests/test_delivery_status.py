@@ -89,7 +89,7 @@ def test_delivered_cli_and_normalized_fields(authority, capsys):
     assert data["fields"]["verification_state"]["state"] == "not_applicable"
     assert data["fields"]["merged_revision"]["value"] == "b" * 40
     assert data["observed_at"].endswith("+00:00")
-    assert len(authority["calls"]) == 4
+    assert len(authority["calls"]) == 6
 
 
 @pytest.mark.parametrize(
@@ -101,7 +101,7 @@ def test_discovery_missing_ambiguous_and_bounded(authority, count, stage):
     result = reconcile()
     assert result["delivery_stage"] == stage
     assert result["blocker"]
-    assert len(authority["calls"]) == 1
+    assert len(authority["calls"]) == (3 if count == 0 else 1)
 
 
 def test_incomplete_search_and_explicit_selection(authority):
@@ -113,6 +113,27 @@ def test_incomplete_search_and_explicit_selection(authority):
         ]
         == "delivered"
     )
+
+
+def test_release_story_is_complete_without_release_or_deployment_queries(authority, monkeypatch):
+    monkeypatch.setattr(
+        status.branching,
+        "select",
+        lambda *_args, **_kwargs: {"strategy": "release", "target_branch": "release/v1.2.3"},
+    )
+    authority["pr"]["base"]["ref"] = "release/v1.2.3"
+    authority["pr"]["head"]["ref"] = "fix/op-414-delivery"
+    monkeypatch.setattr(
+        status,
+        "collect_optional_delivery",
+        lambda *_args: pytest.fail("No publication/deployment query required for Story completion"),
+    )
+    result = status.reconcile(OpenProjectClient(settings()), Path("."), 414, pr_number=9)
+    assert result["delivery_stage"] == "story_complete"
+    assert result["blocker"] is None
+    assert result["fields"]["merged_revision"]["value"] == "b" * 40
+    assert result["fields"]["release"]["state"] == "not_applicable"
+    assert len(authority["calls"]) == 2
 
 
 @pytest.mark.parametrize("field,value", [("ref", "feature/op-415-other"), ("sha", "invalid")])

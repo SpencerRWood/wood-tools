@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient
-from wood_project.story import workflow
+from wood_project.story import branching, workflow
 from wood_project.story.activity import MAX_COMMENT_BYTES
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.openproject import work_package_description_text
@@ -58,6 +58,7 @@ def _verify(
     pr_number: int,
     run_id: int,
     verification_path: Path | None = None,
+    target_branch: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if pr_number <= 0 or run_id <= 0:
         raise _invalid("PR and CI run IDs must be positive integers.")
@@ -101,17 +102,28 @@ def _verify(
     pr = _document(root, f"repos/{slug}/pulls/{pr_number}")
     head = pr.get("head")
     base = pr.get("base")
+    if not isinstance(head, dict) or not re.fullmatch(
+        r"[0-9a-f]{40,64}", str(head.get("sha") or "")
+    ):
+        raise _invalid("PR source revision is missing or invalid.")
+    source_project = operations._run(["git", "show", f"{head['sha']}:pyproject.toml"], root)
+    branch_plan = branching.select(
+        root,
+        story=story,
+        target_branch=target_branch,
+        source_text=source_project.stdout if source_project.returncode == 0 else "",
+    )
     if (
         pr.get("number") != pr_number
         or pr.get("merged") is not True
         or not isinstance(head, dict)
         or not isinstance(base, dict)
-        or base.get("ref") != "main"
+        or base.get("ref") != branch_plan["target_branch"]
         or _repository_name(base.get("repo")) != slug
-        or not re.fullmatch(rf"feature/op-{story_id}-.+", str(head.get("ref") or ""))
+        or not re.fullmatch(rf"(?:feature|feat|fix)/op-{story_id}-.+", str(head.get("ref") or ""))
     ):
         raise _invalid(
-            "PR must be merged into this repository's main and belong to this Story branch."
+            "PR must be merged into the designated integration branch and belong to this Story."
         )
     source_sha = head.get("sha")
     merge_sha = pr.get("merge_commit_sha")
@@ -124,7 +136,10 @@ def _verify(
         raise _invalid("PR source and merge revisions are missing or invalid.")
     merged = operations._run(["git", "merge-base", "--is-ancestor", merge_sha, "HEAD"], root)
     if merged.returncode:
-        raise _invalid("Current checkout does not contain the PR merge; fetch and update main.")
+        raise _invalid(
+            "Current checkout does not contain the PR merge; "
+            "fetch and update the integration branch."
+        )
     fingerprint = revision_fingerprint(root, source_sha)
     if record.get("source_fingerprint") != fingerprint:
         raise _invalid(
@@ -144,6 +159,7 @@ def _verify(
         "schema_version": 1,
         "kind": KIND,
         "story_id": story_id,
+        "branching": branch_plan,
         "repository": slug,
         "source_fingerprint": fingerprint,
         "validation_file": str(validation_path.resolve()),
@@ -160,6 +176,8 @@ def _verify(
             "url": f"https://github.com/{slug}/pull/{pr_number}",
             "source_sha": source_sha,
             "merge_sha": merge_sha,
+            "target_branch": base["ref"],
+            "head_branch": head["ref"],
         },
     }
     source_project = operations._run(["git", "show", f"{source_sha}:pyproject.toml"], root)
@@ -190,10 +208,11 @@ def generate_evidence(
     run_id: int,
     apply: bool,
     verification_path: Path | None = None,
+    target_branch: str | None = None,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
     evidence, story, record, pr = _verify(
-        client, root, story_id, validation_path, pr_number, run_id, verification_path
+        client, root, story_id, validation_path, pr_number, run_id, verification_path, target_branch
     )
     delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
@@ -202,6 +221,8 @@ def generate_evidence(
         f"Shipped: {str(story.get('subject') or '')[:160]}\n"
         f"PR: {evidence['pull_request']['url']}\n"
         f"Merge commit: {evidence['pull_request']['merge_sha']}\n"
+        f"Integration branch: {evidence['pull_request']['target_branch']}\n"
+        f"Branching evidence: {evidence['branching']}\n"
         f"Validated implementation: {evidence['pull_request']['source_sha']}\n"
         f"Repository checks passed: {checks}\n"
         f"CI passed: {evidence['ci']['url']}\n"

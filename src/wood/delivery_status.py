@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from wood_project.openproject import OpenProjectClient, OpenProjectError, load_settings
-from wood_project.story import workflow
+from wood_project.story import branching, workflow
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.openproject import work_package_description_text
 
@@ -119,22 +119,32 @@ def reconcile(
             ):
                 fields[name] = _missing("No deployment workflow is configured.", applicable=False)
         if pr_number is None:
-            query = urlencode(
-                {"q": f"repo:{slug} is:pr head:feature/op-{story_id}-", "per_page": 50}
-            )
-            search = _document(root, f"search/issues?{query}")
-            if (
-                search.get("incomplete_results") is not False
-                or not isinstance(search.get("total_count"), int)
-                or search["total_count"] > 50
-                or not isinstance(search.get("items"), list)
-            ):
-                return stop(
-                    "pull_request",
-                    "PR discovery is incomplete or exceeds 50 results.",
-                    "Specify --pr with the exact Story PR number.",
+            discovered = {}
+            for prefix in ("feature", "feat", "fix"):
+                query = urlencode(
+                    {"q": f"repo:{slug} is:pr head:{prefix}/op-{story_id}-", "per_page": 50}
                 )
-            candidates = search["items"]
+                search = _document(root, f"search/issues?{query}")
+                if (
+                    search.get("incomplete_results") is not False
+                    or not isinstance(search.get("total_count"), int)
+                    or search["total_count"] > 50
+                    or not isinstance(search.get("items"), list)
+                ):
+                    return stop(
+                        "pull_request",
+                        "PR discovery is incomplete or exceeds 50 results.",
+                        "Specify --pr with the exact Story PR number.",
+                    )
+                if search["total_count"] > 1:
+                    return stop(
+                        "pull_request",
+                        "Multiple Story PR candidates were found.",
+                        "Specify --pr with the intended Story PR number.",
+                    )
+                for candidate in search["items"]:
+                    discovered[candidate.get("number")] = candidate
+            candidates = list(discovered.values())
             if not candidates:
                 fields["pull_request"] = _missing("No Story branch PR was found in GitHub.")
                 return stop(
@@ -155,19 +165,20 @@ def reconcile(
                 )
         pr = _document(root, f"repos/{slug}/pulls/{pr_number}")
         head, base = pr.get("head"), pr.get("base")
+        branch_plan = branching.select(root, story=story)
         if (
             not isinstance(head, dict)
             or not isinstance(base, dict)
-            or not re.fullmatch(rf"feature/op-{story_id}-.+", str(head.get("ref", "")))
-            or base.get("ref") != "main"
+            or not re.fullmatch(rf"(?:feature|feat|fix)/op-{story_id}-.+", str(head.get("ref", "")))
+            or base.get("ref") != branch_plan["target_branch"]
             or not isinstance(base.get("repo"), dict)
             or base["repo"].get("full_name") != slug
             or not _revision(head.get("sha"))
         ):
             return stop(
                 "pull_request",
-                "PR does not resolve to this Story branch and repository main.",
-                "Specify --pr with a verified Story branch PR targeting repository main.",
+                "PR does not resolve to this Story branch and designated integration target.",
+                "Specify --pr with a verified Story branch PR targeting the designated branch.",
             )
         url = f"https://github.com/{slug}/pull/{pr_number}"
         state = "merged" if pr.get("merged") is True else pr.get("state")
@@ -176,7 +187,7 @@ def reconcile(
         result["delivery_stage"] = "ci"
         merged = pr.get("merge_commit_sha") if state == "merged" else None
         pipeline = None
-        if isinstance(merged, str) and _revision(merged):
+        if isinstance(merged, str) and _revision(merged) and branch_plan["strategy"] == "trunk":
             fields["merged_revision"] = _available(merged, url)
             optional = collect_optional_delivery(root, slug, merged, environment)
             for target, source in (
@@ -254,6 +265,27 @@ def reconcile(
                 "Merged PR has no valid merge revision.",
                 "Repair the missing GitHub merge revision linkage.",
             )
+        if branch_plan["strategy"] == "release":
+            fields["merged_revision"] = _available(merged, url)
+            for name in (
+                "release",
+                "release_run",
+                "image_digest",
+                "infrastructure_promotion",
+                "deployment_environment",
+                "deployed_revision",
+                "verification_state",
+            ):
+                fields[name] = _missing(
+                    "Story integrated; separate release readiness and deployment gates remain.",
+                    applicable=False,
+                )
+            result["delivery_stage"] = "story_complete"
+            result["next_action"] = (
+                "Record Story evidence and reconcile OpenProject; "
+                "do not publish, deploy or merge the release into main."
+            )
+            return result
         result["delivery_stage"] = "release"
         if pipeline is not None and pipeline["blocker"] is not None:
             blocker = pipeline["blocker"]

@@ -6,6 +6,9 @@ import argparse
 from pathlib import Path
 from typing import Any, cast
 
+from wood_project.story import branching
+from wood_project.story.models import StoryWorkflowError
+
 from . import operations
 from .output import Status, envelope
 from .verification import repo_verify
@@ -15,7 +18,7 @@ from .workflow_files import WorkflowFilesError
 def add_operations_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     repo = commands.add_parser("repo", help="Inspect repository standards and validation")
     repo_actions = repo.add_subparsers(dest="repo_command", required=True)
-    for name in ("info", "standards", "validate", "verify"):
+    for name in ("info", "branching", "standards", "validate", "verify"):
         parser = repo_actions.add_parser(name)
         parser.add_argument("--json", dest="operations_json", action="store_true")
     ci = commands.add_parser("ci", help="Inspect centralized validation")
@@ -40,6 +43,8 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
         if group == "repo":
             if action == "info":
                 data = operations.repo_info(root)
+            elif action == "branching":
+                data = branching.discover(root)
             elif action == "standards":
                 data = operations.repo_standards(root)
                 if not data["conformant"]:
@@ -89,10 +94,10 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
             data=data,
             warnings=warnings,
         )
-    except (operations.OperationsError, WorkflowFilesError) as exc:
+    except (operations.OperationsError, WorkflowFilesError, StoryWorkflowError) as exc:
         return envelope(
             command=command,
-            status=exc.status,
+            status=getattr(exc, "status", "invalid"),
             summary=str(exc),
             errors=[{"code": exc.code, "message": str(exc)}],
         )

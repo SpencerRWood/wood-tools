@@ -10,13 +10,14 @@ import pytest
 
 from wood.cli import main
 from wood_project.openproject import OpenProjectClient, OpenProjectSettings
-from wood_project.story import session, workflow
+from wood_project.story import branching, session, workflow
 from wood_project.story.models import StoryWorkflowError
 
 
 @pytest.fixture
-def repository(tmp_path, monkeypatch):
-    root = tmp_path / "example"
+def repository(tmp_path, monkeypatch, request):
+    repository_name = getattr(request, "param", "example")
+    root = tmp_path / repository_name
     root.mkdir()
     session.git(root, "init", "-q", "-b", "main")
     session.git(root, "config", "user.name", "Fixture")
@@ -33,7 +34,7 @@ def repository(tmp_path, monkeypatch):
         "id": 42,
         "subject": "Ship lifecycle",
         "lockVersion": 1,
-        "description": {"raw": "Primary Repository: example\n"},
+        "description": {"raw": f"Primary Repository: {repository_name}\n"},
         "_links": {
             "type": {"title": "Story"},
             "status": {"title": "New"},
@@ -43,7 +44,14 @@ def repository(tmp_path, monkeypatch):
         },
     }
     monkeypatch.setattr(workflow, "_story", lambda *_args: story)
-    monkeypatch.setattr(workflow, "api_get_json", lambda *_args: {"status": "open"})
+    monkeypatch.setattr(
+        workflow,
+        "api_get_json",
+        lambda *_args: {
+            "status": "open",
+            "_links": {"definingProject": {"href": "/api/v3/projects/3"}},
+        },
+    )
     monkeypatch.setattr(workflow.discovery, "fetch_predecessor_map", lambda *_args: {})
     monkeypatch.setattr(
         workflow,
@@ -63,6 +71,130 @@ def repository(tmp_path, monkeypatch):
 def start(repository, owner="codex-fixture", apply=True):
     _, target, client, _ = repository
     return workflow.start_story(client, 42, apply=apply, owner=owner, worktree=target)
+
+
+def mapped_release(repository, tmp_path):
+    root, _, _, _ = repository
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + '\n[tool.wood.branching]\nstrategy = "release"\n'
+        'release_id = 20\nrelease_branch = "release/v1.2.3"\n'
+        'scope_reference = "fixture:approved-R1-scope"\n'
+    )
+    session.git(root, "add", "pyproject.toml")
+    session.git(root, "commit", "-qm", "Approved fixture adoption")
+    remote = tmp_path / "remote.git"
+    session.git(root, "init", "--bare", "-q", str(remote))
+    session.git(root, "remote", "add", "origin", str(remote))
+    session.git(root, "switch", "-qc", "release/v1.2.3")
+    (root / "integrated.txt").write_text("Earlier R1 Story\n")
+    session.git(root, "add", ".")
+    session.git(root, "commit", "-qm", "Earlier R1 Story")
+    revision = session.git(root, "rev-parse", "HEAD")
+    session.git(root, "push", "-q", "origin", "main", "release/v1.2.3")
+    session.git(root, "switch", "-q", "main")
+    return revision
+
+
+@pytest.mark.parametrize("repository", ["recovery-verification"], indirect=True)
+@pytest.mark.parametrize("prefix", ["feat", "fix", "feature"])
+def test_recovery_r1_controlled_branch_selection_preserves_main(repository, tmp_path, prefix):
+    root, target, client, story = repository
+    story["id"] = 499
+    base = mapped_release(repository, tmp_path)
+    main_before = session.git(root, "rev-parse", "main")
+    result = workflow.start_story(
+        client,
+        499,
+        apply=True,
+        owner="fixture-R1",
+        worktree=target,
+        base_branch="release/v1.2.3",
+        target_branch="release/v1.2.3",
+        branch_prefix=prefix,
+    )
+    assert result["session"]["branch"] == f"{prefix}/op-499-ship-lifecycle"
+    assert session.git(target, "rev-parse", "HEAD") == base
+    assert (target / "integrated.txt").read_text() == "Earlier R1 Story\n"
+    assert session.git(root, "rev-parse", "main") == main_before
+    assert result["branching"]["release_id"] == 20
+    assert result["branching"]["base_revision"] == base
+    assert workflow.start_story(client, 499, apply=False, owner="fixture-R1", worktree=target)[
+        "worktree"
+    ]["reused"]
+    assert not session.git(root, "tag", "--list")
+
+
+def test_release_preview_fetches_without_claim_or_branch_creation(repository, tmp_path):
+    root, target, _, _ = repository
+    base = mapped_release(repository, tmp_path)
+    result = start(repository, apply=False)
+    assert result["branching"]["base_revision"] == base
+    assert not target.exists()
+    assert not (root / ".git/wood-stories").exists()
+    assert not session.git(root, "branch", "--list", "feat/*")
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("release_id", "21", "RELEASE_MISMATCH"),
+        ("scope_reference", '""', "BRANCHING_INVALID"),
+        ("release_branch", '"release/v9.9.9"', "GIT_COMMAND_FAILED"),
+    ],
+)
+def test_release_missing_scope_mapping_or_remote_fails_closed(
+    repository, tmp_path, field, value, code
+):
+    root, target, _, _ = repository
+    mapped_release(repository, tmp_path)
+    project = root / "pyproject.toml"
+    import re
+
+    project.write_text(
+        re.sub(rf"^{field} = .*", f"{field} = {value}", project.read_text(), flags=re.M)
+    )
+    with pytest.raises(StoryWorkflowError) as failure:
+        start(repository)
+    assert failure.value.code == code
+    assert not target.exists()
+    assert session.read_record(session.locations()[1], 42) is None
+    assert not session.git(root, "branch", "--list", "feat/*")
+
+
+def test_release_explicit_main_target_and_stale_remote_are_rejected(repository, tmp_path):
+    root, target, client, _ = repository
+    revision = mapped_release(repository, tmp_path)
+    with pytest.raises(StoryWorkflowError, match="Explicit branches"):
+        workflow.start_story(
+            client, 42, apply=True, owner="fixture", worktree=target, target_branch="main"
+        )
+    session.git(root, "update-ref", "-d", "refs/heads/release/v1.2.3")
+    session.git(root, "push", "-q", "origin", ":refs/heads/release/v1.2.3")
+    session.git(root, "update-ref", "refs/remotes/origin/release/v1.2.3", revision)
+    assert branching.discover(root)["observed_base_revision"] is not None
+    with pytest.raises(StoryWorkflowError):
+        start(repository)
+    assert not target.exists()
+
+
+def test_active_trunk_claim_cannot_be_migrated_to_release(repository, tmp_path):
+    start(repository)
+    mapped_release(repository, tmp_path)
+    with pytest.raises(StoryWorkflowError, match="branching scope differs"):
+        start(repository)
+
+
+def test_release_resume_reads_its_current_git_root_metadata(repository, tmp_path, monkeypatch):
+    root, target, client, _ = repository
+    mapped_release(repository, tmp_path)
+    first = start(repository)
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace("release_id = 20", "release_id = 21"))
+    monkeypatch.chdir(target)
+    resumed = workflow.start_story(client, 42, apply=False, owner="codex-fixture", worktree=target)
+    assert resumed["branching"] == first["branching"]
+    assert resumed["worktree"]["reused"]
 
 
 def test_preview_has_no_claim_branch_worktree_or_status_mutations(repository):

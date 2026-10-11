@@ -16,7 +16,8 @@ permissions:
 
 jobs:
   release:
-    # Immutable Story 517 recovery implementation (workflows PRs #31 and #32).
-    uses: SpencerRWood/workflows/.github/workflows/release.yml@51100f648c0ebdb3291ef67165e0277990e32c64
+    # Guarded foundation; workflow and helper source are pinned together.
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@69b3e703dc9a9b433087788d4ddd09039921f497
     with:
+      workflow_revision: 69b3e703dc9a9b433087788d4ddd09039921f497
       recovery_tag: ${{ inputs.recovery_tag || '' }}
