@@ -114,6 +114,7 @@ def _contract() -> dict[str, object]:
                 "release list",
                 "release get",
                 "repo info",
+                "repo branching",
                 "repo validate",
                 "repo verify",
                 "repo standards",

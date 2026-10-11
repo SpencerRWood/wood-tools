@@ -38,7 +38,22 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
         "merged_revision": _available(merged, pr["url"]),
         "semantic_release": _missing("No verified semantic release contains the merge."),
     }
-    result.update(collect_optional_delivery(root, slug, merged))
+    target = pr.get("target_branch")
+    if isinstance(target, str) and target.startswith("release/"):
+        result["integration_branch"] = _available(target, pr["url"])
+        for field in (
+            "semantic_release",
+            "container_image_digest",
+            "infrastructure_promotion",
+            "deployed_revision",
+            "runtime_verification",
+        ):
+            result[field] = _missing(
+                "Story integrated; publication and deployment await separate release gates.",
+                applicable=False,
+            )
+    else:
+        result.update(collect_optional_delivery(root, slug, merged))
     return result
 
 

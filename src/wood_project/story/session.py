@@ -92,6 +92,18 @@ def read_record(directory: Path, story_id: int) -> dict[str, Any] | None:
         ):
             raise ValueError("invalid record")
         owner_id(record["owner"])
+        if "branching" in record:
+            plan = record["branching"]
+            if (
+                not isinstance(plan, dict)
+                or plan.get("strategy") not in {"trunk", "release"}
+                or not all(
+                    isinstance(plan.get(key), str)
+                    for key in ("base_branch", "target_branch", "base_revision", "base_ref")
+                )
+                or re.fullmatch(r"[0-9a-f]{40,64}", plan["base_revision"]) is None
+            ):
+                raise ValueError("invalid branching record")
         return record
     except (OSError, ValueError, UnicodeError) as exc:
         raise StoryWorkflowError(
@@ -170,7 +182,9 @@ def worktrees(root: Path) -> list[dict[str, str]]:
     return entries
 
 
-def plan_worktree(root: Path, target: Path, branch: str, *, owned: bool) -> dict[str, Any]:
+def plan_worktree(
+    root: Path, target: Path, branch: str, *, owned: bool, base_revision: str | None = None
+) -> dict[str, Any]:
     if not target.is_absolute():
         raise StoryWorkflowError("INVALID_WORKTREE", "--worktree must be an absolute path.")
     target = target.resolve()
@@ -199,15 +213,29 @@ def plan_worktree(root: Path, target: Path, branch: str, *, owned: bool) -> dict
             raise StoryWorkflowError(
                 "DIRTY_WORKTREE", "Unclaimed worktree has changes; inspect them first."
             )
+        if not owned and base_revision:
+            git(target, "merge-base", "--is-ancestor", base_revision, "HEAD")
         return {"path": str(target), "branch": branch, "reused": True, "dirty": dirty}
     if target.exists():
         raise StoryWorkflowError(
             "WORKTREE_CONFLICT", "Target exists but is not this Story's worktree."
         )
     exists = bool(git(root, "branch", "--list", branch))
+    if exists and not owned:
+        raise StoryWorkflowError(
+            "WORKTREE_CONFLICT", "Unclaimed Story branch already exists; inspect it before reuse."
+        )
     if not exists:
-        git(root, "rev-parse", "--verify", "refs/heads/main^{commit}")
-    return {"path": str(target), "branch": branch, "reused": False, "branch_exists": exists}
+        base_revision = base_revision or git(
+            root, "rev-parse", "--verify", "refs/heads/main^{commit}"
+        )
+    return {
+        "path": str(target),
+        "branch": branch,
+        "reused": False,
+        "branch_exists": exists,
+        "base_revision": base_revision,
+    }
 
 
 def prepare(root: Path, plan: dict[str, Any]) -> None:
@@ -215,7 +243,7 @@ def prepare(root: Path, plan: dict[str, Any]) -> None:
         args = ["worktree", "add"]
         if not plan["branch_exists"]:
             args += ["-b", plan["branch"]]
-        args += [plan["path"], plan["branch"] if plan["branch_exists"] else "refs/heads/main"]
+        args += [plan["path"], plan["branch"] if plan["branch_exists"] else plan["base_revision"]]
         git(root, *args)
 
 

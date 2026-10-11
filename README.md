@@ -2,6 +2,44 @@
 
 Wood Tools provides the `wood` command for deterministic agent workflows.
 
+## Progressive branching adoption
+
+Follow the [canonical Codex/Pi policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md).
+`wood repo branching --json` discovers adoption without credentials or a release
+contract. An absent `[tool.wood.branching]` preserves existing trunk defaults
+(`main` base and PR target, `feature/op-*` naming); it does not classify the repository's purpose.
+Adopt applications individually after scope, tooling and validation callers are approved:
+
+```toml
+[tool.wood.branching]
+strategy = "release"
+release_id = 20 # actual OpenProject planning version ID, not inferred from R1
+release_branch = "release/v1.2.3" # example; requires explicit approved SemVer mapping
+scope_reference = "<approved release scope evidence>"
+```
+
+`story start --base-branch release/v1.2.3 --target-branch release/v1.2.3`
+confirms selectors against that mapping. `--branch-prefix feat`, `fix` and `feature`
+are supported; release defaults to `feat`. Start verifies an open planning release
+in the Story project and fetches the exact existing remote branch before creating
+the Story worktree at its recorded revision. Preview may update remote tracking
+refs but never creates a claim, Story branch or worktree. Wood never creates release
+branches. Missing scope/mapping/remote, wrong target and active-claim migration fail
+closed. Approved scope references are human approval evidence, not automatic approval.
+
+`story evidence --target-branch release/v1.2.3` verifies the actual merged PR target
+against adoption metadata from the validated source commit; it records branch and
+release association. Validation, required verification, revision-bound CI and posted
+evidence remain required. Publication/deployment are separate release gates and are
+not prerequisites for Story closure. Release-target delivery reports return
+`story_complete`; trunk delivery reports retain their existing release/deployment
+observations. No command here publishes, deploys or merges a release into main.
+
+Existing in-progress work remains intact and may finish its safe current arrangement
+with explicit approval. Do not change an active claim's mapping to migrate it.
+Recovery Verification R1 fixtures test the first adoption scenario; they do not
+modify OP-499 or approve a live release scope.
+
 ## Install and inspect
 
 Use Python 3.14 and uv:
