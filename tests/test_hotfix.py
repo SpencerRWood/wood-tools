@@ -18,6 +18,8 @@ def integration(repository, tmp_path):
     project.write_text(
         project.read_text() + '\n[tool.wood.branching]\nstrategy = "integration"\n'
         'release_id = 20\nintegration_branch = "development"\nscope_reference = "approved R1"\n'
+        "\n[tool.wood.workflow]\n"
+        f"output_directory = {json.dumps(str(tmp_path / 'workflow-output'))}\n"
     )
     session.git(root, "add", ".")
     session.git(root, "commit", "-qm", "Approved universal integration")
