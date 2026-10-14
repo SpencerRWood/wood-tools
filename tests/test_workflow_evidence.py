@@ -206,21 +206,31 @@ def test_generation_binds_precommit_validation_to_merged_files(delivered):
 
 
 @pytest.mark.parametrize("prefix", ["feature", "feat", "fix"])
-def test_release_evidence_accepts_actual_target_without_publication(delivered, monkeypatch, prefix):
+@pytest.mark.parametrize(
+    "strategy,key,branch",
+    [
+        ("release", "release_branch", "release/v1.2.3"),
+        ("integration", "integration_branch", "development"),
+    ],
+)
+def test_release_evidence_accepts_actual_target_without_publication(
+    delivered, monkeypatch, prefix, strategy, key, branch
+):
     root = delivered["root"]
     project = root / "pyproject.toml"
     project.write_text(
-        project.read_text() + '\n[tool.wood.branching]\nstrategy = "release"\n'
-        'release_id = 20\nrelease_branch = "release/v1.2.3"\n'
+        project.read_text() + f'\n[tool.wood.branching]\nstrategy = "{strategy}"\n'
+        f'release_id = 20\n{key} = "{branch}"\n'
         'scope_reference = "fixture:approved-scope"\n'
     )
     delivered["story"]["_links"]["version"]["href"] = "/api/v3/versions/20"
+    delivered["story"]["description"]["raw"] = "Primary Repository: owner/wood-tools\n"
     git(root, "add", ".")
     git(root, "commit", "-qm", "Approved fixture adoption")
     revision = git(root, "rev-parse", "HEAD")
     delivered["pr"]["head"].update(sha=revision, ref=f"{prefix}/op-410-implementation")
     delivered["pr"]["merge_commit_sha"] = revision
-    delivered["pr"]["base"]["ref"] = "release/v1.2.3"
+    delivered["pr"]["base"]["ref"] = branch
     delivered["run"]["head_sha"] = revision
     delivered["record"] = operations.repo_validate(root)
     monkeypatch.setattr(
@@ -229,10 +239,10 @@ def test_release_evidence_accepts_actual_target_without_publication(delivered, m
     )
     result = generate(delivered)
     generated = workflow_files.read_json(Path(result["evidence_file"]))
-    assert generated["pull_request"]["target_branch"] == "release/v1.2.3"
+    assert generated["pull_request"]["target_branch"] == branch
     assert generated["branching"]["release_id"] == 20
     assert result["delivery"]["semantic_release"]["state"] == "not_applicable"
-    assert "Integration branch: release/v1.2.3" in Path(result["update_file"]).read_text()
+    assert f"Integration branch: {branch}" in Path(result["update_file"]).read_text()
     evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
     delivered["pr"]["base"]["ref"] = "main"
     with pytest.raises(StoryWorkflowError, match="designated integration branch"):

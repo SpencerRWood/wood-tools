@@ -115,13 +115,19 @@ def test_incomplete_search_and_explicit_selection(authority):
     )
 
 
-def test_release_story_is_complete_without_release_or_deployment_queries(authority, monkeypatch):
+@pytest.mark.parametrize(
+    "strategy,branch", [("release", "release/v1.2.3"), ("integration", "development")]
+)
+def test_release_story_is_complete_without_release_or_deployment_queries(
+    authority, monkeypatch, strategy, branch
+):
     monkeypatch.setattr(
         status.branching,
         "select",
-        lambda *_args, **_kwargs: {"strategy": "release", "target_branch": "release/v1.2.3"},
+        lambda *_args, **_kwargs: {"strategy": strategy, "target_branch": branch},
     )
-    authority["pr"]["base"]["ref"] = "release/v1.2.3"
+    authority["pr"]["base"]["ref"] = branch
+    authority["story"]["description"]["raw"] = "Primary Repository: owner/wood-tools\n"
     authority["pr"]["head"]["ref"] = "fix/op-414-delivery"
     monkeypatch.setattr(
         status,

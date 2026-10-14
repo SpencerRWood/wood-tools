@@ -39,7 +39,10 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
         "semantic_release": _missing("No verified semantic release contains the merge."),
     }
     target = pr.get("target_branch")
-    if isinstance(target, str) and target.startswith("release/"):
+    plan = evidence.get("branching", {})
+    if isinstance(target, str) and (
+        plan.get("strategy") in {"release", "integration"} or target.startswith("release/")
+    ):
         result["integration_branch"] = _available(target, pr["url"])
         for field in (
             "semantic_release",

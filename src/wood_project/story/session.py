@@ -96,7 +96,7 @@ def read_record(directory: Path, story_id: int) -> dict[str, Any] | None:
             plan = record["branching"]
             if (
                 not isinstance(plan, dict)
-                or plan.get("strategy") not in {"trunk", "release"}
+                or plan.get("strategy") not in {"trunk", "release", "integration"}
                 or not all(
                     isinstance(plan.get(key), str)
                     for key in ("base_branch", "target_branch", "base_revision", "base_ref")

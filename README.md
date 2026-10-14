@@ -4,6 +4,32 @@ Wood Tools provides the `wood` command for deterministic agent workflows.
 
 ## Progressive branching adoption
 
+Approved application scopes may also use an explicit named integration branch:
+
+```toml
+[tool.wood.branching]
+strategy = "integration"
+release_id = 25 # OpenProject planning version
+integration_branch = "development"
+scope_reference = "<approved workbook or release scope evidence>"
+```
+
+`main` remains stable. Feature Stories start from the fetched integration branch
+and target that same branch; `feature` is the default prefix. Integration mappings
+require a valid Git branch other than `main`, an open matching planning release,
+and approved scope. Start never creates the integration branch. Claims, resume,
+PR evidence and delivery retain the same safeguards as release mappings. Story
+integration reports `story_complete` without requiring publication or deployment.
+Final integration into `main` requires separate release verification and approval.
+Configure caller workflows so Story branches and integration merges only validate;
+Wood's metadata does not disable publication jobs in GitHub Actions.
+
+Story Primary Repository supports both a repository basename and canonical
+`owner/repo`. Canonical start identity checks the GitHub origin (HTTPS or SSH),
+including owner, without requiring an upstream or initial commit. Before a remote
+exists, bootstrap identity checks the directory basename only; this is not proof
+of remote ownership. Evidence and CI verification check the canonical GitHub identity.
+
 Follow the [canonical Codex/Pi policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md).
 `wood repo branching --json` discovers adoption without credentials or a release
 contract. An absent `[tool.wood.branching]` preserves existing trunk defaults

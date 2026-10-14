@@ -65,7 +65,7 @@ def _verify(
     story = workflow._story(client, story_id)
     slug = operations._slug(root)
     repository = workflow._repository(work_package_description_text(story))
-    if repository != slug.split("/")[1] or root.name != repository:
+    if not workflow.repository_matches(repository, slug):
         raise _invalid("Story Primary Repository must match the current repository.")
     dirty = operations._run(["git", "status", "--porcelain"], root)
     if dirty.returncode or dirty.stdout.strip():
