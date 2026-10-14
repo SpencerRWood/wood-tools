@@ -16,7 +16,11 @@ from wood_project.story.models import StoryWorkflowError
 
 
 @pytest.fixture
-def authority(monkeypatch):
+def authority(monkeypatch, tmp_path):
+    # Delivery scenarios define their own strategy rather than inheriting this
+    # checkout's live planning release and branch mapping.
+    (tmp_path / "pyproject.toml").write_text('[tool.wood.branching]\nstrategy = "trunk"\n')
+    monkeypatch.chdir(tmp_path)
     state = {
         "story": _story(414, "In progress"),
         "search": {"total_count": 1, "incomplete_results": False, "items": [{"number": 9}]},

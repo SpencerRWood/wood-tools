@@ -32,6 +32,12 @@ epic_id = 514
 [tool.wood.workflow]
 output_directory = "/private/tmp"
 
+[tool.wood.branching]
+strategy = "integration"
+release_id = 26
+integration_branch = "development"
+scope_reference = "https://projects.woodhost.cloud/work_packages/556"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["resources", "resources.*", "wood", "wood.*", "wood_project", "wood_project.*"]
