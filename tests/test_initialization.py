@@ -291,6 +291,8 @@ def test_generated_actions_yaml_and_output_contracts(tmp_path, spec, images, dep
 
 def test_init_cli_preview_and_apply(tmp_path, spec, monkeypatch, capsys):
     source, baseline = source_repository(tmp_path)
+    with (source / "pyproject.toml").open("a") as stream:
+        stream.write(f'[tool.wood.workflow]\noutput_directory = "{tmp_path / "workflow-output"}"\n')
     monkeypatch.chdir(source)
     specfile = tmp_path / "spec.json"
     specfile.write_text(json.dumps(spec))

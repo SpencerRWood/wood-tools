@@ -22,6 +22,9 @@ def github(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
     session.git(root, "init", "-q", "-b", "main")
+    (root / "pyproject.toml").write_text(
+        f'[tool.wood.workflow]\noutput_directory = "{tmp_path / "workflow-output"}"\n'
+    )
     state = {
         "rulesets": [],
         "created": [],
