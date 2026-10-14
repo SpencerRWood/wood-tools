@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.23.0 (2026-10-14)
+
+### Features
+
+- Unify branching contracts and controlled hotfix lifecycle (BR-01)
+  ([`68872f3`](https://github.com/SpencerRWood/wood-tools/commit/68872f3132f59fe04dd3d0419bc34c2e5f9259a2))
+
+### Testing
+
+- Use portable output directory for hotfix fixtures
+  ([`a5bbb78`](https://github.com/SpencerRWood/wood-tools/commit/a5bbb78be223c63e3feed3d5cd83e2ef537b1dfa))
+
+
 ## v0.22.0 (2026-10-14)
 
 ### Features
