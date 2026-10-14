@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.22.0 (2026-10-14)
+
+### Features
+
+- **story**: Support approved integration branches and canonical repository identity
+  ([#62](https://github.com/SpencerRWood/wood-tools/pull/62),
+  [`f650b3b`](https://github.com/SpencerRWood/wood-tools/commit/f650b3be8049d8c4c0578385761c4fae64a6193f))
+
+
 ## v0.21.0 (2026-10-11)
 
 ### Continuous Integration
