@@ -2,6 +2,9 @@ name: Validate
 
 on:
   pull_request:
+  push:
+    branches:
+      - development
   workflow_dispatch:
 
 permissions:
@@ -9,4 +12,6 @@ permissions:
 
 jobs:
   validation:
-    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v1
+    uses: SpencerRWood/workflows/.github/workflows/validate.yml@f4301524b763aa84e0a8853978ffd0617b6f7486
+    with:
+      workflow_revision: f4301524b763aa84e0a8853978ffd0617b6f7486
