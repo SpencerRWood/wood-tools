@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from wood_project.openproject import OpenProjectClient
-from wood_project.story import branching, workflow
+from wood_project.story import branching, session, workflow
 from wood_project.story.activity import MAX_COMMENT_BYTES
 from wood_project.story.models import StoryWorkflowError
 from wood_project.story.openproject import work_package_description_text
@@ -59,6 +59,8 @@ def _verify(
     run_id: int,
     verification_path: Path | None = None,
     target_branch: str | None = None,
+    hotfix_incident: str | None = None,
+    hotfix_approval: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if pr_number <= 0 or run_id <= 0:
         raise _invalid("PR and CI run IDs must be positive integers.")
@@ -112,7 +114,31 @@ def _verify(
         story=story,
         target_branch=target_branch,
         source_text=source_project.stdout if source_project.returncode == 0 else "",
+        hotfix_incident=hotfix_incident,
+        hotfix_approval=hotfix_approval,
     )
+    if branch_plan.get("mode") == "hotfix":
+        _, directory = session.locations()
+        claim = session.read_record(directory, story_id)
+        if (
+            claim is None
+            or claim["server"] != client.settings.base_url.rstrip("/")
+            or claim["branch"] != head.get("ref")
+            or any(
+                claim.get("branching", {}).get(key) != branch_plan.get(key)
+                for key in (
+                    "mode",
+                    "base_branch",
+                    "target_branch",
+                    "integration_branch",
+                    "release_id",
+                    "scope_reference",
+                    "hotfix_incident",
+                    "hotfix_approval",
+                )
+            )
+        ):
+            raise _invalid("Hotfix evidence must match its retained Story claim and authorization.")
     if (
         pr.get("number") != pr_number
         or pr.get("merged") is not True
@@ -209,10 +235,21 @@ def generate_evidence(
     apply: bool,
     verification_path: Path | None = None,
     target_branch: str | None = None,
+    hotfix_incident: str | None = None,
+    hotfix_approval: str | None = None,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
     evidence, story, record, pr = _verify(
-        client, root, story_id, validation_path, pr_number, run_id, verification_path, target_branch
+        client,
+        root,
+        story_id,
+        validation_path,
+        pr_number,
+        run_id,
+        verification_path,
+        target_branch,
+        hotfix_incident,
+        hotfix_approval,
     )
     delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
@@ -301,6 +338,8 @@ def verify_generated_evidence(
             pr_number,
             run_id,
             Path(evidence["verification"]["path"]) if "verification" in evidence else None,
+            hotfix_incident=evidence.get("branching", {}).get("hotfix_incident"),
+            hotfix_approval=evidence.get("branching", {}).get("hotfix_approval"),
         )
         for key, value in fresh.items():
             if evidence.get(key) != value:

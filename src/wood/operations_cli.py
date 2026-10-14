@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,13 +13,13 @@ from wood_project.story.models import StoryWorkflowError
 from . import operations
 from .output import Status, envelope
 from .verification import repo_verify
-from .workflow_files import WorkflowFilesError
+from .workflow_files import WorkflowFilesError, run_directory, write_json
 
 
 def add_operations_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     repo = commands.add_parser("repo", help="Inspect repository standards and validation")
     repo_actions = repo.add_subparsers(dest="repo_command", required=True)
-    for name in ("info", "branching", "standards", "validate", "verify"):
+    for name in ("info", "branching", "release-readiness", "standards", "validate", "verify"):
         parser = repo_actions.add_parser(name)
         parser.add_argument("--json", dest="operations_json", action="store_true")
     ci = commands.add_parser("ci", help="Inspect centralized validation")
@@ -45,6 +46,13 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
                 data = operations.repo_info(root)
             elif action == "branching":
                 data = branching.discover(root)
+            elif action == "release-readiness":
+                data = branching.release_readiness(root)
+                status = "success" if data["ready_for_release_review"] else "blocked"
+                data["observed_at"] = datetime.now(UTC).isoformat()
+                record_path = run_directory(root, "wood-release-readiness-") / "readiness.json"
+                data["readiness_file"] = str(record_path)
+                write_json(record_path, data)
             elif action == "standards":
                 data = operations.repo_standards(root)
                 if not data["conformant"]:

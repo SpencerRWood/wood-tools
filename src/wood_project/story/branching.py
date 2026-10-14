@@ -16,6 +16,18 @@ from .openproject import extract_id_from_href
 RELEASE_BRANCH = r"release/v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
 
 
+def contract() -> dict[str, Any]:
+    """Let launchers negotiate branching support before creating a claim."""
+    return {
+        "version": 1,
+        "strategies": ["trunk", "release", "integration"],
+        "branch_prefixes": ["feature", "feat", "fix"],
+        "target_strategy": "integration",
+        "target_integration_branch": "development",
+        "hotfix": {"version": 1, "reconciliation": "main-ancestor-of-integration"},
+    }
+
+
 def configuration(root: Path, *, source_text: str | None = None) -> dict[str, Any]:
     """Missing adoption metadata preserves the existing trunk workflow."""
     try:
@@ -99,8 +111,27 @@ def select(
     base_branch: str | None = None,
     target_branch: str | None = None,
     source_text: str | None = None,
+    hotfix_incident: str | None = None,
+    hotfix_approval: str | None = None,
 ) -> dict[str, Any]:
     plan = configuration(root, source_text=source_text)
+    if hotfix_incident is not None or hotfix_approval is not None:
+        if plan["strategy"] != "integration" or any(
+            not isinstance(value, str) or not value.strip() or len(value) > 500
+            for value in (hotfix_incident, hotfix_approval)
+        ):
+            raise StoryWorkflowError(
+                "HOTFIX_AUTHORIZATION_REQUIRED",
+                "Hotfix requires integration strategy, incident and explicit approval references.",
+            )
+        plan.update(
+            mode="hotfix",
+            integration_branch=plan["base_branch"],
+            base_branch="main",
+            target_branch="main",
+            hotfix_incident=hotfix_incident,
+            hotfix_approval=hotfix_approval,
+        )
     if (base_branch is not None and base_branch != plan["base_branch"]) or (
         target_branch is not None and target_branch != plan["target_branch"]
     ):
@@ -117,6 +148,49 @@ def select(
             )
         plan["release_name"] = story.get("_links", {}).get("version", {}).get("title")
     return plan
+
+
+def release_readiness(root: Path) -> dict[str, Any]:
+    """Require main (including emergency fixes) back in integration before release review."""
+    plan = configuration(root)
+    if plan["strategy"] != "integration":
+        raise StoryWorkflowError(
+            "INTEGRATION_REQUIRED",
+            "Release readiness requires an explicitly adopted integration strategy.",
+        )
+    if session.git(root, "rev-parse", "--is-shallow-repository") != "false":
+        raise StoryWorkflowError(
+            "HISTORY_INCOMPLETE", "Fetch complete history before release preparation."
+        )
+    integration = plan["base_branch"]
+    session.git(
+        root,
+        "fetch",
+        "--no-tags",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+        f"+refs/heads/{integration}:refs/remotes/origin/{integration}",
+    )
+    main = session.git(root, "rev-parse", "refs/remotes/origin/main^{commit}")
+    development = session.git(root, "rev-parse", f"refs/remotes/origin/{integration}^{{commit}}")
+    missing = session.git(
+        root, "rev-list", "--max-count=21", main, "--not", development
+    ).splitlines()
+    return {
+        "branching": plan,
+        "main_revision": main,
+        "integration_revision": development,
+        "main_in_integration": not missing,
+        "ready_for_release_review": not missing,
+        "unreconciled_main_commits": missing[:20],
+        "commits_truncated": len(missing) > 20,
+        "authorization_granted": False,
+        "next_action": (
+            "Validate scope, planning release, protected-main checks and explicit release approval."
+            if not missing
+            else "Reconcile main into integration through a reviewed PR, then recheck."
+        ),
+    }
 
 
 def discover(root: Path) -> dict[str, Any]:

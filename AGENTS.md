@@ -2,7 +2,7 @@
 
 ## Branching strategy
 
-- This repository uses **trunk-based development**. Create short-lived change branches from current `main` and target PRs to `main`.
+- This repository currently retains its legacy trunk metadata and existing Story claims. The universal target is integration/development after deliberate migration; do not migrate it in BR-01. Resolve root metadata before choosing base/target, never infer strategy from repository purpose.
 - Follow the [canonical branching and delivery policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md), available through the installed codex-config source path. Verify the strategy, release association, fetched base and PR target before implementation and record them in Story evidence. Story completion does not authorize publication or deployment; retain existing review, CI, security and rollback requirements.
 
 ## Scope

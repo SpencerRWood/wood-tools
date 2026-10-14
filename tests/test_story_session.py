@@ -256,6 +256,74 @@ def test_release_resume_reads_its_current_git_root_metadata(repository, tmp_path
     assert resumed["worktree"]["reused"]
 
 
+@pytest.mark.parametrize("strategy", ["release", "integration"])
+@pytest.mark.parametrize("active", [False, True])
+def test_closed_planning_scope_preserves_claim_and_worktree(
+    repository, tmp_path, monkeypatch, strategy, active
+):
+    root, target, _, _ = repository
+    mapped_release(repository, tmp_path)
+    if strategy == "integration":
+        project = root / "pyproject.toml"
+        project.write_text(
+            project.read_text()
+            .replace('strategy = "release"', 'strategy = "integration"')
+            .replace('release_branch = "release/v1.2.3"', 'integration_branch = "development"')
+        )
+        session.git(root, "add", ".")
+        session.git(root, "commit", "-qm", "Approved integration scope")
+        session.git(root, "branch", "development")
+        session.git(root, "push", "-q", "origin", "development")
+    main_before = session.git(root, "rev-parse", "main")
+    before = None
+    if active:
+        started = start(repository)
+        before = Path(started["session_file"]).read_bytes()
+        (target / "unfinished.txt").write_text("Preserve live implementation\n")
+    monkeypatch.setattr(workflow, "api_get_json", lambda *_args: {"status": "closed"})
+    with pytest.raises(StoryWorkflowError, match="planning version is not open"):
+        start(repository)
+    assert session.git(root, "rev-parse", "main") == main_before
+    if active:
+        assert Path(started["session_file"]).read_bytes() == before
+        assert (target / "unfinished.txt").read_text() == "Preserve live implementation\n"
+    else:
+        assert not target.exists()
+        assert session.read_record(session.locations()[1], 42) is None
+
+
+def test_integration_scope_rollover_cannot_rewrite_live_claim(repository, tmp_path, monkeypatch):
+    root, target, _, story = repository
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + '\n[tool.wood.branching]\nstrategy = "integration"\n'
+        'release_id = 20\nintegration_branch = "development"\nscope_reference = "R1 approved"\n'
+    )
+    session.git(root, "add", ".")
+    session.git(root, "commit", "-qm", "R1 mapping")
+    remote = tmp_path / "remote.git"
+    session.git(root, "init", "--bare", "-q", str(remote))
+    session.git(root, "remote", "add", "origin", str(remote))
+    session.git(root, "branch", "development")
+    session.git(root, "push", "-q", "origin", "development")
+    started = start(repository)
+    before = Path(started["session_file"]).read_bytes()
+    (target / "unfinished.txt").write_text("Keep R1 work\n")
+    monkeypatch.chdir(target)
+    local_project = target / "pyproject.toml"
+    local_project.write_text(
+        local_project.read_text()
+        .replace("release_id = 20", "release_id = 21")
+        .replace("R1 approved", "R2 approved")
+    )
+    story["_links"]["version"]["href"] = "/api/v3/versions/21"
+    story["_links"]["version"]["title"] = "R2"
+    with pytest.raises(StoryWorkflowError, match="do not migrate an active claim"):
+        start(repository)
+    assert Path(started["session_file"]).read_bytes() == before
+    assert (target / "unfinished.txt").read_text() == "Keep R1 work\n"
+
+
 def test_preview_has_no_claim_branch_worktree_or_status_mutations(repository):
     root, target, _, _ = repository
     result = start(repository, apply=False)
