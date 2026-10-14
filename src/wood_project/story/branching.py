@@ -40,6 +40,7 @@ def configuration(root: Path, *, source_text: str | None = None) -> dict[str, An
             "strategy",
             "release_id",
             "release_branch",
+            "integration_branch",
             "scope_reference",
         }:
             raise ValueError("invalid keys")
@@ -51,23 +52,33 @@ def configuration(root: Path, *, source_text: str | None = None) -> dict[str, An
                 "base_branch": "main",
                 "target_branch": "main",
             }
-        if strategy != "release":
+        if strategy not in {"release", "integration"}:
             raise ValueError("invalid strategy")
+        branch_key = "release_branch" if strategy == "release" else "integration_branch"
+        if set(section) != {"strategy", "release_id", branch_key, "scope_reference"}:
+            raise ValueError("invalid keys")
         release_id, branch, scope = (
-            section.get(k) for k in ("release_id", "release_branch", "scope_reference")
+            section.get(k) for k in ("release_id", branch_key, "scope_reference")
         )
         if (
             type(release_id) is not int
             or release_id <= 0
             or not isinstance(branch, str)
-            or not re.fullmatch(RELEASE_BRANCH, branch)
+            or (strategy == "release" and not re.fullmatch(RELEASE_BRANCH, branch))
             or not isinstance(scope, str)
             or not scope.strip()
             or len(scope) > 500
         ):
             raise ValueError("invalid mapping")
+        if strategy == "integration":
+            if branch == "main" or branch.startswith("-"):
+                raise ValueError("invalid integration branch")
+            try:
+                session.git(root, "check-ref-format", "--branch", branch)
+            except StoryWorkflowError as exc:
+                raise ValueError("invalid integration branch") from exc
         return {
-            "strategy": "release",
+            "strategy": strategy,
             "adopted": True,
             "base_branch": branch,
             "target_branch": branch,
@@ -97,7 +108,7 @@ def select(
             "BRANCH_TARGET_MISMATCH",
             "Explicit branches must match the adopted repository strategy and mapping.",
         )
-    if story is not None and plan["strategy"] == "release":
+    if story is not None and plan["strategy"] != "trunk":
         release_id = extract_id_from_href(link_href(story, "version"), "versions")
         if release_id != plan["release_id"]:
             raise StoryWorkflowError(
@@ -112,7 +123,7 @@ def discover(root: Path) -> dict[str, Any]:
     plan = select(root)
     ref = (
         f"refs/remotes/origin/{plan['base_branch']}"
-        if plan["strategy"] == "release"
+        if plan["strategy"] != "trunk"
         else "refs/heads/main"
     )
     # This informational operation never fetches or creates branches.
@@ -128,7 +139,7 @@ def discover(root: Path) -> dict[str, Any]:
 
 def resolve_base(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     plan = dict(plan)
-    if plan["strategy"] == "release":
+    if plan["strategy"] != "trunk":
         branch = plan["base_branch"]
         # Fetch this exact branch; a stale local ref cannot mask a missing remote.
         session.git(

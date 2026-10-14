@@ -79,6 +79,10 @@ def test_story_selection_stays_in_mapped_release(monkeypatch):
         '[tool.wood.branching]\nstrategy = "release"\nrelease_id = 1\n'
         'release_branch = "release/v1.0.0; bad"\nscope_reference = "approved"',
         '[tool.wood.branching]\nstrategy = "trunk"\nunknown = "setting"',
+        '[tool.wood.branching]\nstrategy = "integration"\nrelease_id = 1\n'
+        'integration_branch = "main"\nscope_reference = "approved"',
+        '[tool.wood.branching]\nstrategy = "integration"\nrelease_id = 1\n'
+        'integration_branch = "bad..branch"\nscope_reference = "approved"',
     ],
 )
 def test_invalid_adoption_fails_closed(tmp_path, text):
@@ -97,3 +101,19 @@ def test_discovery_cli_needs_no_release_contract_or_credentials(tmp_path, monkey
     assert not data["remote_verified"]
     with pytest.raises(StoryWorkflowError, match="Explicit branches"):
         branching.select(tmp_path, base_branch="release/v1.0.0")
+
+
+def test_integration_mapping_keeps_release_and_target_guards(tmp_path):
+    session.git(tmp_path, "init", "-q", "-b", "main")
+    text = (
+        '[tool.wood.branching]\nstrategy = "integration"\nrelease_id = 25\n'
+        'integration_branch = "development"\nscope_reference = "approved workbook"'
+    )
+    story = {"_links": {"version": {"href": "/api/v3/versions/25", "title": "R1"}}}
+    plan = branching.select(tmp_path, story=story, source_text=text)
+    assert plan["base_branch"] == plan["target_branch"] == "development"
+    with pytest.raises(StoryWorkflowError, match="Explicit branches"):
+        branching.select(tmp_path, base_branch="main", source_text=text)
+    story["_links"]["version"]["href"] = "/api/v3/versions/26"
+    with pytest.raises(StoryWorkflowError, match="planning release differs"):
+        branching.select(tmp_path, story=story, source_text=text)

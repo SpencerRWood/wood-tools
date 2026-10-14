@@ -92,7 +92,7 @@ def reconcile(
         return stop("repository", "Story has no Primary Repository linkage.", result["next_action"])
     try:
         slug = operations._slug(root)
-        if repository != slug.split("/")[1]:
+        if not workflow.repository_matches(repository, slug):
             return stop(
                 "repository",
                 "Story Primary Repository differs from this checkout.",
@@ -265,7 +265,7 @@ def reconcile(
                 "Merged PR has no valid merge revision.",
                 "Repair the missing GitHub merge revision linkage.",
             )
-        if branch_plan["strategy"] == "release":
+        if branch_plan["strategy"] != "trunk":
             fields["merged_revision"] = _available(merged, url)
             for name in (
                 "release",

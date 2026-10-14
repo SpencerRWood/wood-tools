@@ -49,7 +49,7 @@ def _verify_ci_run(url: str, expected_repository: str) -> None:
     if parsed.scheme != "https" or parsed.netloc != "github.com" or match is None:
         raise StoryWorkflowError("INVALID_EVIDENCE", "CI URL must identify a GitHub Actions run.")
     owner, repository, run_id = match.groups()
-    if repository.casefold() != expected_repository.casefold():
+    if not repository_matches(expected_repository, f"{owner}/{repository}"):
         raise StoryWorkflowError("INVALID_EVIDENCE", "CI run belongs to another repository.")
     try:
         result = subprocess.run(
@@ -76,6 +76,41 @@ def _verify_ci_run(url: str, expected_repository: str) -> None:
 def _repository(description: str) -> str:
     match = re.search(r"^Primary Repository:\s*(.+)$", description, flags=re.MULTILINE)
     return match.group(1).strip() if match else ""
+
+
+def repository_matches(expected: str, actual: str) -> bool:
+    """Accept legacy basenames while retaining canonical owner identity when supplied."""
+    pattern = r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?"
+    if not re.fullmatch(pattern, expected) or not re.fullmatch(pattern, actual):
+        return False
+    return expected.casefold() == (
+        actual.casefold() if "/" in expected else actual.rsplit("/", 1)[-1].casefold()
+    )
+
+
+def _checkout_matches(primary: Path, expected: str) -> bool:
+    if "/" not in expected:
+        return repository_matches(expected, primary.name)
+    origins = (
+        session.git(primary, "config", "--get-regexp", r"^remote\.origin\.url$")
+        if ("origin" in session.git(primary, "remote").splitlines())
+        else ""
+    )
+    if origins:
+        urls = [line.split(maxsplit=1)[1] for line in origins.splitlines()]
+        for url in urls:
+            match = re.fullmatch(
+                r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+                url,
+            )
+            if match is None or not repository_matches(expected, match.group(1)):
+                return False
+        return True
+    # A bootstrap checkout has no remote or commit yet; this is local identity only.
+    return repository_matches(expected, expected) and primary.name.casefold() == (
+        expected.rsplit("/", 1)[-1].casefold()
+    )
 
 
 def _story(client: OpenProjectClient, story_id: int) -> dict[str, Any]:
@@ -354,7 +389,7 @@ def start_story(
         planning_version = _ready(client, story, allow_on_hold=True, allow_in_progress=True)
         primary = Path(session.worktrees(root)[0]["worktree"]).resolve()
         repository = _repository(work_package_description_text(story))
-        if not repository or primary.name != repository:
+        if not repository or not _checkout_matches(primary, repository):
             raise StoryWorkflowError(
                 "REPOSITORY_MISMATCH", "Primary checkout must match the Story's Primary Repository."
             )
@@ -404,7 +439,7 @@ def start_story(
         branch_plan = branching.select(
             root, story=story, base_branch=base_branch, target_branch=target_branch
         )
-        if branch_plan["strategy"] == "release":
+        if branch_plan["strategy"] != "trunk":
             if (
                 extract_id_from_href(link_href(planning_version, "definingProject"), "projects")
                 != project_id
@@ -451,7 +486,7 @@ def start_story(
                     "CLAIM_CONFLICT", "Recorded Story/worktree identity differs."
                 )
         branch_plan = branching.resolve_base(root, branch_plan)
-        if owned and record and branch_plan["strategy"] == "release":
+        if owned and record and branch_plan["strategy"] != "trunk":
             session.git(
                 root,
                 "merge-base",

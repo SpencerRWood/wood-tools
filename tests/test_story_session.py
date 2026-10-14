@@ -73,6 +73,65 @@ def start(repository, owner="codex-fixture", apply=True):
     return workflow.start_story(client, 42, apply=apply, owner=owner, worktree=target)
 
 
+@pytest.mark.parametrize(
+    "origin", [None, "https://github.com/Owner/example.git", "git@github.com:Owner/example.git"]
+)
+def test_canonical_repository_without_initial_commit(tmp_path, origin):
+    root = tmp_path / "example"
+    root.mkdir()
+    session.git(root, "init", "-q", "-b", "main")
+    if origin:
+        session.git(root, "remote", "add", "origin", origin)
+    assert workflow._checkout_matches(root, "Owner/example")
+    assert workflow._checkout_matches(root, "example")
+    assert not workflow._checkout_matches(root, "Owner/other")
+    if origin:
+        assert not workflow._checkout_matches(root, "Other/example")
+
+
+def test_canonical_story_start_and_wrong_owner_fail_closed(repository):
+    root, _, _, story = repository
+    session.git(root, "remote", "add", "origin", "https://github.com/Owner/example.git")
+    story["description"]["raw"] = "Primary Repository: Other/example\n"
+    with pytest.raises(StoryWorkflowError, match="Primary checkout"):
+        start(repository, apply=False)
+    story["description"]["raw"] = "Primary Repository: Owner/example\n"
+    assert start(repository, apply=False)["branching"]["strategy"] == "trunk"
+
+
+def test_integration_start_resume_uses_fetched_development_preserves_main(repository, tmp_path):
+    root, target, _, _ = repository
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + "\n[tool.wood.branching]\n"
+        'strategy = "integration"\nrelease_id = 20\n'
+        'integration_branch = "development"\nscope_reference = "approved"\n'
+    )
+    session.git(root, "add", ".")
+    session.git(root, "commit", "-qm", "Integration mapping")
+    before = session.git(root, "rev-parse", "main")
+    remote = tmp_path / "remote.git"
+    session.git(root, "init", "--bare", "-q", str(remote))
+    session.git(root, "remote", "add", "origin", str(remote))
+    session.git(root, "branch", "development")
+    session.git(root, "push", "-q", "origin", "main", "development")
+    # The remote is a local fixture; retain the identity check independently.
+    from unittest.mock import patch
+
+    with patch.object(workflow, "_checkout_matches", return_value=True):
+        preview = start(repository, apply=False)
+        assert not target.exists()
+        assert preview["branching"]["base_ref"] == "refs/remotes/origin/development"
+        result = start(repository)
+        assert result["session"]["branch"] == "feature/op-42-ship-lifecycle"
+        assert session.git(target, "rev-parse", "HEAD") == before
+        assert session.git(root, "rev-parse", "main") == before
+        assert start(repository, apply=False)["worktree"]["reused"]
+        session.git(root, "push", "-q", "origin", ":development")
+        with pytest.raises(StoryWorkflowError, match="Git rejected"):
+            start(repository, apply=False)
+
+
 def mapped_release(repository, tmp_path):
     root, _, _, _ = repository
     project = root / "pyproject.toml"
