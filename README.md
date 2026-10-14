@@ -4,7 +4,31 @@ Wood Tools provides the `wood` command for deterministic agent workflows.
 
 ## Progressive branching adoption
 
-Approved application scopes may also use an explicit named integration branch:
+Launchers must negotiate `wood contract --json` before activation. Its `branching`
+contract version 1 declares `trunk`, `release`, `integration` and the supported
+`feature`, `feat`, `fix` prefixes. Read `wood repo branching --json`, then preview
+`story start` with matching `--base-branch` and `--target-branch`. Inspect the
+preview's strategy, mapped scope, fetched base revision, branch and worktree
+before applying. A session capability alone does not attest to branching support.
+An incompatible launcher/tool stops before creating claims; upgrade the supported
+interface rather than adding a legacy fallback. Discovery observes local refs;
+nontrunk start fetches the exact remote branch. Trunk uses local main, which must
+be deliberately updated from the fetched main before new work.
+
+For an approved planning-scope rollover on a long-lived integration branch,
+finish or explicitly resolve old-scope Stories and retain their evidence/claims.
+Approve the next open planning version and scope, then update the root branching
+mapping in a separately reviewed change. Never change an active claim's mapping
+or rename/rebase its worktree to force adoption. New/resumed starts with a closed
+planning version or a different mapping fail without deleting existing claims.
+Resolve the live planning/mapping conflict, then resume using the recorded owner
+and worktree. Rollover does not close releases, publish, deploy or move main.
+
+The canonical target for every active repository is working branch → development
+→ protected main → automatic pinned repository release workflow. Repository type
+determines publication outputs, not branching strategy. BR-01 does not migrate
+existing repositories: undeclared/explicit trunk and release mappings remain valid
+until a deliberate migration. Approved integration scopes use:
 
 ```toml
 [tool.wood.branching]
@@ -20,9 +44,34 @@ require a valid Git branch other than `main`, an open matching planning release,
 and approved scope. Start never creates the integration branch. Claims, resume,
 PR evidence and delivery retain the same safeguards as release mappings. Story
 integration reports `story_complete` without requiring publication or deployment.
-Final integration into `main` requires separate release verification and approval.
+Final integration into `main` requires separate release verification and approval;
+the approved main merge triggers the pinned repository-specific release workflow.
 Configure caller workflows so Story branches and integration merges only validate;
 Wood's metadata does not disable publication jobs in GitHub Actions.
+
+An urgent production incident can explicitly use `story start <id>` with both
+`--hotfix-incident <incident-or-justification>` and
+`--hotfix-approval <authorization-reference>`. This requires adopted integration
+metadata and a matching open planning version; it fetches main and creates only
+an isolated working branch (default prefix fix), recording a main/main hotfix
+plan, the original integration branch and both references in the claim. Resume
+with the same references. Missing authority, wrong identity/scope, unsupported
+prefix or a changed active mapping fails without discarding work or claims.
+These are operator authorization references, not independently verified approvals;
+protected-main PR review and required CI remain mandatory. There is no direct-main
+push, merge, protection bypass or publication command. Pass both references to
+`story evidence`/`delivery status` to verify the actual hotfix PR target and retain
+its authority alongside revision-bound CI and merge evidence.
+
+Before subsequent release preparation, reconcile main into development through
+a reviewed PR and run `wood repo release-readiness --json`. It fetches both refs
+and blocks (exit 3) unless main is an ancestor of integration. The returned
+`readiness_file` records exact revisions, observation time and any missing main
+commits. This deliberately requires back-merging release metadata too; equivalent
+cherry-picks alone are insufficient. Complete history is required; missing refs
+or inaccessible history fail closed. This local preparation check never grants
+approval or bypasses protection. Wiring it into required GitHub checks, publication
+outputs, initialization/enforcement and consumer migrations belong to later work.
 
 Story Primary Repository supports both a repository basename and canonical
 `owner/repo`. Canonical start identity checks the GitHub origin (HTTPS or SSH),

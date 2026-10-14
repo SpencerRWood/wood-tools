@@ -29,6 +29,8 @@ def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
         "--pr", type=int, help="Select an exact Story PR when discovery is ambiguous"
     )
     status.add_argument("--environment", help="Select the deployment environment")
+    status.add_argument("--hotfix-incident")
+    status.add_argument("--hotfix-approval")
     status.add_argument("--json", dest="delivery_json", action="store_true")
 
 
@@ -50,6 +52,8 @@ def reconcile(
     *,
     pr_number: int | None = None,
     environment: str | None = None,
+    hotfix_incident: str | None = None,
+    hotfix_approval: str | None = None,
 ) -> dict[str, Any]:
     if story_id <= 0 or (pr_number is not None and pr_number <= 0):
         raise StoryWorkflowError("INVALID_ID", "Story and PR IDs must be positive.")
@@ -165,7 +169,9 @@ def reconcile(
                 )
         pr = _document(root, f"repos/{slug}/pulls/{pr_number}")
         head, base = pr.get("head"), pr.get("base")
-        branch_plan = branching.select(root, story=story)
+        branch_plan = branching.select(
+            root, story=story, hotfix_incident=hotfix_incident, hotfix_approval=hotfix_approval
+        )
         if (
             not isinstance(head, dict)
             or not isinstance(base, dict)
@@ -342,6 +348,8 @@ def run_delivery_command(args: argparse.Namespace, cwd: Path) -> dict[str, Any]:
             args.id,
             pr_number=args.pr,
             environment=args.environment,
+            hotfix_incident=args.hotfix_incident,
+            hotfix_approval=args.hotfix_approval,
         )
         return envelope(
             command="delivery status",

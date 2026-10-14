@@ -381,6 +381,8 @@ def start_story(
     base_branch: str | None = None,
     target_branch: str | None = None,
     branch_prefix: str | None = None,
+    hotfix_incident: str | None = None,
+    hotfix_approval: str | None = None,
 ) -> dict[str, Any]:
     owner = session.owner_id(owner)
     root, directory = session.locations()
@@ -437,7 +439,12 @@ def start_story(
         record = session.read_record(directory, story_id)
         owned = record is not None and record["state"] == "claimed"
         branch_plan = branching.select(
-            root, story=story, base_branch=base_branch, target_branch=target_branch
+            root,
+            story=story,
+            base_branch=base_branch,
+            target_branch=target_branch,
+            hotfix_incident=hotfix_incident,
+            hotfix_approval=hotfix_approval,
         )
         if branch_plan["strategy"] != "trunk":
             if (
@@ -450,6 +457,8 @@ def start_story(
         prefix = branch_prefix or (
             record["branch"].split("/", 1)[0]
             if owned and record
+            else "fix"
+            if branch_plan.get("mode") == "hotfix"
             else "feat"
             if branch_plan["strategy"] == "release"
             else "feature"

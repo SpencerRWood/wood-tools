@@ -48,6 +48,8 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item.add_argument("--validation", type=Path, required=True)
     item.add_argument("--verification", type=Path)
     item.add_argument("--target-branch")
+    item.add_argument("--hotfix-incident")
+    item.add_argument("--hotfix-approval")
     item.add_argument("--pr", type=int, required=True)
     item.add_argument("--ci-run", type=int, required=True)
     item.add_argument("--apply", action="store_true")
@@ -75,6 +77,8 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
             item.add_argument("--base-branch")
             item.add_argument("--target-branch")
             item.add_argument("--branch-prefix", choices=("feature", "feat", "fix"))
+            item.add_argument("--hotfix-incident")
+            item.add_argument("--hotfix-approval")
         if action == "set-status":
             item.add_argument("target")
         if action == "block":
@@ -223,6 +227,8 @@ def _remote_story_command(
                 pr_number=args.pr,
                 run_id=args.ci_run,
                 target_branch=args.target_branch,
+                hotfix_incident=args.hotfix_incident,
+                hotfix_approval=args.hotfix_approval,
                 apply=apply,
             )
         elif action == "create":
@@ -253,6 +259,8 @@ def _remote_story_command(
                 base_branch=args.base_branch,
                 target_branch=args.target_branch,
                 branch_prefix=args.branch_prefix,
+                hotfix_incident=args.hotfix_incident,
+                hotfix_approval=args.hotfix_approval,
             )
         elif action == "block":
             data = workflow.block_story(client, args.id, args.reason, apply=apply)

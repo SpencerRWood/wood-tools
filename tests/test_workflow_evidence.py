@@ -12,7 +12,7 @@ from test_story_cli import _story, settings
 from wood import evidence, operations, verification, workflow_files
 from wood.cli import main
 from wood_project.openproject import OpenProjectClient
-from wood_project.story import workflow
+from wood_project.story import branching, session, workflow
 from wood_project.story.models import StoryWorkflowError
 
 
@@ -255,6 +255,65 @@ def test_preview_does_not_create_generated_files(delivered):
     assert result["dry_run"] is True
     assert "evidence_file" not in result
     assert set(delivered["output"].rglob("*")) == before
+
+
+def test_hotfix_evidence_retains_claim_authority_and_requires_actual_main_pr(delivered):
+    root = delivered["root"]
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + '\n[tool.wood.branching]\nstrategy = "integration"\n'
+        'release_id = 20\nintegration_branch = "development"\nscope_reference = "approved R1"\n'
+    )
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "Hotfix fixture mapping")
+    revision = git(root, "rev-parse", "HEAD")
+    delivered["pr"]["head"].update(sha=revision, ref="fix/op-410-implementation")
+    delivered["pr"]["merge_commit_sha"] = revision
+    delivered["run"]["head_sha"] = revision
+    delivered["record"] = operations.repo_validate(root)
+    opts = {"hotfix_incident": "INC-42", "hotfix_approval": "approval-7"}
+    plan = branching.select(root, story=delivered["story"], **opts)
+    claim = session.new_record(
+        story_id=410,
+        subject="Fixture",
+        owner="incident-owner",
+        server=settings().base_url,
+        repository=str(root),
+        worktree=str(root),
+        project_id=3,
+        initiative_id=10,
+    )
+    claim["branching"] = {**plan, "base_revision": revision, "base_ref": "refs/remotes/origin/main"}
+    claim["branch"] = "fix/op-410-implementation"
+    _, directory = session.locations()
+
+    def generate_hotfix():
+        return evidence.generate_evidence(
+            OpenProjectClient(settings()),
+            410,
+            validation_path=Path(delivered["record"]["validation_file"]),
+            pr_number=44,
+            run_id=123,
+            apply=True,
+            **opts,
+        )
+
+    with pytest.raises(StoryWorkflowError, match="retained Story claim"):
+        generate_hotfix()
+    directory.mkdir(mode=0o700)
+    session.save(directory, 410, claim)
+    result = generate_hotfix()
+    generated = workflow_files.read_json(Path(result["evidence_file"]))
+    assert generated["pull_request"]["target_branch"] == "main"
+    assert generated["branching"]["hotfix_approval"] == "approval-7"
+    assert result["delivery"]["semantic_release"]["state"] == "not_applicable"
+    evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+    generated["branching"]["hotfix_approval"] = "changed"
+    with pytest.raises(StoryWorkflowError, match="retained Story claim"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+    delivered["pr"]["base"]["ref"] = "development"
+    with pytest.raises(StoryWorkflowError, match="designated integration branch"):
+        generate_hotfix()
 
 
 def test_delivery_snapshot_is_separate_and_hash_bound(delivered):

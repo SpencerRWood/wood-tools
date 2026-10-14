@@ -18,6 +18,14 @@ def test_contract_is_bounded_and_self_describing(capsys: pytest.CaptureFixture[s
     assert payload["mutation"] == "read-only"
     assert payload["data"]["public_executable"] == "wood"
     assert payload["data"]["exit_codes"] == EXIT_CODES
+    assert payload["data"]["branching"] == {
+        "version": 1,
+        "strategies": ["trunk", "release", "integration"],
+        "branch_prefixes": ["feature", "feat", "fix"],
+        "target_strategy": "integration",
+        "target_integration_branch": "development",
+        "hotfix": {"version": 1, "reconciliation": "main-ancestor-of-integration"},
+    }
 
 
 def test_json_option_works_before_and_after_command(capsys: pytest.CaptureFixture[str]) -> None:

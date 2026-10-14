@@ -10,6 +10,7 @@ from typing import Never
 
 from resources.cli.audit import write_audit_event
 from wood_project.openproject.credentials import credential_next_actions
+from wood_project.story import branching
 
 from .delivery_status import add_delivery_parser, run_delivery_command
 from .diagnostics import doctor, secret_command
@@ -84,6 +85,7 @@ def _contract() -> dict[str, object]:
         data={
             "public_executable": "wood",
             "openproject_credentials": "injected-environment-or-infisical",
+            "branching": branching.contract(),
             "capabilities": [
                 "contract",
                 "secret status",
@@ -115,6 +117,7 @@ def _contract() -> dict[str, object]:
                 "release get",
                 "repo info",
                 "repo branching",
+                "repo release-readiness",
                 "repo validate",
                 "repo verify",
                 "repo standards",
