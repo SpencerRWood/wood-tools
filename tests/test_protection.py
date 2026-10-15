@@ -319,3 +319,127 @@ def test_semantic_yaml_and_preserved_reusable_interfaces_are_not_false_drift(git
         }
     )
     assert not protection.readback(root, spec)["passed"]
+
+
+def test_explicit_existing_rule_adoption_retires_old_context_without_weakening(github, monkeypatch):
+    root, spec, state = github
+    initial = protection.plan(root, spec)
+    protection.apply(root, spec, initial["plan_hash"], "fixture initial")
+    old = state["rulesets"][0]
+    old["name"] = "Protect main"
+    old["rules"][2]["parameters"].update(
+        {
+            "dismiss_stale_reviews_on_push": False,
+            "required_review_thread_resolution": False,
+            "allowed_merge_methods": ["merge", "squash", "rebase"],
+        }
+    )
+    old["rules"][3]["parameters"]["required_status_checks"] = [
+        {"context": "validation", "integration_id": 15368}
+    ]
+    adopted = {**spec, "adopt_rulesets": {"main": old["id"]}}
+    writes = []
+
+    def update(_root, repository, payload, identifier):
+        assert repository == spec["repository"]
+        writes.append(identifier)
+        old.clear()
+        old.update({**copy.deepcopy(payload), "id": identifier})
+        return old
+
+    monkeypatch.setattr(protection, "_update", update)
+    plan = protection.plan(root, adopted)
+    assert [item["action"] for item in plan["operations"]] == ["adopt", "verify"]
+    assert not writes
+    result = protection.apply(root, adopted, plan["plan_hash"], "explicit separate live approval")
+    assert writes == [1] and result["readback"]["passed"]
+    assert old["name"] == "wood-main" and old["bypass_actors"] == []
+    assert {
+        item["context"] for item in old["rules"][3]["parameters"]["required_status_checks"]
+    } == {"validation / validation", "pr-routing", "readiness / release-readiness"}
+
+
+@pytest.mark.parametrize("weaken", ["review", "owner-review", "bypass", "security-check"])
+def test_adoption_rejects_security_loss_even_with_explicit_rule_id(github, weaken):
+    root, spec, state = github
+    initial = protection.plan(root, spec)
+    protection.apply(root, spec, initial["plan_hash"], "fixture initial")
+    old = state["rulesets"][0]
+    old["name"] = "Existing policy"
+    if weaken == "review":
+        old["rules"][2]["parameters"]["required_approving_review_count"] = 2
+    elif weaken == "owner-review":
+        old["rules"][2]["parameters"]["require_code_owner_review"] = True
+    elif weaken == "bypass":
+        old["bypass_actors"] = [
+            {"actor_id": 1, "actor_type": "Integration", "bypass_mode": "always"}
+        ]
+    else:
+        old["rules"][3]["parameters"]["required_status_checks"].append(
+            {"context": "security", "integration_id": 15368}
+        )
+    with pytest.raises(WorkflowFilesError, match="weaken existing policy"):
+        protection.plan(root, {**spec, "adopt_rulesets": {"main": old["id"]}})
+
+
+def test_candidate_bound_bootstrap_has_no_merge_or_release_authority(github, monkeypatch):
+    root, spec, state = github
+    original = protection.operations._gh
+    checks = [
+        {
+            "id": index,
+            "name": name,
+            "head_sha": "c" * 40,
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"id": 15368},
+        }
+        for index, name in enumerate(
+            ("validation / validation", "pr-routing", "readiness / release-readiness")
+        )
+    ]
+    pr = {
+        "state": "open",
+        "head": {"ref": "development", "sha": "c" * 40, "repo": {"full_name": spec["repository"]}},
+        "base": {"ref": "main", "sha": "c" * 40, "repo": {"full_name": spec["repository"]}},
+    }
+
+    def authority(repository_root, path):
+        if path.endswith("/pulls/9"):
+            return pr
+        if "/check-runs?" in path:
+            return {"check_runs": checks, "total_count": len(checks)}
+        return original(repository_root, path)
+
+    monkeypatch.setattr(protection.operations, "_gh", authority)
+    plan = protection.plan(root, spec, 9)
+    assert plan["candidate"]["revision"] == "c" * 40 and not state["created"]
+    checks[-1]["head_sha"] = "d" * 40
+    with pytest.raises(WorkflowFilesError, match="revision-bound"):
+        protection.apply(root, spec, plan["plan_hash"], "approved enforcement only", 9)
+    assert not state["created"]
+    checks[-1]["head_sha"] = "c" * 40
+    result = protection.apply(root, spec, plan["plan_hash"], "approved enforcement only", 9)
+    assert result["pending_main_integration"] is True
+    assert result["readback"]["authorization_granted"] is False
+
+
+def test_extra_legacy_required_context_is_not_certified_compatible(github):
+    root, spec, state = github
+    plan = protection.plan(root, spec)
+    protection.apply(root, spec, plan["plan_hash"], "fixture initial")
+    state["extra_effective"] = [
+        {
+            "type": "required_status_checks",
+            "ruleset_id": 1,
+            "parameters": {
+                "required_status_checks": [{"context": "validation", "integration_id": 15368}]
+            },
+        }
+    ]
+    result = protection.readback(root, spec)
+    assert not result["passed"]
+    assert any(
+        item["check"] == "effective-check-compatibility" and not item["passed"]
+        for item in result["checks"]
+    )

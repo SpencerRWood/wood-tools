@@ -139,7 +139,135 @@ def _repository(root: Path, spec: dict[str, Any]) -> str:
     return repository
 
 
-def plan(root: Path, specification_value: dict[str, Any]) -> dict[str, Any]:
+def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> bool:
+    """Only explicit one-time retirement of the old validation context and strengthening."""
+    conditions = json.loads(json.dumps(observed.get("conditions", {})))
+    if desired["name"] == "wood-main":
+        names = conditions.get("ref_name", {}).get("include", [])
+        conditions.setdefault("ref_name", {})["include"] = [
+            "refs/heads/main" if name == "~DEFAULT_BRANCH" else name for name in names
+        ]
+    if (
+        observed.get("target") != "branch"
+        or observed.get("enforcement") != "active"
+        or observed.get("bypass_actors") != []
+        or conditions != desired["conditions"]
+    ):
+        return False
+    old = {rule["type"]: normalized_rule(rule) for rule in observed["rules"]}
+    new = {rule["type"]: normalized_rule(rule) for rule in desired["rules"]}
+    if not old.keys() <= new.keys():
+        return False
+    for kind, rule in old.items():
+        if kind == "pull_request":
+            previous = rule["parameters"]
+            target = new[kind]["parameters"]
+            special = {
+                "required_approving_review_count",
+                "dismiss_stale_reviews_on_push",
+                "required_review_thread_resolution",
+                "allowed_merge_methods",
+            }
+            if (
+                any(
+                    target.get(key) != value
+                    for key, value in previous.items()
+                    if key not in special
+                )
+                or target["required_approving_review_count"]
+                < previous["required_approving_review_count"]
+                or not set(target["allowed_merge_methods"])
+                <= set(previous["allowed_merge_methods"])
+                or any(
+                    previous.get(key, False) and not target.get(key, False)
+                    for key in (
+                        "dismiss_stale_reviews_on_push",
+                        "required_review_thread_resolution",
+                    )
+                )
+            ):
+                return False
+        elif kind == "required_status_checks":
+            previous = rule["parameters"]
+            target = new[kind]["parameters"]
+            if any(
+                target.get(key) != value
+                for key, value in previous.items()
+                if key != "required_status_checks"
+            ):
+                return False
+            required = {
+                (check["context"], check["integration_id"])
+                for check in target["required_status_checks"]
+            }
+            for check in previous["required_status_checks"]:
+                context = check["context"]
+                if context == "validation" and check["integration_id"] == app:
+                    context = "validation / validation"
+                if (context, check["integration_id"]) not in required:
+                    return False
+        elif rule != new[kind]:
+            return False
+    return True
+
+
+def _candidate(root: Path, spec: dict[str, Any], number: int) -> dict[str, Any]:
+    repository = spec["repository"]
+    pr: Any = operations._gh(root, f"repos/{repository}/pulls/{number}")
+    require(
+        pr["state"] == "open"
+        and pr["base"]["ref"] == "main"
+        and pr["head"]["ref"] == "development"
+        and pr["head"]["repo"]["full_name"] == repository
+        and pr["base"]["repo"]["full_name"] == repository,
+        "Enforcement bootstrap requires this repository's open development-to-main PR.",
+    )
+    revision = pr["head"]["sha"]
+    branches: dict[str, Any] = {
+        name: operations._gh(root, f"repos/{repository}/branches/{name}")
+        for name in ("main", "development")
+    }
+    require(
+        branches["development"]["commit"]["sha"] == revision
+        and branches["main"]["commit"]["sha"] == pr["base"]["sha"],
+        "Enforcement candidate or main changed; review the current PR.",
+    )
+    runs: Any = operations._gh(
+        root, f"repos/{repository}/commits/{revision}/check-runs?per_page=100"
+    )
+    require(
+        isinstance(runs.get("check_runs"), list) and runs.get("total_count", 100) < 100,
+        "Candidate checks are unavailable or truncated.",
+    )
+    checks = [
+        check
+        for check in runs["check_runs"]
+        if check.get("head_sha") == revision
+        and check.get("status") == "completed"
+        and check.get("conclusion") == "success"
+        and check.get("app", {}).get("id") == spec["checks_integration_id"]
+    ]
+    required = {"validation / validation", "pr-routing", "readiness / release-readiness"}
+    require(
+        required <= {check["name"] for check in checks},
+        "Candidate needs passing revision-bound validation, routing and readiness.",
+    )
+    installed = workflow_readback(root, spec, {"main": revision})
+    require(
+        installed["passed"],
+        "Candidate and development callers differ from the reviewed specification.",
+    )
+    return {
+        "pr": number,
+        "revision": revision,
+        "base_revision": pr["base"]["sha"],
+        "checks": sorted(check["id"] for check in checks if check["name"] in required),
+    }
+
+
+def plan(
+    root: Path, specification_value: dict[str, Any], candidate_pr: int | None = None
+) -> dict[str, Any]:
     spec = specification(specification_value)
     repository = _repository(root, spec)
     existing = _details(root, repository, _list(root, repository))
@@ -149,16 +277,31 @@ def plan(root: Path, specification_value: dict[str, Any]) -> dict[str, Any]:
         matches = [item for item in existing if item["name"] == payload["name"]]
         require(len(matches) <= 1, "Managed ruleset names are ambiguous.")
         observed = matches[0] if matches else None
+        adopted_id = spec.get("adopt_rulesets", {}).get(payload["name"].removeprefix("wood-"))
+        action = "verify" if observed else "create"
+        if adopted_id is not None:
+            adopted = [item for item in existing if item.get("id") == adopted_id]
+            require(
+                len(adopted) == 1 and (observed is None or observed["id"] == adopted_id),
+                "Adoption rule is missing or conflicts with an existing managed rule.",
+            )
+            observed = adopted[0]
+            require(
+                matches_policy(observed, payload)
+                or _adoptable(observed, payload, spec["checks_integration_id"]),
+                "Ruleset adoption would drop unreviewed checks or weaken existing policy.",
+            )
+            action = "verify" if matches_policy(observed, payload) else "adopt"
         if observed is not None:
             # Existing managed rules must already be this policy. Never silently
             # weaken/replace protections installed under another approval.
             require(
-                matches_policy(observed, payload),
+                action == "adopt" or matches_policy(observed, payload),
                 "Existing managed ruleset differs; resolve its policy separately.",
             )
         operations_plan.append(
             {
-                "action": "verify" if observed else "create",
+                "action": action,
                 "ruleset_id": observed["id"] if observed else None,
                 "payload": payload,
             }
@@ -170,15 +313,27 @@ def plan(root: Path, specification_value: dict[str, Any]) -> dict[str, Any]:
         "specification": spec,
         "observed_hash": digest(existing),
         "operations": operations_plan,
+        "candidate": _candidate(root, spec, candidate_pr) if candidate_pr is not None else None,
     }
     record["plan_hash"] = digest(record)
     return record
 
 
-def _create(root: Path, repository: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _write(
+    root: Path, repository: str, payload: dict[str, Any], identifier: int | None
+) -> dict[str, Any]:
     try:
         result = subprocess.run(
-            ["gh", "api", "--method", "POST", f"repos/{repository}/rulesets", "--input", "-"],
+            [
+                "gh",
+                "api",
+                "--method",
+                "PUT" if identifier is not None else "POST",
+                f"repos/{repository}/rulesets"
+                + (f"/{identifier}" if identifier is not None else ""),
+                "--input",
+                "-",
+            ],
             cwd=root,
             input=json.dumps(payload),
             text=True,
@@ -204,15 +359,30 @@ def _create(root: Path, repository: str, payload: dict[str, Any]) -> dict[str, A
     return cast(dict[str, Any], value)
 
 
-def apply(root: Path, spec: dict[str, Any], plan_hash: str, approval: str) -> dict[str, Any]:
+def _create(root: Path, repository: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return _write(root, repository, payload, None)
+
+
+def _update(
+    root: Path, repository: str, payload: dict[str, Any], identifier: int
+) -> dict[str, Any]:
+    return _write(root, repository, payload, identifier)
+
+
+def apply(
+    root: Path, spec: dict[str, Any], plan_hash: str, approval: str, candidate_pr: int | None = None
+) -> dict[str, Any]:
     require(
         isinstance(approval, str) and approval.strip() and len(approval) <= 500,
         "Live enforcement apply needs a separate explicit approval reference.",
     )
-    record = plan(root, spec)
+    record = plan(root, spec, candidate_pr)
     require(record["plan_hash"] == plan_hash, "Protection plan is stale or unreviewed; replan.")
     # Verify workflow installation and check compatibility before imposing required checks.
-    installed = workflow_readback(root, record["specification"])
+    candidate = record["candidate"]
+    installed = workflow_readback(
+        root, record["specification"], {"main": candidate["revision"]} if candidate else None
+    )
     require(installed["passed"], "Install/verify generated routing and validation workflows first.")
     ids: list[int] = []
     journal = run_directory(root, "wood-protection-apply-") / "apply.json"
@@ -229,6 +399,10 @@ def apply(root: Path, spec: dict[str, Any], plan_hash: str, approval: str) -> di
             value = (
                 _create(root, record["repository"], operation["payload"])
                 if operation["action"] == "create"
+                else _update(
+                    root, record["repository"], operation["payload"], operation["ruleset_id"]
+                )
+                if operation["action"] == "adopt"
                 else {"id": operation["ruleset_id"]}
             )
             ids.append(value["id"])
@@ -242,10 +416,13 @@ def apply(root: Path, spec: dict[str, Any], plan_hash: str, approval: str) -> di
         "approval_reference": approval,
         "apply_record": str(journal),
         "readback": readback(root, record["specification"]),
+        "pending_main_integration": candidate is not None,
     }
 
 
-def workflow_readback(root: Path, spec: dict[str, Any]) -> dict[str, Any]:
+def workflow_readback(
+    root: Path, spec: dict[str, Any], candidate_revisions: dict[str, str] | None = None
+) -> dict[str, Any]:
     expected = workflows(spec)
     repository = spec["repository"]
     checks = []
@@ -253,7 +430,7 @@ def workflow_readback(root: Path, spec: dict[str, Any]) -> dict[str, Any]:
     for branch in ("main", "development"):
         branch_data: Any = operations._gh(root, f"repos/{repository}/branches/{branch}")
         require(isinstance(branch_data, dict), "Branch authority is unavailable.")
-        revision = branch_data["commit"]["sha"]
+        revision = (candidate_revisions or {}).get(branch, branch_data["commit"]["sha"])
         revisions[branch] = revision
         listing: Any = operations._gh(
             root, f"repos/{repository}/contents/.github/workflows?ref={revision}"
@@ -324,6 +501,24 @@ def readback(root: Path, spec_value: dict[str, Any]) -> dict[str, Any]:
                 "passed": bool(ids)
                 and ids <= known_ids
                 and all(not item.get("bypass_actors") for item in details if item["id"] in ids),
+            }
+        )
+        expected_checks = {
+            (check["context"], check["integration_id"])
+            for rule in payload["rules"]
+            if rule["type"] == "required_status_checks"
+            for check in rule["parameters"]["required_status_checks"]
+        }
+        checks.append(
+            {
+                "branch": branch,
+                "check": "effective-check-compatibility",
+                "passed": all(
+                    (check.get("context"), check.get("integration_id")) in expected_checks
+                    for rule in effective
+                    if rule["type"] == "required_status_checks"
+                    for check in rule["parameters"]["required_status_checks"]
+                ),
             }
         )
         for rule in payload["rules"]:

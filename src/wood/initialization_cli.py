@@ -48,6 +48,8 @@ def add_parsers(actions: argparse._SubParsersAction[Any]) -> None:
         if action == "apply":
             parser.add_argument("--plan-hash", required=True)
             parser.add_argument("--approval-reference", required=True)
+        if action in {"plan", "apply"}:
+            parser.add_argument("--candidate-pr", type=int)
     route = actions.add_parser("route", help="Verify exact-candidate PR routing and ancestry")
     route.add_argument("--event-file", type=Path, required=True)
     route.add_argument("--github-output", type=Path)
@@ -130,10 +132,12 @@ def run(args: argparse.Namespace, root: Path) -> dict[str, object]:
         command += f" {subcommand}"
         spec = read_json(args.spec)
         if subcommand == "plan":
-            record = protection.plan(root, spec)
+            record = protection.plan(root, spec, args.candidate_pr)
             mutation = "preview"
         elif subcommand == "apply":
-            record = protection.apply(root, spec, args.plan_hash, args.approval_reference)
+            record = protection.apply(
+                root, spec, args.plan_hash, args.approval_reference, args.candidate_pr
+            )
             mutation = "mutating"
             status = "success" if record["readback"]["passed"] else "blocked"
         else:

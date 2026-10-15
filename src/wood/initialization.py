@@ -65,7 +65,8 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
     require(
         required
         <= value.keys()
-        <= required | {"images", "deployment", "required_approvals", "workflow_prefix"},
+        <= required
+        | {"images", "deployment", "required_approvals", "workflow_prefix", "adopt_rulesets"},
         "Supply the supported initialization specification fields.",
     )
     require(re.fullmatch(SLUG, value["repository"]), "Use a canonical owner/repository.")
@@ -93,6 +94,13 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
     approvals = value.get("required_approvals", 0)
     require(type(approvals) is int and 0 <= approvals <= 6, "Invalid required review count.")
     require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
+    adopted = value.get("adopt_rulesets", {})
+    require(
+        isinstance(adopted, dict)
+        and set(adopted) <= {"main", "development"}
+        and all(type(identifier) is int and identifier > 0 for identifier in adopted.values()),
+        "Ruleset adoption must identify explicit main/development repository rule IDs.",
+    )
     images = value.get("images", [])
     require(isinstance(images, list) and len(images) <= 16, "Declare at most sixteen images.")
     names: set[str] = set()

@@ -151,6 +151,21 @@ Enforcement readback compares YAML semantics and accepts only known non-weakenin
 GitHub PR defaults; bypass actors, policy drift, wrong checks and incompatible workflows
 still fail. Plan live enforcement separately and retain explicit approval for apply.
 
+For an existing rule, `adopt_rulesets: {"main": <observed-rule-ID>}` explicitly
+proposes adopting its ID rather than adding a competing rule. The plan may strengthen
+review requirements and replace the obsolete BR-02 `validation` context with
+`validation / validation` from the same Actions app. It refuses bypass grants,
+lost security checks, reduced review requirements or unrelated policy loss.
+This is a reviewed transition, not a compatibility status alias.
+
+When old main callers prevent installing the new required checks, use
+`repo protection plan --candidate-pr <development-to-main-PR> ...` to bind a bootstrap
+plan to the exact open same-repository candidate, current main/development revisions,
+passing canonical Actions checks and the reviewed caller content. Pass the same
+candidate on separately approved protection apply. Changed candidates/checks fail
+before writes. Readback still reports actual main installation as pending; this
+bootstrap never merges a PR or grants publication authority.
+
 `wood repo init` is one initializer for prepared, approved source baselines.
 React/backend, FastAPI service and Python library layouts share the same
 integration strategy. The existing release contract selects the Python working
