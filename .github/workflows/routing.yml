@@ -61,6 +61,7 @@
         "wood_revision": "17cde0518cca29f4ff72d6a805011f6cc8471a8f",
         "integration_command": "uv run --frozen pytest -q tests/test_migration.py tests/test_protection.py tests/test_hotfix.py tests/test_branching.py",
         "security_command": "git diff --check && uv run --frozen ruff check .",
+        "deferred_stories": "{\"558\":\"Approved staged Wave 1 foundation only: https://projects.woodhost.cloud/work_packages/558 activity 1477; unfinished fleet acceptance retained in full; Story remains In progress.\"}",
         "hotfix_incident": "${{ needs.routing.outputs.incident }}",
         "hotfix_approval": "${{ needs.routing.outputs.approval }}"
       },

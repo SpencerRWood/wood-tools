@@ -80,6 +80,17 @@ def planned(repository):
     )
 
 
+def test_assessment_preserves_saved_session_handoff_artifact(repository):
+    root, _, _, _, _ = repository
+    directory = migration.common(root) / "wood-stories"
+    directory.mkdir()
+    handoff = directory / "558-handoff.json"
+    handoff.write_text('{"observation":"saved handoff, not a claim"}')
+    result = migration.assess(root)
+    assert result["claims"] == []
+    assert handoff.read_text() == '{"observation":"saved handoff, not a claim"}'
+
+
 def test_read_only_plan_and_safe_branch_initialization_preserve_history_and_work(repository):
     root, baseline, _, _, destination = repository
     before = session.git(root, "status", "--porcelain")

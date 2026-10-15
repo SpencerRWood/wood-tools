@@ -309,7 +309,7 @@ def plan(
         )
     # Bind all observed rulesets, including unmanaged ones, to reject stale plans.
     record: dict[str, Any] = {
-        "version": 2,
+        "version": 3,
         "repository": repository,
         "specification": spec,
         "observed_hash": digest(existing),
@@ -338,6 +338,34 @@ def plan(
             "Enforcement candidate changed during planning; review the current PR.",
         )
     record["branch_revisions"] = revisions
+    observed_checks = {}
+    for branch, revision in revisions.items():
+        runs: Any = operations._gh(
+            root, f"repos/{repository}/commits/{revision}/check-runs?per_page=100"
+        )
+        require(
+            isinstance(runs, dict)
+            and isinstance(runs.get("check_runs"), list)
+            and type(runs.get("total_count")) is int
+            and runs["total_count"] < 100
+            and len(runs["check_runs"]) == runs["total_count"],
+            "Protection planning requires complete available CI context observations.",
+        )
+        observed_checks[branch] = sorted(
+            [
+                {
+                    "id": check["id"],
+                    "name": check["name"],
+                    "head_sha": check["head_sha"],
+                    "status": check["status"],
+                    "conclusion": check["conclusion"],
+                    "app_id": check.get("app", {}).get("id"),
+                }
+                for check in runs["check_runs"]
+            ],
+            key=lambda check: check["id"],
+        )
+    record["observed_checks"] = observed_checks
     record["plan_hash"] = digest(record)
     return record
 

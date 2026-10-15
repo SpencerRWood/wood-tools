@@ -41,7 +41,9 @@ def assess(root: Path) -> dict[str, Any]:
     refs = {item["name"]: item["commit"]["sha"] for item in branches}
     claims = []
     directory = common(root) / "wood-stories"
-    records = sorted(directory.glob("*.json"))
+    records = sorted(
+        path for path in directory.glob("*.json") if not path.name.endswith("-handoff.json")
+    )
     init.require(len(records) < 100, "Claim inventory exceeds the inspection bound.")
     for path in records:
         record = session.read_record(directory, int(path.stem))

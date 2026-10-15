@@ -34,6 +34,7 @@ def github(tmp_path, monkeypatch):
         "fail_create": 0,
         "calls": [],
         "revisions": {"main": "c" * 40, "development": "c" * 40},
+        "check_runs": [],
     }
     monkeypatch.setattr(operations, "_slug", lambda _root: spec["repository"])
 
@@ -65,6 +66,8 @@ def github(tmp_path, monkeypatch):
             ] + state["extra_effective"]
         if "/branches/" in path:
             return {"commit": {"sha": state["revisions"][path.rsplit("/", 1)[1]]}}
+        if "/check-runs?" in path:
+            return {"total_count": len(state["check_runs"]), "check_runs": state["check_runs"]}
         if "/contents/.github/workflows?" in path:
             return [{"name": name, "type": "file"} for name in state["workflows"]]
         if "/contents/.github/workflows/" in path:
@@ -132,6 +135,26 @@ def test_branch_advance_invalidates_reviewed_protection_plan(github, branch):
     state["revisions"][branch] = "d" * 40
     with pytest.raises(WorkflowFilesError, match="stale"):
         protection.apply(root, spec, record["plan_hash"], "approved previous contents")
+    assert not state["created"]
+
+
+def test_changed_ci_context_observation_invalidates_plan_without_writes(github):
+    root, spec, state = github
+    state["check_runs"] = [
+        {
+            "id": 1,
+            "name": "pr-routing",
+            "head_sha": "c" * 40,
+            "status": "in_progress",
+            "conclusion": None,
+            "app": {"id": 15368},
+        }
+    ]
+    record = protection.plan(root, spec)
+    assert record["observed_checks"]["development"][0]["app_id"] == 15368
+    state["check_runs"][0].update(status="completed", conclusion="success")
+    with pytest.raises(WorkflowFilesError, match="stale"):
+        protection.apply(root, spec, record["plan_hash"], "approved previous CI observations")
     assert not state["created"]
 
 
