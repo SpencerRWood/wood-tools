@@ -1,87 +1,23 @@
-{
-  "name": "Release",
-  "on": {
-    "push": {
-      "branches": [
-        "main"
-      ]
-    }
-  },
-  "permissions": {
-    "contents": "read"
-  },
-  "jobs": {
-    "release": {
-      "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-      "permissions": {
-        "contents": "write"
-      },
-      "uses": "SpencerRWood/workflows/.github/workflows/release.yml@b2d37f136394a7c89abbd63004f5ffe99824283c",
-      "with": {
-        "workflow_revision": "b2d37f136394a7c89abbd63004f5ffe99824283c",
-        "readiness_check": "readiness / release-readiness",
-        "release_integration": true,
-        "hotfix_incident": "${{ needs.context.outputs.incident }}",
-        "hotfix_approval": "${{ needs.context.outputs.approval }}"
-      },
-      "secrets": {
-        "release_read_token": "${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}",
-        "dbt_host": "${{ secrets.DBT_HOST }}",
-        "dbt_user": "${{ secrets.DBT_USER }}",
-        "dbt_password": "${{ secrets.DBT_PASSWORD }}",
-        "dbt_port": "${{ secrets.DBT_PORT }}",
-        "dbt_dbname": "${{ secrets.DBT_DBNAME }}",
-        "dbt_schema": "${{ secrets.DBT_SCHEMA }}"
-      },
-      "needs": "context"
-    },
-    "context": {
-      "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-      "runs-on": "ubuntu-latest",
-      "permissions": {
-        "contents": "read",
-        "pull-requests": "read"
-      },
-      "steps": [
-        {
-          "uses": "actions/checkout@v6",
-          "with": {
-            "ref": "${{ github.sha }}",
-            "fetch-depth": 0,
-            "persist-credentials": false
-          }
-        },
-        {
-          "uses": "actions/setup-python@v6",
-          "with": {
-            "python-version": "3.14"
-          }
-        },
-        {
-          "uses": "astral-sh/setup-uv@v9.0.0"
-        },
-        {
-          "name": "Install approved Wood tools",
-          "env": {
-            "WOOD_REVISION": "17cde0518cca29f4ff72d6a805011f6cc8471a8f",
-            "GH_TOKEN": "${{ github.token }}"
-          },
-          "run": "set -euo pipefail\ngh auth setup-git\ngit init \"$RUNNER_TEMP/wood-tools\"\ngit -C \"$RUNNER_TEMP/wood-tools\" remote add origin https://github.com/SpencerRWood/wood-tools.git\ngit -C \"$RUNNER_TEMP/wood-tools\" fetch --depth 1 origin \"$WOOD_REVISION\"\ngit -C \"$RUNNER_TEMP/wood-tools\" checkout --detach FETCH_HEAD\ntest \"$(git -C \"$RUNNER_TEMP/wood-tools\" rev-parse HEAD)\" = \"$WOOD_REVISION\"\nuv sync --frozen --directory \"$RUNNER_TEMP/wood-tools\"\necho \"$RUNNER_TEMP/wood-tools/.venv/bin\" >> \"$GITHUB_PATH\""
-        },
-        {
-          "id": "context",
-          "name": "Extract reviewed release PR references",
-          "env": {
-            "GH_TOKEN": "${{ github.token }}",
-            "REVISION": "${{ github.sha }}"
-          },
-          "run": "wood repo release-context --revision \"$REVISION\" --github-output \"$GITHUB_OUTPUT\" --json"
-        }
-      ],
-      "outputs": {
-        "incident": "${{ steps.context.outputs.incident }}",
-        "approval": "${{ steps.context.outputs.approval }}"
-      }
-    }
-  }
-}
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_tag:
+        description: Expected partial release tag; leave empty for normal release reconciliation.
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Guarded foundation; workflow and helper source are pinned together.
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@1b806a4ebce73dcab2f0ecf26ffc47b00fac8ef7
+    with:
+      workflow_revision: 1b806a4ebce73dcab2f0ecf26ffc47b00fac8ef7
+      recovery_tag: ${{ inputs.recovery_tag || '' }}

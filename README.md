@@ -186,8 +186,6 @@ commands, GitHub Actions integration ID and baseline commit author. For example:
   "scope_reference": "<actual approved scope reference>",
   "workflow_revision": "<approved full BR-02-compatible workflows SHA>",
   "wood_revision": "<approved full Wood SHA containing repo route and release-context>",
-  "integration_command": "uv run --frozen pytest tests/integration",
-  "security_command": "uv run --frozen pip-audit",
   "checks_integration_id": 15368,
   "author_name": "<approved author>",
   "author_email": "<approved author email>",
@@ -242,24 +240,20 @@ Existing repositories and their branch arrangements/claims are never migrated.
 This operation creates only a local repository and an origin URL, without remote
 creation, pushing, publishing, deployment or live enforcement. `enforcement_verified`
 remains false. Provisioning/pushing a new remote requires separate authorization;
-the initial main push cannot publish because it has no approved merged release PR.
+the existing main publisher may run on an initial main push and needs explicit authorization.
 
-Generated workflow files use JSON, a valid YAML subset, and immutable reusable
-workflow/helper pins. Development PRs/pushes run read-only validation. `pr-routing`
-checks exact checkout and ancestry: supported working branches target development,
-development targets main for release, and main can reconcile into development.
-An emergency Story branch targets main only with both `Hotfix-Incident:` and
-`Hotfix-Approval:` references in its PR body. The shared readiness and authorization
-workflows independently verify review, approval and exact-revision evidence.
-`repo release-context` only extracts these references; it never grants release
-authority. Hotfixes require main back-integration before later release preparation.
+Generated validation/routing workflows use JSON, a valid YAML subset, and immutable
+workflow/helper pins. Development PRs/pushes validate without publication or deployment.
+The existing baseline publisher and deployment controls are preserved, rather than
+replaced with a new publishing engine. Main retains the repository's applicable
+centralized release machinery, invoked after an explicitly approved release merge.
 
-An explicitly approved staged release can supply `deferred_stories` in its
-initialization or migration specification, mapping Story IDs to approval reasons.
-Generated callers pass this to the existing release-readiness scope check; they
-do not close Stories or bypass any other check. The scope check still rejects
-unknown Story IDs and incomplete Stories without explicit deferral. Review the
-deferrals with each exact release candidate and its separate release approval.
+`pr-routing` checks the exact checkout and ancestry: working branches target
+development, development targets main, and current main can reconcile into divergent
+development. Release candidates must contain main ancestry, including hotfixes.
+Emergency Story PRs retain `Hotfix-Incident:` and `Hotfix-Approval:` evidence.
+No hosted OpenProject credentials, release-scope deferral protocol or new CI identity
+is required. Wood/Codex use existing local credentials for planning and evidence.
 
 Enforcement is a separate reviewed operation, after installing the workflows on
 both remote branches:
@@ -282,7 +276,7 @@ hash. Apply creates missing managed rulesets without rewriting conflicting polic
 partial failure requires fresh readback/replanning, then reuses already correct
 rules. Required checks must match installed pinned workflows and the verified
 GitHub Actions integration. Both branches require PRs, strict validation and routing,
-and block deletion/force pushes; main additionally requires release-readiness.
+and resolved conversations, with zero independent approving reviewers, no bypass actors,\nand no direct/force pushes or deletion. Inspect stronger existing controls and\nreport any material security downgrade before applying it.
 Archived repositories, inherited-policy ambiguity and truncated authority fail
 closed. Application does not attest enforcement: effective readback verifies branch
 rules, bypass actors, required-check parameters and revision-bound workflow sources.

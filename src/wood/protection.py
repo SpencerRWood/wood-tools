@@ -12,7 +12,7 @@ from typing import Any, cast
 
 from . import operations
 from .initialization import digest, require, specification, workflows
-from .workflow_documents import document, read_only, reusable_only
+from .workflow_documents import document, events, main_publication, read_only, reusable_only
 from .workflow_files import WorkflowFilesError, run_directory, write_json
 
 
@@ -20,8 +20,6 @@ def rulesets(spec: dict[str, Any]) -> list[dict[str, Any]]:
     result = []
     for branch in ("main", "development"):
         contexts = ["validation / validation", "pr-routing"]
-        if branch == "main":
-            contexts.append("readiness / release-readiness")
         result.append(
             {
                 "name": f"wood-{branch}",
@@ -40,9 +38,7 @@ def rulesets(spec: dict[str, Any]) -> list[dict[str, Any]]:
                             "require_code_owner_review": False,
                             "require_last_push_approval": False,
                             "required_review_thread_resolution": True,
-                            "allowed_merge_methods": ["merge"]
-                            if branch == "main"
-                            else ["merge", "squash", "rebase"],
+                            "allowed_merge_methods": ["merge"],
                         },
                     },
                     {
@@ -248,10 +244,10 @@ def _candidate(root: Path, spec: dict[str, Any], number: int) -> dict[str, Any]:
         and check.get("conclusion") == "success"
         and check.get("app", {}).get("id") == spec["checks_integration_id"]
     ]
-    required = {"validation / validation", "pr-routing", "readiness / release-readiness"}
+    required = {"validation / validation", "pr-routing"}
     require(
         required <= {check["name"] for check in checks},
-        "Candidate needs passing revision-bound validation, routing and readiness.",
+        "Candidate needs passing revision-bound validation and routing.",
     )
     installed = workflow_readback(root, spec, {"main": revision})
     require(
@@ -474,7 +470,11 @@ def apply(
 def workflow_readback(
     root: Path, spec: dict[str, Any], candidate_revisions: dict[str, str] | None = None
 ) -> dict[str, Any]:
-    expected = workflows(spec)
+    expected = {
+        name: text
+        for name, text in workflows(spec).items()
+        if name.endswith(("validate.yml", "routing.yml"))
+    }
     repository = spec["repository"]
     checks = []
     revisions = {}
@@ -502,7 +502,24 @@ def workflow_readback(
             )
             actual = base64.b64decode(source["content"], validate=False).decode()
             try:
-                matched = document(actual) == document(text)
+                observed, desired = document(actual), document(text)
+                matched = observed == desired
+                if name.endswith("validate.yml"):
+                    extra_jobs = {
+                        key: job
+                        for key, job in observed["jobs"].items()
+                        if key not in desired["jobs"]
+                    }
+                    triggers = dict(events(observed))
+                    triggers.pop("workflow_dispatch", None)
+                    matched = (
+                        triggers == events(desired)
+                        and observed.get("permissions") == desired["permissions"]
+                        and all(
+                            observed["jobs"].get(key) == job for key, job in desired["jobs"].items()
+                        )
+                        and read_only({**observed, "jobs": extra_jobs})
+                    )
             except WorkflowFilesError:
                 matched = False
             checks.append({"branch": branch, "check": name, "passed": matched})
@@ -515,7 +532,7 @@ def workflow_readback(
             safe = False
             try:
                 value = document(base64.b64decode(extra["content"]).decode())
-                safe = reusable_only(value) or read_only(value)
+                safe = reusable_only(value) or read_only(value) or main_publication(value)
             except WorkflowFilesError, ValueError, KeyError, TypeError:
                 pass
             checks.append({"branch": branch, "check": name, "passed": safe})

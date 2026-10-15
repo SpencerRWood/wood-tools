@@ -114,6 +114,36 @@ def test_reconciliation_and_hotfix_require_ancestry(tmp_path):
     assert routing.route(tmp_path, event)["reconciliation_required"]
 
 
+def test_divergent_hotfix_can_reconcile_then_release_requires_back_integration(tmp_path):
+    baseline = fixture(tmp_path)
+    session.git(tmp_path, "switch", "-qc", "development")
+    (tmp_path / "story").write_text("accumulated development work")
+    session.git(tmp_path, "add", ".")
+    session.git(tmp_path, "commit", "-qm", "feat: story")
+    development = session.git(tmp_path, "rev-parse", "HEAD")
+    session.git(tmp_path, "switch", "-q", "main")
+    (tmp_path / "hotfix").write_text("urgent main fix")
+    session.git(tmp_path, "add", ".")
+    session.git(tmp_path, "commit", "-qm", "fix: emergency")
+    hotfix = session.git(tmp_path, "rev-parse", "HEAD")
+    session.git(tmp_path, "update-ref", "refs/remotes/origin/main", hotfix)
+    value = pr("main")
+    value["head"]["sha"], value["base"]["sha"] = hotfix, development
+    event = {"repository": {"full_name": "fixture/repo"}, "pull_request": value}
+    assert routing.route(tmp_path, event)["mode"] == "reconciliation"
+    session.git(tmp_path, "switch", "-q", "development")
+    value["head"]["ref"], value["base"]["ref"] = "development", "main"
+    value["head"]["sha"], value["base"]["sha"] = development, hotfix
+    from wood_project.story.models import StoryWorkflowError
+
+    with pytest.raises(StoryWorkflowError):
+        routing.route(tmp_path, event)
+    session.git(tmp_path, "merge", "--no-ff", "main", "-m", "fix: reconcile hotfix")
+    value["head"]["sha"] = session.git(tmp_path, "rev-parse", "HEAD")
+    assert routing.route(tmp_path, event)["mode"] == "release"
+    assert session.git(tmp_path, "merge-base", baseline, hotfix) == baseline
+
+
 def test_release_context_extracts_references_without_granting_authority(tmp_path, monkeypatch):
     revision = fixture(tmp_path)
     value = pr(

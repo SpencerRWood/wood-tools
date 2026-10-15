@@ -16,6 +16,8 @@ from typing import Any
 
 from wood_project.story import session
 
+from .workflow_documents import document as workflow_document
+from .workflow_documents import main_publication, reusable_only
 from .workflow_files import WorkflowFilesError, read_json
 
 SHA = r"[a-f0-9]{40}"
@@ -56,8 +58,6 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         "scope_reference",
         "workflow_revision",
         "wood_revision",
-        "integration_command",
-        "security_command",
         "checks_integration_id",
         "author_name",
         "author_email",
@@ -72,7 +72,6 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
             "required_approvals",
             "workflow_prefix",
             "adopt_rulesets",
-            "deferred_stories",
         },
         "Supply the supported initialization specification fields.",
     )
@@ -86,8 +85,6 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         )
     for key in (
         "scope_reference",
-        "integration_command",
-        "security_command",
         "author_name",
         "author_email",
     ):
@@ -99,22 +96,7 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
             f"{key} must be a nonblank bounded single line.",
         )
     approvals = value.get("required_approvals", 0)
-    require(type(approvals) is int and 0 <= approvals <= 6, "Invalid required review count.")
-    deferrals = value.get("deferred_stories", {})
-    require(
-        isinstance(deferrals, dict)
-        and len(deferrals) <= 40
-        and all(
-            isinstance(identifier, str)
-            and re.fullmatch(r"[1-9][0-9]*", identifier)
-            and isinstance(reason, str)
-            and reason.strip()
-            and len(reason) <= 500
-            and not any(char in reason for char in "\r\n\x00")
-            for identifier, reason in deferrals.items()
-        ),
-        "Deferred Stories require bounded positive IDs and explicit approval reasons.",
-    )
+    require(type(approvals) is int and approvals == 0, "Canonical review count must be zero.")
     require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
     adopted = value.get("adopt_rulesets", {})
     require(
@@ -246,7 +228,6 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
     def uses(name: str) -> str:
         return f"SpencerRWood/workflows/.github/workflows/{name}.yml@{revision}"
 
-    secrets = {"release_read_token": "${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}"}
     dbt = {
         key: "${{ secrets." + key.upper() + " }}"
         for key in ("dbt_host", "dbt_user", "dbt_password", "dbt_port", "dbt_dbname", "dbt_schema")
@@ -267,7 +248,7 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
         },
     }
     route: dict[str, Any] = {
-        "name": "PR routing and release readiness",
+        "name": "PR routing",
         "on": {"pull_request": {"branches": ["development", "main"]}},
         "permissions": {"contents": "read"},
         "jobs": {
@@ -314,154 +295,11 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
                     },
                 ],
             },
-            "readiness": {
-                "needs": "routing",
-                "if": "github.base_ref == 'main'",
-                "uses": uses("release-readiness"),
-                "with": {
-                    "workflow_revision": revision,
-                    "wood_revision": spec["wood_revision"],
-                    "integration_command": spec["integration_command"],
-                    "security_command": spec["security_command"],
-                    **(
-                        {
-                            "deferred_stories": json.dumps(
-                                spec["deferred_stories"], sort_keys=True, separators=(",", ":")
-                            )
-                        }
-                        if spec.get("deferred_stories")
-                        else {}
-                    ),
-                    "hotfix_incident": "${{ needs.routing.outputs.incident }}",
-                    "hotfix_approval": "${{ needs.routing.outputs.approval }}",
-                },
-                "secrets": {
-                    **secrets,
-                    **dbt,
-                    "openproject_api_token": "${{ secrets.OPENPROJECT_API_TOKEN }}",
-                },
-            },
         },
     }
-    images = spec["images"]
-    publication_inputs: dict[str, Any] = {
-        "workflow_revision": revision,
-        "readiness_check": "readiness / release-readiness",
-    }
-    if images:
-        publication_inputs["images"] = json.dumps(images, separators=(",", ":"))
-    else:
-        publication_inputs["release_integration"] = True
-    release: dict[str, Any] = {
-        "name": "Release",
-        "on": {"push": {"branches": ["main"]}},
-        "permissions": {"contents": "read"},
-        "jobs": {
-            "release": {
-                "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-                "permissions": {
-                    "contents": "write",
-                    **(
-                        {"packages": "write", "id-token": "write", "attestations": "write"}
-                        if images
-                        else {}
-                    ),
-                },
-                "uses": uses("release-containers" if images else "release"),
-                "with": publication_inputs,
-                "secrets": {**secrets, **dbt},
-            }
-        },
-    }
-    # This job only extracts PR references. Existing BR-02 workflows independently
-    # attest protected-main review, exact-revision checks and publication authority.
-    context_steps = [dict(step) for step in route["jobs"]["routing"]["steps"]]
-    context_steps[0] = {
-        "uses": "actions/checkout@v6",
-        "with": {"ref": "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": False},
-    }
-    context_steps[-1] = {
-        "id": "context",
-        "name": "Extract reviewed release PR references",
-        "env": {"GH_TOKEN": "${{ github.token }}", "REVISION": "${{ github.sha }}"},
-        "run": 'wood repo release-context --revision "$REVISION" '
-        '--github-output "$GITHUB_OUTPUT" --json',
-    }
-    release["jobs"]["context"] = {
-        "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-        "runs-on": "ubuntu-latest",
-        "permissions": {"contents": "read", "pull-requests": "read"},
-        "steps": context_steps,
-        "outputs": {
-            "incident": "${{ steps.context.outputs.incident }}",
-            "approval": "${{ steps.context.outputs.approval }}",
-        },
-    }
-    release["jobs"]["release"]["needs"] = "context"
-    publication_inputs.update(
-        {
-            "hotfix_incident": "${{ needs.context.outputs.incident }}",
-            "hotfix_approval": "${{ needs.context.outputs.approval }}",
-        }
-    )
-    deployment = spec.get("deployment")
-    if deployment:
-        deploy_job: dict[str, Any] = {
-            "uses": uses("deploy-ansible"),
-            "permissions": {"contents": "read", "deployments": "write"},
-            "with": {
-                **deployment["inputs"],
-                "workflow_revision": revision,
-                "release_integration": True,
-                "readiness_check": "readiness / release-readiness",
-                "repository": "${{ github.repository }}",
-                "ref": "${{ needs.release.outputs.release_tag }}",
-            },
-            "secrets": secrets,
-            "needs": "release",
-            "if": "github.event_name == 'push' && github.ref == 'refs/heads/main' "
-            "&& needs.release.outputs.released == 'true'",
-        }
-        if deployment["automatic"]:
-            deploy_job["needs"] = ["release", "context"]
-            deploy_job["with"].update(
-                {
-                    "hotfix_incident": "${{ needs.context.outputs.incident }}",
-                    "hotfix_approval": "${{ needs.context.outputs.approval }}",
-                }
-            )
-            release["jobs"]["deploy"] = deploy_job
-        else:
-            # Preserve a manual deployment exception: dispatch carries a
-            # published immutable release tag, and the shared authority rechecks it.
-            deploy_job.pop("needs")
-            deploy_job["if"] = (
-                "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
-            )
-            deploy_job["with"]["ref"] = "${{ inputs.release_tag }}"
-            deploy_job["with"].update(
-                {
-                    "hotfix_incident": "${{ inputs.hotfix_incident }}",
-                    "hotfix_approval": "${{ inputs.hotfix_approval }}",
-                }
-            )
-            release_manual = {
-                "name": "Deploy published release",
-                "on": {
-                    "workflow_dispatch": {
-                        "inputs": {
-                            "release_tag": {"required": True, "type": "string"},
-                            "hotfix_incident": {"required": False, "type": "string"},
-                            "hotfix_approval": {"required": False, "type": "string"},
-                        }
-                    }
-                },
-                "permissions": {"contents": "read"},
-                "jobs": {"deploy": deploy_job},
-            }
-    documents = {"validate.yml": validation, "routing.yml": route, "release.yml": release}
-    if deployment and not deployment["automatic"]:
-        documents["deploy.yml"] = release_manual
+    # Publication is inherited from the reviewed repository/template baseline.
+    # Branch migration owns validation and routing, never a second publisher.
+    documents = {"validate.yml": validation, "routing.yml": route}
     prefix = spec.get("workflow_prefix", "")
     return {
         prefix + name: json.dumps(document, indent=2) + "\n" for name, document in documents.items()
@@ -576,7 +414,14 @@ def plan(
         image = spec["images"][0]
         contract["container"] = {"publish": True, **image}
     files[".github/release.toml"] = toml(contract).encode()
-    files = {p: c for p, c in files.items() if not p.startswith(".github/workflows/")}
+    # Retain baseline publishing and deployment gates instead of adding a publisher.
+    for path, contents in files.items():
+        if path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml")):
+            value = workflow_document(contents.decode())
+            require(
+                reusable_only(value) or main_publication(value) or path.endswith("/validate.yml"),
+                f"Review baseline workflow before initialization: {path}",
+            )
     for name, text in workflows(spec).items():
         files[f".github/workflows/{name}"] = text.encode()
     files["AGENTS.md"] = (
@@ -584,7 +429,7 @@ def plan(
             b"# Repository guidance\n\nFollow root [tool.wood.branching]: working branches start "
             b"from development and Story PRs target development. Protect main and development "
             b"through the separately reviewed Wood enforcement plan and verify readback.\n\n"
-            b"Release PRs target main with required readiness and revision-bound approval. "
+            b"Reviewed release PRs target main after accumulated validation. "
             b"Development never publishes or deploys. Hotfixes need incident and approval "
             b"references and verified main back-integration before release review.\n\n"
             b"Retain application guidance and use wood repo validate --json.\n"

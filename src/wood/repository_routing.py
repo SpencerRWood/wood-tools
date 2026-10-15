@@ -82,12 +82,17 @@ def route(root: Path, event: dict[str, Any]) -> dict[str, Any]:
     )
     # Strict required checks force a current candidate, including mandatory
     # main back-integration. Do not bless a branch using its name alone.
-    session.git(root, "merge-base", "--is-ancestor", base, head)
     if result["mode"] == "reconciliation":
         require(
             session.git(root, "rev-parse", "refs/remotes/origin/main") == head,
             "Reconciliation must use the current main revision.",
         )
+        # Main and development normally diverge. The PR merge validation checks
+        # compatibility; requiring development to be an ancestor of main would
+        # make back-integration impossible without first releasing development.
+        session.git(root, "merge-base", base, head)
+    else:
+        session.git(root, "merge-base", "--is-ancestor", base, head)
     return {
         **result,
         "head_revision": head,

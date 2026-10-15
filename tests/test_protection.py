@@ -108,7 +108,6 @@ def test_plan_apply_readback_and_idempotent_retry(github):
     assert {check["context"] for check in contexts} == {
         "validation / validation",
         "pr-routing",
-        "readiness / release-readiness",
     }
     assert all(check["integration_id"] == 15368 for check in contexts)
     retry = protection.plan(root, spec)
@@ -404,7 +403,7 @@ def test_explicit_existing_rule_adoption_retires_old_context_without_weakening(g
     assert old["name"] == "wood-main" and old["bypass_actors"] == []
     assert {
         item["context"] for item in old["rules"][3]["parameters"]["required_status_checks"]
-    } == {"validation / validation", "pr-routing", "readiness / release-readiness"}
+    } == {"validation / validation", "pr-routing"}
 
 
 @pytest.mark.parametrize("weaken", ["review", "owner-review", "bypass", "security-check"])
@@ -442,9 +441,7 @@ def test_candidate_bound_bootstrap_has_no_merge_or_release_authority(github, mon
             "conclusion": "success",
             "app": {"id": 15368},
         }
-        for index, name in enumerate(
-            ("validation / validation", "pr-routing", "readiness / release-readiness")
-        )
+        for index, name in enumerate(("validation / validation", "pr-routing"))
     ]
     pr = {
         "state": "open",

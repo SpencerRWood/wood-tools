@@ -113,7 +113,7 @@ def test_read_only_plan_and_safe_branch_initialization_preserve_history_and_work
     contract = tomllib.loads((destination / ".github/release.toml").read_text())
     assert contract["build"]["python_package"] is True
     assert contract["delivery"]["runtime_verification"] is False
-    assert contract["release"]["tag_merged_commit"] is False
+    assert "tag_merged_commit" not in contract["release"]
     assert migration.apply(root, record, record["plan_hash"], True)["state"] == result["state"]
 
 
@@ -127,6 +127,33 @@ def test_existing_development_is_never_moved(repository):
     assert f"{baseline}\trefs/heads/development" in session.git(
         root, "ls-remote", "--heads", "origin"
     )
+
+
+def test_migration_preserves_repository_runtime_and_security_validation(repository):
+    root, baseline, spec, _, _ = repository
+    files = initialization.baseline_files(root, baseline)
+    validation = document(
+        initialization.workflows(initialization.specification(spec))["validate.yml"]
+    )
+    runtime = {
+        "runs-on": "ubuntu-latest",
+        "steps": [{"run": "npm run test:browser && npm audit --audit-level=high"}],
+    }
+    validation["jobs"]["application-runtime"] = runtime
+    validation["on"]["workflow_dispatch"] = None
+    files[".github/workflows/validate.yml"] = json.dumps(validation).encode()
+    changes = migration.configuration(files, spec)
+    result = document(
+        changes.get(
+            ".github/workflows/validate.yml", files[".github/workflows/validate.yml"]
+        ).decode()
+    )
+    assert result["jobs"]["application-runtime"] == runtime
+    assert result["on"]["push"]["branches"] == ["development"]
+    validation["jobs"]["application-runtime"]["permissions"] = {"contents": "write"}
+    files[".github/workflows/validate.yml"] = json.dumps(validation).encode()
+    with pytest.raises(WorkflowFilesError, match="additional validation jobs"):
+        migration.configuration(files, spec)
 
 
 @pytest.mark.parametrize(
@@ -222,19 +249,14 @@ def test_reusable_interfaces_and_additional_read_only_workflows_survive(reposito
     files[".github/workflows/release.yml"] = json.dumps(reusable).encode()
     spec["workflow_prefix"] = "wood-"
     changes = migration.configuration(files, spec)
-    preserved = document(changes[".github/workflows/release.yml"].decode())
-    assert preserved["jobs"] == reusable["jobs"]
-    assert preserved["on"] == {"workflow_call": reusable["on"]["workflow_call"]}
-    assert ".github/workflows/wood-release.yml" in changes
-    assert document(changes[".github/workflows/wood-release.yml"].decode())["on"] == {
-        "push": {"branches": ["main"]}
-    }
-    assert (
-        document(changes[".github/workflows/wood-release.yml"].decode())["jobs"]["context"][
-            "permissions"
-        ]["pull-requests"]
-        == "read"
+    preserved = document(
+        changes.get(
+            ".github/workflows/release.yml", files[".github/workflows/release.yml"]
+        ).decode()
     )
+    assert preserved["jobs"] == reusable["jobs"]
+    assert preserved["on"] == reusable["on"]
+    assert ".github/workflows/wood-release.yml" not in changes
 
 
 def test_missing_contract_is_explicit_and_existing_outputs_cannot_be_replaced(repository):
@@ -252,22 +274,18 @@ def test_missing_contract_is_explicit_and_existing_outputs_cannot_be_replaced(re
         migration.configuration(files, spec)
 
 
-def test_existing_manual_publisher_requires_explicit_contract_to_enable_automatic_release(
-    repository,
-):
+def test_branch_adoption_preserves_disabled_publication_and_rejects_enabling_it(repository):
     root, baseline, spec, _, _ = repository
     files = initialization.baseline_files(root, baseline)
-    approved = files[".github/release.toml"].decode()
-    files[".github/release.toml"] = approved.replace(
+    publishing = files[".github/release.toml"].decode()
+    files[".github/release.toml"] = publishing.replace(
         "semantic_release=true", "semantic_release=false"
     ).encode()
-    with pytest.raises(WorkflowFilesError, match="publication contract"):
-        migration.configuration(files, spec)
-    changed = migration.configuration(files, spec, approved)
-    assert (
-        tomllib.loads(changed[".github/release.toml"].decode())["release"]["semantic_release"]
-        is True
-    )
+    changed = migration.configuration(files, spec)
+    assert ".github/release.toml" not in changed
+    assert ".github/workflows/release.yml" not in changed
+    with pytest.raises(WorkflowFilesError, match="Do not replace"):
+        migration.configuration(files, spec, publishing)
 
 
 @pytest.mark.parametrize(
@@ -286,24 +304,39 @@ def test_initial_branch_creation_rejects_unsafe_automatic_baseline_events(trigge
     assert not migration._development_safe(files)
 
 
-def test_publication_mode_preserves_static_package_build_and_dynamic_modes(repository):
+def test_publication_contract_and_semantic_settings_are_preserved_byte_for_byte(repository):
     root, baseline, spec, _, _ = repository
     files = initialization.baseline_files(root, baseline)
     changes = migration.configuration(files, spec)
+    assert ".github/release.toml" not in changes
+    assert ".github/workflows/release.yml" not in changes
+    previous = tomllib.loads(files["pyproject.toml"].decode())["tool"]["semantic_release"]
+    changed = tomllib.loads(changes["pyproject.toml"].decode())["tool"]["semantic_release"]
+    assert previous == changed
+
+
+def test_shared_publisher_keeps_artifacts_and_inputs_without_protected_branch_pushes(repository):
+    root, baseline, spec, _, _ = repository
+    files = initialization.baseline_files(root, baseline)
+    job = {
+        "uses": "SpencerRWood/workflows/.github/workflows/release.yml@" + "a" * 40,
+        "with": {"workflow_revision": "a" * 40, "recovery_tag": "${{ inputs.recovery_tag }}"},
+    }
+    files[".github/workflows/release.yml"] = json.dumps(
+        {
+            "on": {"push": {"branches": ["main"]}},
+            "permissions": {"contents": "write"},
+            "jobs": {"release": job},
+        }
+    ).encode()
+    changes = migration.configuration(files, spec)
+    actual = document(changes[".github/workflows/release.yml"].decode())["jobs"]["release"]
+    assert actual["with"]["recovery_tag"] == job["with"]["recovery_tag"]
+    assert actual["uses"].endswith("@" + spec["workflow_revision"])
+    assert "release_integration" not in actual["with"]
     contract = tomllib.loads(changes[".github/release.toml"].decode())
+    assert contract["release"]["tag_merged_commit"] is True
     assert contract["build"]["python_package"] is True
-    assert contract["release"]["tag_merged_commit"] is False
-    source = tomllib.loads(files["pyproject.toml"].decode())
-    source["project"].pop("version")
-    dynamic_files = {**files, "pyproject.toml": initialization.toml(source).encode()}
-    contract["build"]["python_package"] = False
-    contract["release"].pop("tag_merged_commit")
-    dynamic_files[".github/release.toml"] = initialization.toml(contract).encode()
-    result = migration.configuration(dynamic_files, spec)
-    assert (
-        tomllib.loads(result[".github/release.toml"].decode())["release"]["tag_merged_commit"]
-        is True
-    )
 
 
 def test_yaml_on_boolean_and_duplicate_key_handling():
