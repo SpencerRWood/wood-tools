@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from . import operations
 from .initialization import digest, require, specification, workflows
+from .workflow_documents import document, read_only, reusable_only
 from .workflow_files import WorkflowFilesError, run_directory, write_json
 
 
@@ -58,6 +59,42 @@ def rulesets(spec: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def normalized_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    """Ignore only GitHub's documented non-weakening PR defaults, not policy drift."""
+    result = {"type": rule["type"]}
+    if "parameters" in rule:
+        parameters = dict(rule["parameters"])
+        if rule["type"] == "pull_request":
+            if parameters.get("required_reviewers") == []:
+                parameters.pop("required_reviewers")
+            if parameters.get("require_extra_approval_for_unattributed_changes") is True:
+                parameters.pop("require_extra_approval_for_unattributed_changes")
+            if "allowed_merge_methods" in parameters:
+                parameters["allowed_merge_methods"] = sorted(parameters["allowed_merge_methods"])
+        if "required_status_checks" in parameters:
+            parameters["required_status_checks"] = sorted(
+                parameters["required_status_checks"], key=lambda value: digest(value)
+            )
+        result["parameters"] = parameters
+    return result
+
+
+def matches_policy(observed: dict[str, Any], desired: dict[str, Any]) -> bool:
+    for key, value in desired.items():
+        if key == "rules":
+
+            def normalize(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                return sorted(
+                    (normalized_rule(item) for item in values), key=lambda item: item["type"]
+                )
+
+            if normalize(observed.get(key, [])) != normalize(value):
+                return False
+        elif observed.get(key) != value:
+            return False
+    return True
 
 
 def _list(root: Path, repository: str) -> list[dict[str, Any]]:
@@ -116,7 +153,7 @@ def plan(root: Path, specification_value: dict[str, Any]) -> dict[str, Any]:
             # Existing managed rules must already be this policy. Never silently
             # weaken/replace protections installed under another approval.
             require(
-                all(observed.get(key) == value for key, value in payload.items()),
+                matches_policy(observed, payload),
                 "Existing managed ruleset differs; resolve its policy separately.",
             )
         operations_plan.append(
@@ -223,7 +260,7 @@ def workflow_readback(root: Path, spec: dict[str, Any]) -> dict[str, Any]:
         )
         require(isinstance(listing, list), "Workflow listing is unavailable.")
         names = {item["name"] for item in listing if item.get("type") == "file"}
-        checks.append({"branch": branch, "check": "workflow-set", "passed": names == set(expected)})
+        checks.append({"branch": branch, "check": "workflow-set", "passed": set(expected) <= names})
         for name, text in expected.items():
             source: Any = operations._gh(
                 root, f"repos/{repository}/contents/.github/workflows/{name}?ref={revision}"
@@ -233,7 +270,24 @@ def workflow_readback(root: Path, spec: dict[str, Any]) -> dict[str, Any]:
                 "Workflow source is unavailable.",
             )
             actual = base64.b64decode(source["content"], validate=False).decode()
-            checks.append({"branch": branch, "check": name, "passed": actual == text})
+            try:
+                matched = document(actual) == document(text)
+            except WorkflowFilesError:
+                matched = False
+            checks.append({"branch": branch, "check": name, "passed": matched})
+        for name in sorted(names - set(expected)):
+            if not name.endswith((".yml", ".yaml")):
+                continue
+            extra: Any = operations._gh(
+                root, f"repos/{repository}/contents/.github/workflows/{name}?ref={revision}"
+            )
+            safe = False
+            try:
+                value = document(base64.b64decode(extra["content"]).decode())
+                safe = reusable_only(value) or read_only(value)
+            except WorkflowFilesError, ValueError, KeyError, TypeError:
+                pass
+            checks.append({"branch": branch, "check": name, "passed": safe})
     return {
         "passed": all(check["passed"] for check in checks),
         "checks": checks,
@@ -257,9 +311,7 @@ def readback(root: Path, spec_value: dict[str, Any]) -> dict[str, Any]:
             "Effective rule authority is unavailable or truncated.",
         )
         managed = [item for item in details if item["name"] == payload["name"]]
-        matched = len(managed) == 1 and all(
-            managed[0].get(key) == value for key, value in payload.items()
-        )
+        matched = len(managed) == 1 and matches_policy(managed[0], payload)
         checks.append({"branch": branch, "check": "active-no-bypass-ruleset", "passed": matched})
         # An extra applicable ruleset with bypass actors would undermine the
         # expected effective approval model. Do not claim enforcement from a POST.
@@ -283,7 +335,7 @@ def readback(root: Path, spec_value: dict[str, Any]) -> dict[str, Any]:
                     "passed": matched
                     and any(
                         item.get("ruleset_id") == managed[0]["id"]
-                        and item.get("parameters", {}) == rule.get("parameters", {})
+                        and normalized_rule(item) == normalized_rule(rule)
                         for item in candidates
                     ),
                 }

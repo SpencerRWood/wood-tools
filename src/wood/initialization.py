@@ -63,7 +63,9 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         "author_email",
     }
     require(
-        required <= value.keys() <= required | {"images", "deployment", "required_approvals"},
+        required
+        <= value.keys()
+        <= required | {"images", "deployment", "required_approvals", "workflow_prefix"},
         "Supply the supported initialization specification fields.",
     )
     require(re.fullmatch(SLUG, value["repository"]), "Use a canonical owner/repository.")
@@ -90,6 +92,7 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         )
     approvals = value.get("required_approvals", 0)
     require(type(approvals) is int and 0 <= approvals <= 6, "Invalid required review count.")
+    require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
     images = value.get("images", [])
     require(isinstance(images, list) and len(images) <= 16, "Declare at most sixteen images.")
     names: set[str] = set()
@@ -333,6 +336,7 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
     release["jobs"]["context"] = {
         "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
         "runs-on": "ubuntu-latest",
+        "permissions": {"contents": "read", "pull-requests": "read"},
         "steps": context_steps,
         "outputs": {
             "incident": "${{ steps.context.outputs.incident }}",
@@ -404,7 +408,10 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
     documents = {"validate.yml": validation, "routing.yml": route, "release.yml": release}
     if deployment and not deployment["automatic"]:
         documents["deploy.yml"] = release_manual
-    return {name: json.dumps(document, indent=2) + "\n" for name, document in documents.items()}
+    prefix = spec.get("workflow_prefix", "")
+    return {
+        prefix + name: json.dumps(document, indent=2) + "\n" for name, document in documents.items()
+    }
 
 
 def baseline_files(source: Path, baseline: str) -> dict[str, bytes]:

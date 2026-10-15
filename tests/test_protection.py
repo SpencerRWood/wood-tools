@@ -259,3 +259,63 @@ def test_protection_cli_records_and_blocked_readback(github, tmp_path, monkeypat
     state["rulesets"][0]["enforcement"] = "disabled"
     assert main(["repo", "protection", "readback", "--spec", str(path), "--json"]) == 3
     assert json.loads(capsys.readouterr().out)["data"]["passed"] is False
+
+
+def test_github_added_nonweakening_defaults_and_rule_order_read_back_and_retry(github):
+    root, spec, state = github
+    plan = protection.plan(root, spec)
+    protection.apply(root, spec, plan["plan_hash"], "approved fixture")
+    for rule in state["rulesets"]:
+        parameters = next(
+            item["parameters"] for item in rule["rules"] if item["type"] == "pull_request"
+        )
+        parameters["required_reviewers"] = []
+        parameters["require_extra_approval_for_unattributed_changes"] = True
+        parameters["allowed_merge_methods"].reverse()
+        rule["rules"].reverse()
+    assert protection.readback(root, spec)["passed"]
+    assert {item["action"] for item in protection.plan(root, spec)["operations"]} == {"verify"}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("required_reviewers", [{"id": 42}]),
+        ("require_extra_approval_for_unattributed_changes", False),
+        ("dismiss_stale_reviews_on_push", False),
+        ("required_approving_review_count", 2),
+        ("unknown_policy", True),
+    ],
+)
+def test_normalization_never_ignores_unreviewed_or_weak_policy(github, field, value):
+    root, spec, state = github
+    plan = protection.plan(root, spec)
+    protection.apply(root, spec, plan["plan_hash"], "approved fixture")
+    state["rulesets"][0]["rules"][2]["parameters"][field] = value
+    assert not protection.readback(root, spec)["passed"]
+    with pytest.raises(WorkflowFilesError, match="resolve its policy separately"):
+        protection.plan(root, spec)
+
+
+def test_semantic_yaml_and_preserved_reusable_interfaces_are_not_false_drift(github):
+    import yaml
+
+    root, spec, state = github
+    plan = protection.plan(root, spec)
+    protection.apply(root, spec, plan["plan_hash"], "approved fixture")
+    state["workflows"] = {
+        name: yaml.safe_dump(json.loads(text), sort_keys=False)
+        for name, text in state["workflows"].items()
+    }
+    state["workflows"]["shared-contract.yml"] = json.dumps(
+        {"on": {"workflow_call": {}}, "jobs": {"publish": {"uses": "./reusable.yml"}}}
+    )
+    assert protection.readback(root, spec)["passed"]
+    state["workflows"]["shared-contract.yml"] = json.dumps(
+        {
+            "on": {"push": {"branches": ["development"]}},
+            "permissions": {"contents": "write"},
+            "jobs": {"publish": {"runs-on": "ubuntu-latest", "steps": [{"run": "publish"}]}},
+        }
+    )
+    assert not protection.readback(root, spec)["passed"]

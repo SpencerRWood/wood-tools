@@ -117,6 +117,40 @@ modify OP-499 or approve a live release scope.
 
 ## Repository initialization and enforcement
 
+Existing repositories use `wood repo migrate assess`, `plan` and `apply`, which
+reuse the BR-03 specification, caller generator and separate protection commands.
+Assessment saves branches, PRs, claims, worktrees and effective rules without
+changing them. A reviewed plan binds the exact baseline, remote/local observations,
+destination and proposed file contents. Apply prepares an isolated feature worktree;
+it does not commit, merge, change live protection, publish or deploy.
+
+```sh
+wood repo migrate assess --json
+wood repo migrate plan --baseline <full-approved-SHA> \
+  --baseline-approval <scope-reference> --destination /path/to/isolated-worktree \
+  --branch feature/op-558-adoption --spec /path/to/spec.json --json
+wood repo migrate apply --plan <returned-plan-file> \
+  --plan-hash <reviewed-hash> --json
+```
+
+If development is missing, select `--initialize-development` on apply. Its approved
+baseline must be current main with no unsafe development/create/workflow-run publisher.
+Branch creation uses an absent-ref lease; existing development is never advanced or
+overwritten. Existing release scopes/branches block automatic transition. Main and
+development must both be ancestors of the candidate before planning. Preserve active
+claims and dirty source checkouts; changed observations or occupied targets fail closed.
+Private durable journals retain partial progress; retry the same plan only while refs,
+claims and planned contents still match. Never delete branches/worktrees as automatic recovery.
+
+Publication capabilities and deployment requirements remain in the existing release
+contract. `--contract` supplies an explicitly reviewed missing contract, or enables
+semantic release in an otherwise identical manual-publisher contract. Reusable workflow
+paths keep their call interfaces; `workflow_prefix: "wood-"` gives their repository's
+own callers separate names. Unknown additional automatic workflows require review.
+Enforcement readback compares YAML semantics and accepts only known non-weakening
+GitHub PR defaults; bypass actors, policy drift, wrong checks and incompatible workflows
+still fail. Plan live enforcement separately and retain explicit approval for apply.
+
 `wood repo init` is one initializer for prepared, approved source baselines.
 React/backend, FastAPI service and Python library layouts share the same
 integration strategy. The existing release contract selects the Python working
