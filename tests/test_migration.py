@@ -20,6 +20,8 @@ from wood_project.story.models import StoryWorkflowError
 @pytest.fixture
 def repository(tmp_path, monkeypatch):
     root, baseline = source_repository(tmp_path)
+    with (root / "pyproject.toml").open("a") as stream:
+        stream.write(f'[tool.wood.workflow]\noutput_directory = "{tmp_path / "workflow-output"}"\n')
     spec = specification_fixture()
     spec["repository"] = "fixture/existing"
     # Preserve a real tag and unrelated dirty source work through all operations.
