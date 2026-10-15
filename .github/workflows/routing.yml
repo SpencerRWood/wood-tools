@@ -40,7 +40,7 @@
         {
           "name": "Install approved Wood tools",
           "env": {
-            "WOOD_REVISION": "17cde0518cca29f4ff72d6a805011f6cc8471a8f",
+            "WOOD_REVISION": "886832dd2bdceb48e32e31e5cfcc5774ef2281f9",
             "GH_TOKEN": "${{ github.token }}"
           },
           "run": "set -euo pipefail\ngh auth setup-git\ngit init \"$RUNNER_TEMP/wood-tools\"\ngit -C \"$RUNNER_TEMP/wood-tools\" remote add origin https://github.com/SpencerRWood/wood-tools.git\ngit -C \"$RUNNER_TEMP/wood-tools\" fetch --depth 1 origin \"$WOOD_REVISION\"\ngit -C \"$RUNNER_TEMP/wood-tools\" checkout --detach FETCH_HEAD\ntest \"$(git -C \"$RUNNER_TEMP/wood-tools\" rev-parse HEAD)\" = \"$WOOD_REVISION\"\nuv sync --frozen --directory \"$RUNNER_TEMP/wood-tools\"\necho \"$RUNNER_TEMP/wood-tools/.venv/bin\" >> \"$GITHUB_PATH\""

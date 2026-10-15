@@ -202,6 +202,33 @@ def configuration(
                     current["on"]["workflow_dispatch"] = events(previous)["workflow_dispatch"]
                 text = json.dumps(current, indent=2) + "\n"
         result[f".github/workflows/{name}"] = text.encode()
+    # Reuse the same engines and inputs. Tag the approved main merge rather
+    # than asking a no-bypass protected branch to accept a version commit.
+    for path, contents in list(result.items()):
+        if not (path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml"))):
+            continue
+        value = document(contents.decode())
+        if not main_publication(value):
+            continue
+        changed = False
+        publishes = False
+        for job in value["jobs"].values():
+            match = re.fullmatch(
+                r"(SpencerRWood/workflows/\.github/workflows/"
+                r"(?:release|release-container|release-containers|deploy-ansible|promote-container-to-dev)"
+                r"\.yml)@(?:[a-f0-9]{40}|v[0-9]+)",
+                str(job.get("uses", "")),
+            )
+            if match:
+                job["uses"] = match[1] + "@" + spec["workflow_revision"]
+                job.setdefault("with", {})["workflow_revision"] = spec["workflow_revision"]
+                changed = True
+                publishes = publishes or "/release" in match[1]
+        if changed:
+            result[path] = (json.dumps(value, indent=2) + "\n").encode()
+        if publishes and release["release"]["semantic_release"]:
+            release["release"]["tag_merged_commit"] = True
+            result[".github/release.toml"] = init.toml(release).encode()
     for path, contents in result.items():
         if (
             path.startswith(".github/workflows/")

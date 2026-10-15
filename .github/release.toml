@@ -14,4 +14,4 @@
 
 ["release"]
 "semantic_release" = true
-"tag_merged_commit" = false
+"tag_merged_commit" = true

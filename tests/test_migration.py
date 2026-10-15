@@ -315,6 +315,30 @@ def test_publication_contract_and_semantic_settings_are_preserved_byte_for_byte(
     assert previous == changed
 
 
+def test_shared_publisher_keeps_artifacts_and_inputs_without_protected_branch_pushes(repository):
+    root, baseline, spec, _, _ = repository
+    files = initialization.baseline_files(root, baseline)
+    job = {
+        "uses": "SpencerRWood/workflows/.github/workflows/release.yml@" + "a" * 40,
+        "with": {"workflow_revision": "a" * 40, "recovery_tag": "${{ inputs.recovery_tag }}"},
+    }
+    files[".github/workflows/release.yml"] = json.dumps(
+        {
+            "on": {"push": {"branches": ["main"]}},
+            "permissions": {"contents": "write"},
+            "jobs": {"release": job},
+        }
+    ).encode()
+    changes = migration.configuration(files, spec)
+    actual = document(changes[".github/workflows/release.yml"].decode())["jobs"]["release"]
+    assert actual["with"]["recovery_tag"] == job["with"]["recovery_tag"]
+    assert actual["uses"].endswith("@" + spec["workflow_revision"])
+    assert "release_integration" not in actual["with"]
+    contract = tomllib.loads(changes[".github/release.toml"].decode())
+    assert contract["release"]["tag_merged_commit"] is True
+    assert contract["build"]["python_package"] is True
+
+
 def test_yaml_on_boolean_and_duplicate_key_handling():
     value = document(
         "on: [push, pull_request]\npermissions: {contents: read}\njobs:\n"
