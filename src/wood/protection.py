@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -307,14 +308,36 @@ def plan(
             }
         )
     # Bind all observed rulesets, including unmanaged ones, to reject stale plans.
-    record = {
-        "version": 1,
+    record: dict[str, Any] = {
+        "version": 2,
         "repository": repository,
         "specification": spec,
         "observed_hash": digest(existing),
         "operations": operations_plan,
         "candidate": _candidate(root, spec, candidate_pr) if candidate_pr is not None else None,
     }
+    # Bind the reviewed plan to the entire contents of both remote branches,
+    # including callers and root metadata. A ref advance requires a fresh review
+    # even when the desired rules and current rulesets have not changed.
+    revisions = {}
+    for branch in ("main", "development"):
+        authority: Any = operations._gh(root, f"repos/{repository}/branches/{branch}")
+        revision = authority.get("commit", {}).get("sha") if isinstance(authority, dict) else None
+        require(
+            isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{40}", revision) is not None,
+            "Protection planning requires exact main and development revisions.",
+        )
+        revisions[branch] = revision
+    if record["candidate"] is not None:
+        require(
+            revisions
+            == {
+                "main": record["candidate"]["base_revision"],
+                "development": record["candidate"]["revision"],
+            },
+            "Enforcement candidate changed during planning; review the current PR.",
+        )
+    record["branch_revisions"] = revisions
     record["plan_hash"] = digest(record)
     return record
 
@@ -439,6 +462,9 @@ def workflow_readback(
         names = {item["name"] for item in listing if item.get("type") == "file"}
         checks.append({"branch": branch, "check": "workflow-set", "passed": set(expected) <= names})
         for name, text in expected.items():
+            if name not in names:
+                checks.append({"branch": branch, "check": name, "passed": False})
+                continue
             source: Any = operations._gh(
                 root, f"repos/{repository}/contents/.github/workflows/{name}?ref={revision}"
             )

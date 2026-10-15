@@ -33,6 +33,7 @@ def github(tmp_path, monkeypatch):
         "app_id": 15368,
         "fail_create": 0,
         "calls": [],
+        "revisions": {"main": "c" * 40, "development": "c" * 40},
     }
     monkeypatch.setattr(operations, "_slug", lambda _root: spec["repository"])
 
@@ -63,7 +64,7 @@ def github(tmp_path, monkeypatch):
                 for rule in r["rules"]
             ] + state["extra_effective"]
         if "/branches/" in path:
-            return {"commit": {"sha": "c" * 40}}
+            return {"commit": {"sha": state["revisions"][path.rsplit("/", 1)[1]]}}
         if "/contents/.github/workflows?" in path:
             return [{"name": name, "type": "file"} for name in state["workflows"]]
         if "/contents/.github/workflows/" in path:
@@ -121,6 +122,30 @@ def test_missing_approval_and_stale_plan_never_write(github):
     with pytest.raises(WorkflowFilesError, match="stale"):
         protection.apply(root, spec, "outdated", "approval")
     assert not state["created"]
+
+
+@pytest.mark.parametrize("branch", ["main", "development"])
+def test_branch_advance_invalidates_reviewed_protection_plan(github, branch):
+    root, spec, state = github
+    record = protection.plan(root, spec)
+    assert record["branch_revisions"] == state["revisions"]
+    state["revisions"][branch] = "d" * 40
+    with pytest.raises(WorkflowFilesError, match="stale"):
+        protection.apply(root, spec, record["plan_hash"], "approved previous contents")
+    assert not state["created"]
+
+
+def test_missing_caller_is_failed_readback_without_fetching_absent_file(github):
+    root, spec, state = github
+    del state["workflows"]["routing.yml"]
+    result = protection.readback(root, spec)
+    assert not result["passed"]
+    assert {
+        check["branch"]
+        for check in result["workflows"]["checks"]
+        if check["check"] == "routing.yml" and not check["passed"]
+    } == {"main", "development"}
+    assert not any("/contents/.github/workflows/routing.yml?" in path for path in state["calls"])
 
 
 def test_partial_failure_replans_without_overwriting_or_recreating(github):

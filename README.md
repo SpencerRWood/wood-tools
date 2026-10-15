@@ -264,6 +264,11 @@ wood repo protection apply --spec /path/to/spec.json \
 wood repo protection readback --spec /path/to/spec.json --json
 ```
 
+Protection plans bind the exact remote main and development revisions as well as
+the specification and observed rulesets. Any branch advance requires a fresh
+plan and review before live application. Readback reports missing callers as
+failed installation checks so a staged migration cannot appear enforced.
+
 The plan binds observed rulesets and desired no-bypass main/development rules to a
 hash. Apply creates missing managed rulesets without rewriting conflicting policy;
 partial failure requires fresh readback/replanning, then reuses already correct
