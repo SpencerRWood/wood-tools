@@ -1,5 +1,5 @@
 {
-  "name": "PR routing and release readiness",
+  "name": "PR routing",
   "on": {
     "pull_request": {
       "branches": [
@@ -51,30 +51,6 @@
           "run": "wood repo route --event-file \"$GITHUB_EVENT_PATH\" --github-output \"$GITHUB_OUTPUT\" --json"
         }
       ]
-    },
-    "readiness": {
-      "needs": "routing",
-      "if": "github.base_ref == 'main'",
-      "uses": "SpencerRWood/workflows/.github/workflows/release-readiness.yml@b2d37f136394a7c89abbd63004f5ffe99824283c",
-      "with": {
-        "workflow_revision": "b2d37f136394a7c89abbd63004f5ffe99824283c",
-        "wood_revision": "17cde0518cca29f4ff72d6a805011f6cc8471a8f",
-        "integration_command": "uv run --frozen pytest -q tests/test_migration.py tests/test_protection.py tests/test_hotfix.py tests/test_branching.py",
-        "security_command": "git diff --check && uv run --frozen ruff check .",
-        "deferred_stories": "{\"558\":\"Approved staged Wave 1 foundation only: https://projects.woodhost.cloud/work_packages/558 activity 1477; unfinished fleet acceptance retained in full; Story remains In progress.\"}",
-        "hotfix_incident": "${{ needs.routing.outputs.incident }}",
-        "hotfix_approval": "${{ needs.routing.outputs.approval }}"
-      },
-      "secrets": {
-        "release_read_token": "${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}",
-        "dbt_host": "${{ secrets.DBT_HOST }}",
-        "dbt_user": "${{ secrets.DBT_USER }}",
-        "dbt_password": "${{ secrets.DBT_PASSWORD }}",
-        "dbt_port": "${{ secrets.DBT_PORT }}",
-        "dbt_dbname": "${{ secrets.DBT_DBNAME }}",
-        "dbt_schema": "${{ secrets.DBT_SCHEMA }}",
-        "openproject_api_token": "${{ secrets.OPENPROJECT_API_TOKEN }}"
-      }
     }
   }
 }

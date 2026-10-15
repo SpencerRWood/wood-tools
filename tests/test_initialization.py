@@ -24,8 +24,6 @@ def specification_fixture():
         "scope_reference": "https://example.test/approved-scope",
         "workflow_revision": "a" * 40,
         "wood_revision": "b" * 40,
-        "integration_command": "uv run --frozen pytest tests/integration",
-        "security_command": "uv run --frozen pip-audit",
         "checks_integration_id": 15368,
         "author_name": "Fixture",
         "author_email": "fixture@example.test",
@@ -37,29 +35,17 @@ def spec():
     return specification_fixture()
 
 
-def test_approved_deferrals_are_forwarded_to_existing_readiness_gate(spec):
-    spec["deferred_stories"] = {"558": "Approved staged foundation; fleet obligation retained."}
+def test_routing_has_no_hosted_planning_or_release_credentials(spec):
     route = json.loads(init.workflows(init.specification(spec))["routing.yml"])
-    assert (
-        json.loads(route["jobs"]["readiness"]["with"]["deferred_stories"])
-        == spec["deferred_stories"]
-    )
-    assert (
-        "deferred_stories"
-        not in json.loads(
-            init.workflows(init.specification(specification_fixture()))["routing.yml"]
-        )["jobs"]["readiness"]["with"]
-    )
+    assert set(route["jobs"]) == {"routing"}
+    assert "OPENPROJECT" not in json.dumps(route)
+    assert "release-readiness" not in json.dumps(route)
+    assert not any("release" in name for name in init.workflows(init.specification(spec)))
 
 
-@pytest.mark.parametrize(
-    "deferrals",
-    [None, [], {"0": "approval"}, {558: "approval"}, {"558": ""}, {"558": "line\nbreak"}],
-)
-def test_invalid_deferrals_fail_closed(spec, deferrals):
-    spec["deferred_stories"] = deferrals
-    with pytest.raises(WorkflowFilesError, match="Deferred Stories"):
-        init.specification(spec)
+def test_superseded_governance_configuration_is_rejected(spec):
+    with pytest.raises(WorkflowFilesError, match="supported initialization"):
+        init.specification({**spec, "deferred_stories": {"558": "old gate"}})
 
 
 def source_repository(tmp_path, layout="library"):
@@ -87,7 +73,15 @@ def source_repository(tmp_path, layout="library"):
     contract += '[validation]\nchecks = ["pytest"]\n[release]\nsemantic_release = true\n'
     contract += '[container]\npublish = true\nimage_name = "template-image"\n'
     (github / "release.toml").write_text(contract)
-    (github / "workflows/release.yml").write_text("legacy template image and deployment identities")
+    (github / "workflows/release.yml").write_text(
+        json.dumps(
+            {
+                "on": {"push": {"branches": ["main"]}},
+                "permissions": {"contents": "write"},
+                "jobs": {"release": {"runs-on": "ubuntu-latest", "steps": [{"run": "publish"}]}},
+            }
+        )
+    )
     (source / "AGENTS.md").write_text("# Source guidance\n\nUse the prepared consumer package.\n")
     (source / "Dockerfile").write_text("FROM scratch\n")
     (source / "worker.Dockerfile").write_text("FROM scratch\n")
@@ -117,7 +111,8 @@ def test_universal_baseline_and_nested_root_metadata(tmp_path, spec, layout):
     assert session.git(source, "status", "--porcelain") == ""
     assert "template-image" not in files[".github/release.toml"].decode()
     assert (
-        files[".github/workflows/release.yml"] != b"legacy template image and deployment identities"
+        files[".github/workflows/release.yml"]
+        == (source / ".github/workflows/release.yml").read_bytes()
     )
     result = init.apply(record, files, record["plan_hash"])
     revision = result["baseline_revision"]
@@ -274,30 +269,13 @@ def test_generated_actions_yaml_and_output_contracts(tmp_path, spec, images, dep
     documents = init.workflows(spec)
     parsed = {name: json.loads(text) for name, text in documents.items()}
     assert parsed["validate.yml"]["on"]["push"]["branches"] == ["development"]
-    assert parsed["release.yml"]["on"] == {"push": {"branches": ["main"]}}
+    assert set(parsed) == {"validate.yml", "routing.yml"}
     assert parsed["validate.yml"]["permissions"] == {"contents": "read"}
-    release = parsed["release.yml"]["jobs"]["release"]
-    assert "github.ref == 'refs/heads/main'" in release["if"] and release["needs"] == "context"
-    assert (
-        "release-containers.yml" in release["uses"] if images else "release.yml" in release["uses"]
-    )
-    if images:
-        assert len(json.loads(release["with"]["images"])) == images
-    else:
-        assert release["with"]["release_integration"] is True
-    assert release["with"]["hotfix_incident"] == "${{ needs.context.outputs.incident }}"
     for workflow in parsed.values():
         for job in workflow["jobs"].values():
             if "uses" in job:
                 assert job["uses"].endswith("@" + spec["workflow_revision"])
                 assert job["with"]["workflow_revision"] == spec["workflow_revision"]
-    if deploy is True:
-        job = parsed["release.yml"]["jobs"]["deploy"]
-        assert job["needs"] == ["release", "context"]
-        assert "outputs.released == 'true'" in job["if"]
-    elif deploy is False:
-        assert "deploy" not in parsed["release.yml"]["jobs"]
-        assert "workflow_dispatch" in parsed["deploy.yml"]["on"]
     paths = []
     for name, text in documents.items():
         path = tmp_path / name

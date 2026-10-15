@@ -89,6 +89,33 @@ def reusable_only(value: dict[str, Any]) -> bool:
     return set(events(value)) == {"workflow_call"}
 
 
+def main_publication(value: dict[str, Any]) -> bool:
+    """Recognize existing pinned publishers isolated from development events."""
+    trigger = events(value)
+    push = trigger.get("push")
+    if not (
+        set(trigger) <= {"push", "workflow_dispatch", "workflow_call"}
+        and isinstance(push, dict)
+        and push.get("branches") == ["main"]
+        and not (set(push) - {"branches", "paths", "paths-ignore"})
+    ):
+        return False
+    if "workflow_dispatch" not in trigger:
+        return True
+    for job in value["jobs"].values():
+        if "github.ref == 'refs/heads/main'" in str(job.get("if", "")):
+            continue
+        # These existing centralized engines independently reject non-main
+        # publication. Arbitrary reusable jobs need a repository-local guard.
+        if not re.fullmatch(
+            r"SpencerRWood/workflows/\.github/workflows/release(?:-container|-containers)?"
+            r"\.yml@[a-f0-9]{40}",
+            str(job.get("uses", "")),
+        ):
+            return False
+    return True
+
+
 def read_only(value: dict[str, Any]) -> bool:
     """Conservative extra-workflow gate; unknown credentials/permissions need review."""
     defaults = value.get("permissions")

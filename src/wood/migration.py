@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -12,7 +13,14 @@ from wood_project.story import session
 
 from . import initialization as init
 from . import operations
-from .workflow_documents import document, events, read_only, reusable_only, with_events
+from .workflow_documents import (
+    document,
+    events,
+    main_publication,
+    read_only,
+    reusable_only,
+    with_events,
+)
 from .workflow_files import read_json
 
 
@@ -114,15 +122,11 @@ def configuration(
         release = tomllib.loads(original.decode())
     if original is not None and contract is not None:
         previous_contract = tomllib.loads(original.decode())
-        # An explicit adoption contract may enable the normal release trigger;
-        # all application capabilities, artifacts and deployment requirements stay intact.
-        if previous_contract.get("release", {}).get("semantic_release") is False:
-            previous_contract["release"]["semantic_release"] = True
         init.require(previous_contract == release, "Do not replace an existing release contract.")
     init.require(
         release.get("version") == 1
         and isinstance(release.get("validation"), dict)
-        and release.get("release", {}).get("semantic_release") is True,
+        and type(release.get("release", {}).get("semantic_release")) is bool,
         "Declare the existing repository-specific validation and publication contract.",
     )
     container = release.get("container", {})
@@ -135,9 +139,10 @@ def configuration(
             spec["images"][0]["image_name"] == container["image_name"],
             "Preserve the configured image identity.",
         )
-    init.publication_mode(release, files)
     result = dict(files)
-    result[".github/release.toml"] = init.toml(release).encode()
+    result[".github/release.toml"] = (
+        original if original is not None else init.toml(release).encode()
+    )
     config = tomllib.loads(files.get("pyproject.toml", b"").decode())
     wood = config.setdefault("tool", {}).setdefault("wood", {})
     wood["openproject"] = {key: spec[key] for key in ("project_id", "initiative_id")}
@@ -147,17 +152,14 @@ def configuration(
         "integration_branch": "development",
         "scope_reference": spec["scope_reference"],
     }
-    config["tool"].setdefault(
-        "semantic_release",
-        {
-            "allow_zero_version": True,
-            "major_on_zero": False,
-            "tag_format": "v{version}",
-            "remote": {"type": "github"},
-        },
-    )
     result["pyproject.toml"] = init.toml(config).encode()
-    generated = init.workflows(spec)
+    # Adoption installs integration validation/routing. Publication remains
+    # repository-owned; never replace a working publisher with new governance.
+    generated = {
+        name: text
+        for name, text in init.workflows(spec).items()
+        if name.endswith(("validate.yml", "routing.yml"))
+    }
     for name in ("validate.yml", "routing.yml", "release.yml"):
         path = f".github/workflows/{name}"
         if path not in files:
@@ -168,7 +170,7 @@ def configuration(
                 spec.get("workflow_prefix") == "wood-", "Preserve reusable workflow paths."
             )
             # Retain reusable jobs/inputs/outputs; the new caller owns this repository's CI.
-            if not reusable_only(value):
+            if not reusable_only(value) and not (name == "release.yml" and main_publication(value)):
                 result[path] = with_events(
                     files[path].decode(), {"workflow_call": events(value)["workflow_call"]}
                 ).encode()
@@ -181,6 +183,24 @@ def configuration(
                 not deployment or spec.get("deployment"), "Preserve the deployment policy."
             )
     for name, text in generated.items():
+        path = f".github/workflows/{name}"
+        if name.endswith("validate.yml") and path in files:
+            previous = document(files[path].decode())
+            if "workflow_call" not in events(previous):
+                current = document(text)
+                # Keep repository-specific browser, runtime and security jobs.
+                # They are application semantics, not a branching exception.
+                extra = {
+                    key: job for key, job in previous["jobs"].items() if key not in current["jobs"]
+                }
+                init.require(
+                    read_only({**previous, "jobs": extra}),
+                    "Review additional validation jobs before enabling development events.",
+                )
+                current["jobs"].update(extra)
+                if "workflow_dispatch" in events(previous):
+                    current["on"]["workflow_dispatch"] = events(previous)["workflow_dispatch"]
+                text = json.dumps(current, indent=2) + "\n"
         result[f".github/workflows/{name}"] = text.encode()
     for path, contents in result.items():
         if (
@@ -190,7 +210,7 @@ def configuration(
         ):
             value = document(contents.decode())
             init.require(
-                reusable_only(value) or read_only(value),
+                reusable_only(value) or read_only(value) or main_publication(value),
                 f"Review additional automatic workflow before migration: {path}",
             )
     guidance = (
@@ -200,9 +220,9 @@ def configuration(
         b"Main requires a separately approved release PR and pinned release workflow. Emergency "
         b"hotfixes require incident/approval references and reconciliation into development.\n\n"
     )
-    previous = result.get("AGENTS.md", b"")
-    if not previous.startswith(guidance):
-        result["AGENTS.md"] = guidance + previous
+    previous_guidance = result.get("AGENTS.md", b"")
+    if not previous_guidance.startswith(guidance):
+        result["AGENTS.md"] = guidance + previous_guidance
     return {path: data for path, data in result.items() if files.get(path) != data}
 
 
