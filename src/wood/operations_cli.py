@@ -43,7 +43,13 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
     command = f"{group} {action}"
     try:
         root = operations.repository_root(cwd)
-        if group == "repo" and action in {"init", "protection", "route", "release-context"}:
+        if group == "repo" and action in {
+            "init",
+            "migrate",
+            "protection",
+            "route",
+            "release-context",
+        }:
             return run_initialization(args, root)
         status: Status = "success"
         if group == "repo":
@@ -115,6 +121,7 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
                 if group == "repo"
                 and (
                     (action == "init" and args.apply)
+                    or (action == "migrate" and args.migration_command == "apply")
                     or (action == "protection" and args.protection_command == "apply")
                 )
                 else "read-only"

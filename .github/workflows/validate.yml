@@ -1,17 +1,35 @@
-name: Validate
-
-on:
-  pull_request:
-  push:
-    branches:
-      - development
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  validation:
-    uses: SpencerRWood/workflows/.github/workflows/validate.yml@f4301524b763aa84e0a8853978ffd0617b6f7486
-    with:
-      workflow_revision: f4301524b763aa84e0a8853978ffd0617b6f7486
+{
+  "name": "Validate",
+  "on": {
+    "pull_request": {
+      "branches": [
+        "development",
+        "main"
+      ]
+    },
+    "push": {
+      "branches": [
+        "development"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "validation": {
+      "uses": "SpencerRWood/workflows/.github/workflows/validate.yml@b2d37f136394a7c89abbd63004f5ffe99824283c",
+      "with": {
+        "workflow_revision": "b2d37f136394a7c89abbd63004f5ffe99824283c"
+      },
+      "secrets": {
+        "dbt_host": "${{ secrets.DBT_HOST }}",
+        "dbt_user": "${{ secrets.DBT_USER }}",
+        "dbt_password": "${{ secrets.DBT_PASSWORD }}",
+        "dbt_port": "${{ secrets.DBT_PORT }}",
+        "dbt_dbname": "${{ secrets.DBT_DBNAME }}",
+        "dbt_schema": "${{ secrets.DBT_SCHEMA }}"
+      }
+    }
+  }
+}

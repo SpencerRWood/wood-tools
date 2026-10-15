@@ -63,7 +63,10 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         "author_email",
     }
     require(
-        required <= value.keys() <= required | {"images", "deployment", "required_approvals"},
+        required
+        <= value.keys()
+        <= required
+        | {"images", "deployment", "required_approvals", "workflow_prefix", "adopt_rulesets"},
         "Supply the supported initialization specification fields.",
     )
     require(re.fullmatch(SLUG, value["repository"]), "Use a canonical owner/repository.")
@@ -90,6 +93,14 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         )
     approvals = value.get("required_approvals", 0)
     require(type(approvals) is int and 0 <= approvals <= 6, "Invalid required review count.")
+    require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
+    adopted = value.get("adopt_rulesets", {})
+    require(
+        isinstance(adopted, dict)
+        and set(adopted) <= {"main", "development"}
+        and all(type(identifier) is int and identifier > 0 for identifier in adopted.values()),
+        "Ruleset adoption must identify explicit main/development repository rule IDs.",
+    )
     images = value.get("images", [])
     require(isinstance(images, list) and len(images) <= 16, "Declare at most sixteen images.")
     names: set[str] = set()
@@ -189,6 +200,21 @@ def toml(document: dict[str, Any]) -> str:
 
     table(document, [])
     return "\n".join(lines).strip() + "\n"
+
+
+def publication_mode(contract: dict[str, Any], files: dict[str, bytes]) -> None:
+    """Preserve Python/static-version preparation; main authority is release_integration."""
+    directory = relative(contract.get("project", {}).get("working_directory", "."))
+    path = str(Path(directory) / "pyproject.toml")
+    document = tomllib.loads(files.get(path, b"").decode())
+    semantic = document.get("tool", {}).get("semantic_release", {})
+    static = (
+        "version" in document.get("project", {})
+        or bool(semantic.get("version_toml"))
+        or bool(semantic.get("version_variables"))
+        or contract.get("build", {}).get("python_package", False)
+    )
+    contract["release"].setdefault("tag_merged_commit", not static)
 
 
 def workflows(spec: dict[str, Any]) -> dict[str, str]:
@@ -333,6 +359,7 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
     release["jobs"]["context"] = {
         "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
         "runs-on": "ubuntu-latest",
+        "permissions": {"contents": "read", "pull-requests": "read"},
         "steps": context_steps,
         "outputs": {
             "incident": "${{ steps.context.outputs.incident }}",
@@ -404,7 +431,10 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
     documents = {"validate.yml": validation, "routing.yml": route, "release.yml": release}
     if deployment and not deployment["automatic"]:
         documents["deploy.yml"] = release_manual
-    return {name: json.dumps(document, indent=2) + "\n" for name, document in documents.items()}
+    prefix = spec.get("workflow_prefix", "")
+    return {
+        prefix + name: json.dumps(document, indent=2) + "\n" for name, document in documents.items()
+    }
 
 
 def baseline_files(source: Path, baseline: str) -> dict[str, bytes]:
@@ -508,8 +538,9 @@ def plan(
     # Consumer image/deployment identities are explicit inputs, never copied from a template.
     contract.pop("container", None)
     contract.pop("delivery", None)
-    # Existing shared tag-only mode avoids release metadata writes to protected main.
-    contract["release"]["tag_merged_commit"] = True
+    # The pinned release_integration publisher keeps the tag on approved main.
+    # Static-version Python preparation still needs the configured version fields.
+    publication_mode(contract, files)
     if spec["images"]:
         image = spec["images"][0]
         contract["container"] = {"publish": True, **image}
