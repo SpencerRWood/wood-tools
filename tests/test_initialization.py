@@ -37,6 +37,31 @@ def spec():
     return specification_fixture()
 
 
+def test_approved_deferrals_are_forwarded_to_existing_readiness_gate(spec):
+    spec["deferred_stories"] = {"558": "Approved staged foundation; fleet obligation retained."}
+    route = json.loads(init.workflows(init.specification(spec))["routing.yml"])
+    assert (
+        json.loads(route["jobs"]["readiness"]["with"]["deferred_stories"])
+        == spec["deferred_stories"]
+    )
+    assert (
+        "deferred_stories"
+        not in json.loads(
+            init.workflows(init.specification(specification_fixture()))["routing.yml"]
+        )["jobs"]["readiness"]["with"]
+    )
+
+
+@pytest.mark.parametrize(
+    "deferrals",
+    [None, [], {"0": "approval"}, {558: "approval"}, {"558": ""}, {"558": "line\nbreak"}],
+)
+def test_invalid_deferrals_fail_closed(spec, deferrals):
+    spec["deferred_stories"] = deferrals
+    with pytest.raises(WorkflowFilesError, match="Deferred Stories"):
+        init.specification(spec)
+
+
 def source_repository(tmp_path, layout="library"):
     source = tmp_path / "source"
     source.mkdir()

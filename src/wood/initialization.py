@@ -66,7 +66,14 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         required
         <= value.keys()
         <= required
-        | {"images", "deployment", "required_approvals", "workflow_prefix", "adopt_rulesets"},
+        | {
+            "images",
+            "deployment",
+            "required_approvals",
+            "workflow_prefix",
+            "adopt_rulesets",
+            "deferred_stories",
+        },
         "Supply the supported initialization specification fields.",
     )
     require(re.fullmatch(SLUG, value["repository"]), "Use a canonical owner/repository.")
@@ -93,6 +100,21 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         )
     approvals = value.get("required_approvals", 0)
     require(type(approvals) is int and 0 <= approvals <= 6, "Invalid required review count.")
+    deferrals = value.get("deferred_stories", {})
+    require(
+        isinstance(deferrals, dict)
+        and len(deferrals) <= 40
+        and all(
+            isinstance(identifier, str)
+            and re.fullmatch(r"[1-9][0-9]*", identifier)
+            and isinstance(reason, str)
+            and reason.strip()
+            and len(reason) <= 500
+            and not any(char in reason for char in "\r\n\x00")
+            for identifier, reason in deferrals.items()
+        ),
+        "Deferred Stories require bounded positive IDs and explicit approval reasons.",
+    )
     require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
     adopted = value.get("adopt_rulesets", {})
     require(
@@ -301,6 +323,15 @@ def workflows(spec: dict[str, Any]) -> dict[str, str]:
                     "wood_revision": spec["wood_revision"],
                     "integration_command": spec["integration_command"],
                     "security_command": spec["security_command"],
+                    **(
+                        {
+                            "deferred_stories": json.dumps(
+                                spec["deferred_stories"], sort_keys=True, separators=(",", ":")
+                            )
+                        }
+                        if spec.get("deferred_stories")
+                        else {}
+                    ),
                     "hotfix_incident": "${{ needs.routing.outputs.incident }}",
                     "hotfix_approval": "${{ needs.routing.outputs.approval }}",
                 },

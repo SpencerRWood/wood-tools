@@ -254,6 +254,13 @@ workflows independently verify review, approval and exact-revision evidence.
 `repo release-context` only extracts these references; it never grants release
 authority. Hotfixes require main back-integration before later release preparation.
 
+An explicitly approved staged release can supply `deferred_stories` in its
+initialization or migration specification, mapping Story IDs to approval reasons.
+Generated callers pass this to the existing release-readiness scope check; they
+do not close Stories or bypass any other check. The scope check still rejects
+unknown Story IDs and incomplete Stories without explicit deferral. Review the
+deferrals with each exact release candidate and its separate release approval.
+
 Enforcement is a separate reviewed operation, after installing the workflows on
 both remote branches:
 
@@ -265,7 +272,8 @@ wood repo protection readback --spec /path/to/spec.json --json
 ```
 
 Protection plans bind the exact remote main and development revisions as well as
-the specification and observed rulesets. Any branch advance requires a fresh
+the specification, observed rulesets and available revision-bound CI check contexts,
+application IDs and states. Any branch advance or CI observation change requires a fresh
 plan and review before live application. Readback reports missing callers as
 failed installation checks so a staged migration cannot appear enforced.
 
