@@ -133,7 +133,7 @@ def configuration(
             spec["images"][0]["image_name"] == container["image_name"],
             "Preserve the configured image identity.",
         )
-    release["release"]["tag_merged_commit"] = True
+    init.publication_mode(release, files)
     result = dict(files)
     result[".github/release.toml"] = init.toml(release).encode()
     config = tomllib.loads(files.get("pyproject.toml", b"").decode())

@@ -100,7 +100,7 @@ def test_read_only_plan_and_safe_branch_initialization_preserve_history_and_work
     contract = tomllib.loads((destination / ".github/release.toml").read_text())
     assert contract["build"]["python_package"] is True
     assert contract["delivery"]["runtime_verification"] is False
-    assert contract["release"]["tag_merged_commit"] is True
+    assert contract["release"]["tag_merged_commit"] is False
     assert migration.apply(root, record, record["plan_hash"], True)["state"] == result["state"]
 
 
@@ -271,6 +271,26 @@ def test_initial_branch_creation_rejects_unsafe_automatic_baseline_events(trigge
         ).encode()
     }
     assert not migration._development_safe(files)
+
+
+def test_publication_mode_preserves_static_package_build_and_dynamic_modes(repository):
+    root, baseline, spec, _, _ = repository
+    files = initialization.baseline_files(root, baseline)
+    changes = migration.configuration(files, spec)
+    contract = tomllib.loads(changes[".github/release.toml"].decode())
+    assert contract["build"]["python_package"] is True
+    assert contract["release"]["tag_merged_commit"] is False
+    source = tomllib.loads(files["pyproject.toml"].decode())
+    source["project"].pop("version")
+    dynamic_files = {**files, "pyproject.toml": initialization.toml(source).encode()}
+    contract["build"]["python_package"] = False
+    contract["release"].pop("tag_merged_commit")
+    dynamic_files[".github/release.toml"] = initialization.toml(contract).encode()
+    result = migration.configuration(dynamic_files, spec)
+    assert (
+        tomllib.loads(result[".github/release.toml"].decode())["release"]["tag_merged_commit"]
+        is True
+    )
 
 
 def test_yaml_on_boolean_and_duplicate_key_handling():

@@ -202,6 +202,21 @@ def toml(document: dict[str, Any]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def publication_mode(contract: dict[str, Any], files: dict[str, bytes]) -> None:
+    """Preserve Python/static-version preparation; main authority is release_integration."""
+    directory = relative(contract.get("project", {}).get("working_directory", "."))
+    path = str(Path(directory) / "pyproject.toml")
+    document = tomllib.loads(files.get(path, b"").decode())
+    semantic = document.get("tool", {}).get("semantic_release", {})
+    static = (
+        "version" in document.get("project", {})
+        or bool(semantic.get("version_toml"))
+        or bool(semantic.get("version_variables"))
+        or contract.get("build", {}).get("python_package", False)
+    )
+    contract["release"].setdefault("tag_merged_commit", not static)
+
+
 def workflows(spec: dict[str, Any]) -> dict[str, str]:
     """JSON is a YAML subset; reuse shared workflows instead of copying their logic."""
     revision = spec["workflow_revision"]
@@ -523,8 +538,9 @@ def plan(
     # Consumer image/deployment identities are explicit inputs, never copied from a template.
     contract.pop("container", None)
     contract.pop("delivery", None)
-    # Existing shared tag-only mode avoids release metadata writes to protected main.
-    contract["release"]["tag_merged_commit"] = True
+    # The pinned release_integration publisher keeps the tag on approved main.
+    # Static-version Python preparation still needs the configured version fields.
+    publication_mode(contract, files)
     if spec["images"]:
         image = spec["images"][0]
         contract["container"] = {"publish": True, **image}
