@@ -496,9 +496,19 @@ def workflow_readback(
         require(isinstance(branch_data, dict), "Branch authority is unavailable.")
         revision = (candidate_revisions or {}).get(branch, branch_data["commit"]["sha"])
         revisions[branch] = revision
-        listing: Any = operations._gh(
-            root, f"repos/{repository}/contents/.github/workflows?ref={revision}"
-        )
+        try:
+            listing: Any = operations._gh(
+                root, f"repos/{repository}/contents/.github/workflows?ref={revision}"
+            )
+        except operations.OperationsError:
+            # A documentation-only baseline can legitimately lack .github.
+            # Confirm that absence; other API failures must remain unavailable.
+            root_listing = operations._gh(root, f"repos/{repository}/contents?ref={revision}")
+            if not isinstance(root_listing, list) or any(
+                item.get("name") == ".github" for item in root_listing
+            ):
+                raise
+            listing = []
         require(isinstance(listing, list), "Workflow listing is unavailable.")
         names = {item["name"] for item in listing if item.get("type") == "file"}
         checks.append({"branch": branch, "check": "workflow-set", "passed": set(expected) <= names})
