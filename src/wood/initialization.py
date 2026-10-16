@@ -73,6 +73,7 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
             "workflow_prefix",
             "adopt_rulesets",
             "validation_checks",
+            "approved_check_replacements",
         },
         "Supply the supported initialization specification fields.",
     )
@@ -117,6 +118,46 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         and all(type(identifier) is int and identifier > 0 for identifier in adopted.values()),
         "Ruleset adoption must identify explicit main/development repository rule IDs.",
     )
+    replacements = value.get("approved_check_replacements", [])
+    require(
+        isinstance(replacements, list) and len(replacements) <= 20,
+        "Bound approved check replacements.",
+    )
+    for replacement in replacements:
+        require(
+            isinstance(replacement, dict)
+            and set(replacement)
+            == {
+                "branch",
+                "ruleset_id",
+                "context",
+                "integration_id",
+                "replacement",
+                "approval_reference",
+                "observed_ruleset_hash",
+            },
+            "A check replacement needs its exact branch, rule, check, replacement and approval.",
+        )
+        require(
+            isinstance(replacement["branch"], str)
+            and replacement["branch"] in {"main", "development"}
+            and type(replacement["ruleset_id"]) is int
+            and adopted.get(replacement["branch"]) == replacement["ruleset_id"]
+            and type(replacement["integration_id"]) is int
+            and replacement["integration_id"] == value["checks_integration_id"]
+            and isinstance(replacement["context"], str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 /_.-]{0,99}", replacement["context"])
+            and replacement["replacement"] in checks
+            and replacement["context"] != replacement["replacement"]
+            and isinstance(replacement["observed_ruleset_hash"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", replacement["observed_ruleset_hash"])
+            and isinstance(replacement["approval_reference"], str)
+            and replacement["approval_reference"].strip()
+            and len(replacement["approval_reference"]) <= 500
+            and not any(c in replacement["approval_reference"] for c in "\r\n\x00"),
+            "Check replacements must bind an adopted rule and required validation "
+            "with explicit approval.",
+        )
     images = value.get("images", [])
     require(isinstance(images, list) and len(images) <= 16, "Declare at most sixteen images.")
     names: set[str] = set()

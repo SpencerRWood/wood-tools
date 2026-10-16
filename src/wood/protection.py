@@ -140,8 +140,13 @@ def _repository(root: Path, spec: dict[str, Any]) -> str:
     return repository
 
 
-def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> bool:
-    """Only explicit one-time retirement of the old validation context and strengthening."""
+def _adoptable(
+    observed: dict[str, Any],
+    desired: dict[str, Any],
+    app: int,
+    replaced: set[tuple[str, int]] | None = None,
+) -> bool:
+    """Strengthen policy or replace only the exact checks separately approved for this rule."""
     conditions = json.loads(json.dumps(observed.get("conditions", {})))
     if desired["name"] == "wood-main":
         names = conditions.get("ref_name", {}).get("include", [])
@@ -209,7 +214,7 @@ def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> b
                 context = check["context"]
                 if context == "validation" and check["integration_id"] == app:
                     context = "validation / validation"
-                if (context, check["integration_id"]) not in required:
+                if (context, check["integration_id"]) not in required | (replaced or set()):
                     return False
         elif rule != new[kind]:
             return False
@@ -296,9 +301,26 @@ def plan(
                 "Adoption rule is missing or conflicts with an existing managed rule.",
             )
             observed = adopted[0]
+            approved_replacements = [
+                item
+                for item in spec.get("approved_check_replacements", [])
+                if item["ruleset_id"] == adopted_id
+                and item["branch"] == payload["name"].removeprefix("wood-")
+            ]
             require(
                 matches_policy(observed, payload)
-                or _adoptable(observed, payload, spec["checks_integration_id"]),
+                or all(
+                    item["observed_ruleset_hash"] == digest(observed)
+                    for item in approved_replacements
+                ),
+                "Approved check replacement targets a changed ruleset; review the current policy.",
+            )
+            replacements = {
+                (item["context"], item["integration_id"]) for item in approved_replacements
+            }
+            require(
+                matches_policy(observed, payload)
+                or _adoptable(observed, payload, spec["checks_integration_id"], replacements),
                 "Ruleset adoption would drop unreviewed checks or weaken existing policy.",
             )
             action = "verify" if matches_policy(observed, payload) else "adopt"
