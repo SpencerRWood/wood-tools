@@ -253,9 +253,29 @@ def _commands(check: str, contract: dict[str, Any]) -> list[str] | None:
             "--cov-report=term-missing",
         ],
         "pre-commit": ["uv", "run", "--active", "--no-sync", "pre-commit", "run", "--all-files"],
-        "sqlfluff": ["uv", "run", "--active", "--no-sync", "sqlfluff", "lint", "."],
+        "sqlfluff": [
+            "uv",
+            "run",
+            "--active",
+            "--no-sync",
+            "sqlfluff",
+            "lint",
+            ".",
+            "--templater",
+            "jinja",
+        ],
         "dbt-deps": ["uv", "run", "--active", "--no-sync", "dbt", "deps"],
-        "dbt-parse": ["uv", "run", "--active", "--no-sync", "dbt", "parse"],
+        "dbt-parse": [
+            "uv",
+            "run",
+            "--active",
+            "--no-sync",
+            "dbt",
+            "parse",
+            "--profiles-dir",
+            ".",
+            "--no-version-check",
+        ],
     }
     if check in known:
         return known[check]
@@ -302,6 +322,70 @@ def _prune_empty_directories(root: Path) -> None:
             directory.rmdir()
 
 
+def _initialize_validation_git(root: Path, checkout: Path) -> bool:
+    """Retain unchanged tracked-file identity without copying source Git metadata."""
+    for command in (
+        ["git", "init", "--quiet"],
+        ["git", "switch", "--quiet", "-c", "wood-validation"],
+        ["git", "add", "--all"],
+    ):
+        if _run(command, checkout).returncode:
+            return False
+    baseline = _run(["git", "ls-tree", "-rz", "HEAD"], root)
+    current = _run(["git", "ls-files", "--stage", "-z"], checkout)
+    if baseline.returncode or current.returncode:
+        return False
+    staged = {}
+    for entry in current.stdout.split("\0"):
+        if entry:
+            metadata, name = entry.split("\t", 1)
+            staged[name] = metadata.split()[:2]
+    unchanged = []
+    for entry in baseline.stdout.split("\0"):
+        if entry:
+            metadata, name = entry.split("\t", 1)
+            mode, kind, revision = metadata.split()
+            if kind == "blob" and staged.get(name) == [mode, revision]:
+                unchanged.append(f"{mode} {revision}\t{name}\0")
+    if _run(["git", "read-tree", "--empty"], checkout).returncode:
+        return False
+    try:
+        indexed = subprocess.run(
+            ["git", "update-index", "-z", "--index-info"],
+            cwd=checkout,
+            input="".join(unchanged),
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return False
+    if indexed.returncode:
+        return False
+    committed = _run(
+        [
+            "git",
+            "-c",
+            "user.name=Wood validation",
+            "-c",
+            "user.email=validation@invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "--no-verify",
+            "-m",
+            "Unchanged validation baseline",
+        ],
+        checkout,
+    )
+    return committed.returncode == 0 and _run(["git", "add", "--all"], checkout).returncode == 0
+
+
 def repo_validate(root: Path) -> dict[str, object]:
     contract = _contract(root)
     checks = contract["validation"].get("checks", [])
@@ -334,15 +418,12 @@ def repo_validate(root: Path) -> dict[str, object]:
         _prune_empty_directories(checkout)
         fingerprint = snapshot_fingerprint(root, checkout, output_dir)
         # pre-commit requires a repository, and all hooks run against this disposable copy.
-        initialized = _run(["git", "init", "--quiet"], checkout).returncode == 0
-        initialized = (
-            initialized
-            and _run(["git", "switch", "--quiet", "-c", "wood-validation"], checkout).returncode
-            == 0
-        )
-        initialized = initialized and _run(["git", "add", "--all"], checkout).returncode == 0
+        initialized = _initialize_validation_git(root, checkout)
         env = dict(os.environ)
-        environment = root / ".venv"
+        environment = (
+            _checkout_directory(root, contract.get("project", {}).get("working_directory", "."))
+            / ".venv"
+        )
         if environment.is_dir():
             env["VIRTUAL_ENV"] = str(environment)
             env["PATH"] = f"{environment / 'bin'}{os.pathsep}{env.get('PATH', '')}"
@@ -402,6 +483,21 @@ def repo_validate(root: Path) -> dict[str, object]:
                 ),
             )
             try:
+                if check == "dbt-parse":
+                    profile = _checkout_directory(
+                        cwd, contract.get("dbt", {}).get("profiles_example", "profiles.example.yml")
+                    )
+                    shutil.copyfile(profile, cwd / "profiles.yml")
+                    # Parse is offline compilation, not warehouse execution.
+                    for key, value in {
+                        "DBT_HOST": "127.0.0.1",
+                        "DBT_USER": "validation",
+                        "DBT_PASSWORD": "validation-only",
+                        "DBT_PORT": "5432",
+                        "DBT_DBNAME": "validation",
+                        "DBT_SCHEMA": "validation",
+                    }.items():
+                        env.setdefault(key, value)
                 result = subprocess.run(
                     command,
                     cwd=cwd,

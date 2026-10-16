@@ -19,7 +19,11 @@ from .workflow_files import WorkflowFilesError, run_directory, write_json
 def rulesets(spec: dict[str, Any]) -> list[dict[str, Any]]:
     result = []
     for branch in ("main", "development"):
-        contexts = ["validation / validation", "pr-routing"]
+        contexts = list(
+            dict.fromkeys(
+                ["validation / validation", "pr-routing", *spec.get("validation_checks", [])]
+            )
+        )
         result.append(
             {
                 "name": f"wood-{branch}",
@@ -244,7 +248,12 @@ def _candidate(root: Path, spec: dict[str, Any], number: int) -> dict[str, Any]:
         and check.get("conclusion") == "success"
         and check.get("app", {}).get("id") == spec["checks_integration_id"]
     ]
-    required = {"validation / validation", "pr-routing"}
+    required = {
+        check["context"]
+        for rule in rulesets(spec)[0]["rules"]
+        if rule["type"] == "required_status_checks"
+        for check in rule["parameters"]["required_status_checks"]
+    }
     require(
         required <= {check["name"] for check in checks},
         "Candidate needs passing revision-bound validation and routing.",

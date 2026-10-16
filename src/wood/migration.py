@@ -14,6 +14,7 @@ from wood_project.story import session
 from . import initialization as init
 from . import operations
 from .workflow_documents import (
+    centralized_validation,
     document,
     events,
     main_publication,
@@ -101,7 +102,7 @@ def _development_safe(files: dict[str, bytes]) -> bool:
                 and push.get("branches") == ["main"]
             ):
                 continue
-            if not read_only(value):
+            if not (read_only(value) or centralized_validation(value)):
                 return False
     return True
 
@@ -136,7 +137,8 @@ def configuration(
     )
     if spec["images"]:
         init.require(
-            spec["images"][0]["image_name"] == container["image_name"],
+            spec["images"][0]["image_name"]
+            == container.get("image_name", spec["repository"].split("/", 1)[1].lower()),
             "Preserve the configured image identity.",
         )
     result = dict(files)
@@ -145,7 +147,9 @@ def configuration(
     )
     config = tomllib.loads(files.get("pyproject.toml", b"").decode())
     wood = config.setdefault("tool", {}).setdefault("wood", {})
-    wood["openproject"] = {key: spec[key] for key in ("project_id", "initiative_id")}
+    wood.setdefault("openproject", {}).update(
+        {key: spec[key] for key in ("project_id", "initiative_id")}
+    )
     wood["branching"] = {
         "strategy": "integration",
         "release_id": spec["release_id"],
@@ -174,14 +178,6 @@ def configuration(
                 result[path] = with_events(
                     files[path].decode(), {"workflow_call": events(value)["workflow_call"]}
                 ).encode()
-        elif name == "release.yml":
-            deployment = any(
-                "deploy" in str(job.get("uses", "")) or "promote" in str(job.get("uses", ""))
-                for job in value["jobs"].values()
-            )
-            init.require(
-                not deployment or spec.get("deployment"), "Preserve the deployment policy."
-            )
     for name, text in generated.items():
         path = f".github/workflows/{name}"
         if name.endswith("validate.yml") and path in files:
@@ -194,7 +190,7 @@ def configuration(
                     key: job for key, job in previous["jobs"].items() if key not in current["jobs"]
                 }
                 init.require(
-                    read_only({**previous, "jobs": extra}),
+                    not extra or read_only({**previous, "jobs": extra}),
                     "Review additional validation jobs before enabling development events.",
                 )
                 current["jobs"].update(extra)
@@ -208,6 +204,46 @@ def configuration(
         if not (path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml"))):
             continue
         value = document(contents.decode())
+        trigger = events(value)
+        if (
+            Path(path).name == "release.yml"
+            and isinstance(trigger.get("push"), dict)
+            and trigger["push"].get("branches") == ["main"]
+            and "workflow_dispatch" in trigger
+            and any(
+                str(job.get("uses", "")).startswith(
+                    "SpencerRWood/workflows/.github/workflows/release"
+                )
+                for job in value["jobs"].values()
+            )
+        ):
+            # Scope-resolution jobs and local deployment calls must share the
+            # publisher's main boundary, including manual dispatches.
+            for job in value["jobs"].values():
+                condition = str(job.get("if", "true"))
+                if "github.ref == 'refs/heads/main'" not in condition:
+                    if condition.startswith("${{") and condition.endswith("}}"):
+                        condition = condition[3:-2].strip()
+                    job["if"] = f"github.ref == 'refs/heads/main' && ({condition})"
+        if Path(path).name == "release.yml" and set(events(value)) == {"workflow_dispatch"}:
+            init.require(
+                all(
+                    re.fullmatch(
+                        r"SpencerRWood/workflows/\.github/workflows/release(?:-container|-containers)?"
+                        r"\.yml@(?:[a-f0-9]{40}|v[0-9]+)",
+                        str(job.get("uses", "")),
+                    )
+                    for job in value["jobs"].values()
+                ),
+                "Review manual deployment/custom publication before enabling main integration.",
+            )
+            value["on"] = {**events(value), "push": {"branches": ["main"]}}
+            for job in value["jobs"].values():
+                condition = job.get("if", "true")
+                init.require(
+                    "${{" not in str(condition), "Review the existing publication condition."
+                )
+                job["if"] = f"github.ref == 'refs/heads/main' && ({condition})"
         if not main_publication(value):
             continue
         changed = False
@@ -222,6 +258,15 @@ def configuration(
             if match:
                 job["uses"] = match[1] + "@" + spec["workflow_revision"]
                 job.setdefault("with", {})["workflow_revision"] = spec["workflow_revision"]
+                if "/release-container" in match[1]:
+                    job.setdefault("permissions", {}).update(
+                        {
+                            "contents": "write",
+                            "packages": "write",
+                            "id-token": "write",
+                            "attestations": "write",
+                        }
+                    )
                 changed = True
                 publishes = publishes or "/release" in match[1]
         if changed:
@@ -249,7 +294,7 @@ def configuration(
     )
     previous_guidance = result.get("AGENTS.md", b"")
     if not previous_guidance.startswith(guidance):
-        result["AGENTS.md"] = guidance + previous_guidance
+        result["AGENTS.md"] = (guidance + previous_guidance).rstrip() + b"\n"
     return {path: data for path, data in result.items() if files.get(path) != data}
 
 
@@ -308,14 +353,14 @@ def plan(
         .get("wood", {})
         .get("branching", {})
     )
-    init.require(
-        old.get("strategy") != "release",
-        "Existing release scope needs a separately approved transition boundary.",
-    )
-    init.require(
-        not any(name.startswith("release/") for name in refs),
-        "Retain live release branches until an approved transition boundary.",
-    )
+    release_refs = {
+        name: revision for name, revision in refs.items() if name.startswith("release/")
+    }
+    for revision in release_refs.values():
+        init.require(
+            _ancestor(root, revision, baseline),
+            "Reconcile existing release branches into the approved baseline before migration.",
+        )
     changes = configuration(files, spec, contract)
     initial = "development" not in refs
     init.require(
@@ -331,6 +376,8 @@ def plan(
         "branch": branch,
         "specification": spec,
         "observed": observed,
+        "original_branching": old,
+        "reconciled_release_branches": release_refs,
         "initialize_development": initial,
         "contents": {path: data.decode() for path, data in changes.items()},
         "before": {

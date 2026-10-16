@@ -72,6 +72,7 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
             "required_approvals",
             "workflow_prefix",
             "adopt_rulesets",
+            "validation_checks",
         },
         "Supply the supported initialization specification fields.",
     )
@@ -97,6 +98,17 @@ def specification(value: dict[str, Any]) -> dict[str, Any]:
         )
     approvals = value.get("required_approvals", 0)
     require(type(approvals) is int and approvals == 0, "Canonical review count must be zero.")
+    checks = value.get("validation_checks", [])
+    require(
+        isinstance(checks, list)
+        and len(checks) <= 20
+        and all(
+            isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 /_.-]{0,99}", name)
+            for name in checks
+        )
+        and len(set(checks)) == len(checks),
+        "Additional validation checks must be unique bounded check names.",
+    )
     require(value.get("workflow_prefix", "") in {"", "wood-"}, "Unsupported caller file prefix.")
     adopted = value.get("adopt_rulesets", {})
     require(
@@ -342,7 +354,7 @@ def baseline_files(source: Path, baseline: str) -> dict[str, bytes]:
                 not any(part == ".git" for part in Path(member.name).parts)
                 and not (
                     Path(member.name).name.startswith(".env")
-                    and Path(member.name).name != ".env.example"
+                    and Path(member.name).name not in {".env.example", ".envrc"}
                 ),
                 "Baseline contains Git metadata or runtime environment files.",
             )
