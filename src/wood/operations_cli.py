@@ -11,6 +11,8 @@ from wood_project.story import branching
 from wood_project.story.models import StoryWorkflowError
 
 from . import operations
+from .initialization_cli import add_parsers
+from .initialization_cli import run as run_initialization
 from .output import Status, envelope
 from .verification import repo_verify
 from .workflow_files import WorkflowFilesError, run_directory, write_json
@@ -22,6 +24,7 @@ def add_operations_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     for name in ("info", "branching", "release-readiness", "standards", "validate", "verify"):
         parser = repo_actions.add_parser(name)
         parser.add_argument("--json", dest="operations_json", action="store_true")
+    add_parsers(repo_actions)
     ci = commands.add_parser("ci", help="Inspect centralized validation")
     ci_actions = ci.add_subparsers(dest="ci_command", required=True)
     for name in ("status", "failures"):
@@ -40,6 +43,14 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
     command = f"{group} {action}"
     try:
         root = operations.repository_root(cwd)
+        if group == "repo" and action in {
+            "init",
+            "migrate",
+            "protection",
+            "route",
+            "release-context",
+        }:
+            return run_initialization(args, root)
         status: Status = "success"
         if group == "repo":
             if action == "info":
@@ -105,7 +116,29 @@ def run_operations_command(args: argparse.Namespace, cwd: Path) -> dict[str, obj
     except (operations.OperationsError, WorkflowFilesError, StoryWorkflowError) as exc:
         return envelope(
             command=command,
+            mutation=(
+                "mutating"
+                if group == "repo"
+                and (
+                    (action == "init" and args.apply)
+                    or (action == "migrate" and args.migration_command == "apply")
+                    or (action == "protection" and args.protection_command == "apply")
+                )
+                else "read-only"
+            ),
             status=getattr(exc, "status", "invalid"),
             summary=str(exc),
             errors=[{"code": exc.code, "message": str(exc)}],
+        )
+    except OSError, ValueError, TypeError, KeyError, AttributeError:
+        return envelope(
+            command=command,
+            status="invalid",
+            summary="Invalid repository input.",
+            errors=[
+                {
+                    "code": "REPOSITORY_INPUT_INVALID",
+                    "message": "Check the specification and authority response schema.",
+                }
+            ],
         )

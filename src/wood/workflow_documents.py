@@ -1,0 +1,180 @@
+"""Read Actions YAML with string event names and reject ambiguous mappings."""
+
+from __future__ import annotations
+
+import copy
+import json
+import re
+from typing import Any
+
+import yaml
+
+from .workflow_files import WorkflowFilesError
+
+
+class ActionsLoader(yaml.SafeLoader):
+    pass
+
+
+ActionsLoader.yaml_implicit_resolvers = copy.deepcopy(yaml.SafeLoader.yaml_implicit_resolvers)
+for initial, resolvers in ActionsLoader.yaml_implicit_resolvers.items():
+    ActionsLoader.yaml_implicit_resolvers[initial] = [
+        (tag, pattern) for tag, pattern in resolvers if tag != "tag:yaml.org,2002:bool"
+    ]
+ActionsLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool", re.compile(r"^(?:true|false|True|False|TRUE|FALSE)$"), list("tTfF")
+)
+
+
+def _mapping(loader: ActionsLoader, node: yaml.MappingNode) -> dict[Any, Any]:
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node)
+        if key in result:
+            raise WorkflowFilesError("WORKFLOW_INVALID", "Duplicate workflow mapping key.")
+        result[key] = loader.construct_object(value_node)
+    return result
+
+
+ActionsLoader.add_constructor("tag:yaml.org,2002:map", _mapping)
+
+
+def document(text: str) -> dict[str, Any]:
+    try:
+        value = yaml.load(text, Loader=ActionsLoader)
+    except yaml.YAMLError as exc:
+        raise WorkflowFilesError("WORKFLOW_INVALID", "Cannot parse workflow YAML.") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("jobs"), dict):
+        raise WorkflowFilesError("WORKFLOW_INVALID", "Workflow requires a jobs mapping.")
+    return value
+
+
+def events(value: dict[str, Any]) -> dict[str, Any]:
+    trigger = value.get("on", {})
+    if isinstance(trigger, str):
+        return {trigger: None}
+    if isinstance(trigger, list) and all(isinstance(item, str) for item in trigger):
+        return dict.fromkeys(trigger)
+    if isinstance(trigger, dict):
+        return trigger
+    raise WorkflowFilesError("WORKFLOW_INVALID", "Invalid workflow events.")
+
+
+def with_events(text: str, trigger: dict[str, Any]) -> str:
+    """Change the trigger block while retaining reusable jobs and their comments verbatim."""
+    if text.lstrip().startswith("{"):
+        value = document(text)
+        value["on"] = trigger
+        return json.dumps(value, indent=2) + "\n"
+    tree = yaml.compose(text, Loader=ActionsLoader)
+    if not isinstance(tree, yaml.MappingNode):
+        raise WorkflowFilesError("WORKFLOW_INVALID", "Workflow requires a mapping.")
+    for index, (key, _value) in enumerate(tree.value):
+        if key.value == "on":
+            stop = (
+                tree.value[index + 1][0].start_mark.index
+                if index + 1 < len(tree.value)
+                else len(text)
+            )
+            return (
+                text[: key.start_mark.index]
+                + yaml.safe_dump({"on": trigger}, sort_keys=False)
+                + "\n"
+                + text[stop:]
+            )
+    raise WorkflowFilesError("WORKFLOW_INVALID", "Workflow has no trigger block.")
+
+
+def reusable_only(value: dict[str, Any]) -> bool:
+    return set(events(value)) == {"workflow_call"}
+
+
+def centralized_validation(value: dict[str, Any]) -> bool:
+    """Recognize immutable calls to the existing nonpublishing validator."""
+
+    def permissions_safe(permissions: Any) -> bool:
+        return permissions is None or (
+            isinstance(permissions, dict)
+            and all(
+                level in {"read", "none"} or (name == "statuses" and level == "write")
+                for name, level in permissions.items()
+            )
+        )
+
+    return (
+        bool(value["jobs"])
+        and all(
+            re.fullmatch(
+                r"SpencerRWood/workflows/\.github/workflows/validate\.yml@[a-f0-9]{40}",
+                str(job.get("uses", "")),
+            )
+            and permissions_safe(job.get("permissions"))
+            for job in value["jobs"].values()
+        )
+        and permissions_safe(value.get("permissions"))
+    )
+
+
+def main_publication(value: dict[str, Any]) -> bool:
+    """Recognize existing pinned publishers isolated from development events."""
+    trigger = events(value)
+    push = trigger.get("push")
+    if not (
+        set(trigger) <= {"push", "workflow_dispatch", "workflow_call"}
+        and (
+            push is None
+            or (
+                isinstance(push, dict)
+                and push.get("branches") == ["main"]
+                and not (set(push) - {"branches", "paths", "paths-ignore"})
+            )
+        )
+    ):
+        return False
+    if push is not None and "workflow_dispatch" not in trigger:
+        return True
+    for key, job in value["jobs"].items():
+        if "github.ref == 'refs/heads/main'" in str(job.get("if", "")):
+            continue
+        if read_only({**value, "jobs": {key: job}}):
+            continue
+        if push is not None and job.get("if") == "github.event_name == 'push'":
+            continue
+        # These existing centralized engines independently reject non-main
+        # publication. Arbitrary reusable jobs need a repository-local guard.
+        if not re.fullmatch(
+            r"SpencerRWood/workflows/\.github/workflows/release(?:-container|-containers)?"
+            r"\.yml@[a-f0-9]{40}",
+            str(job.get("uses", "")),
+        ):
+            return False
+    return True
+
+
+def read_only(value: dict[str, Any]) -> bool:
+    """Conservative extra-workflow gate; unknown credentials/permissions need review."""
+    defaults = value.get("permissions")
+    if "secrets" in str(value.get("env", {})):
+        return False
+    if defaults is not None and (
+        not isinstance(defaults, dict) or any(v not in {"read", "none"} for v in defaults.values())
+    ):
+        return False
+    for job in value["jobs"].values():
+        if not isinstance(job.get("runs-on"), str) or job.get("runs-on") not in {
+            "ubuntu-latest",
+            "ubuntu-24.04",
+            "ubuntu-22.04",
+        }:
+            return False
+        permissions = job.get("permissions", defaults)
+        if (
+            not isinstance(permissions, dict)
+            or any(v not in {"read", "none"} for v in permissions.values())
+            or "secrets" in str(job)
+        ):
+            return False
+        # An unreviewed reusable job may publish even if its caller requests read access.
+        if "uses" in job:
+            return False
+    return True

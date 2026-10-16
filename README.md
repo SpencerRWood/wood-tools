@@ -115,6 +115,180 @@ with explicit approval. Do not change an active claim's mapping to migrate it.
 Recovery Verification R1 fixtures test the first adoption scenario; they do not
 modify OP-499 or approve a live release scope.
 
+## Repository initialization and enforcement
+
+Existing repositories use `wood repo migrate assess`, `plan` and `apply`, which
+reuse the BR-03 specification, caller generator and separate protection commands.
+Assessment saves branches, PRs, claims, worktrees and effective rules without
+changing them. A reviewed plan binds the exact baseline, remote/local observations,
+destination and proposed file contents. Apply prepares an isolated feature worktree;
+it does not commit, merge, change live protection, publish or deploy.
+
+```sh
+wood repo migrate assess --json
+wood repo migrate plan --baseline <full-approved-SHA> \
+  --baseline-approval <scope-reference> --destination /path/to/isolated-worktree \
+  --branch feature/op-558-adoption --spec /path/to/spec.json --json
+wood repo migrate apply --plan <returned-plan-file> \
+  --plan-hash <reviewed-hash> --json
+```
+
+If development is missing, select `--initialize-development` on apply. Its approved
+baseline must be current main with no unsafe development/create/workflow-run publisher.
+Branch creation uses an absent-ref lease; existing development is never advanced or
+overwritten. Existing release scopes/branches block automatic transition. Main and
+development must both be ancestors of the candidate before planning. Preserve active
+claims and dirty source checkouts; changed observations or occupied targets fail closed.
+Private durable journals retain partial progress; retry the same plan only while refs,
+claims and planned contents still match. Never delete branches/worktrees as automatic recovery.
+
+Publication capabilities and deployment requirements remain in the existing release
+contract. `--contract` supplies an explicitly reviewed missing contract, or enables
+semantic release in an otherwise identical manual-publisher contract. Reusable workflow
+paths keep their call interfaces; `workflow_prefix: "wood-"` gives their repository's
+own callers separate names. Unknown additional automatic workflows require review.
+Enforcement readback compares YAML semantics and accepts only known non-weakening
+GitHub PR defaults; bypass actors, policy drift, wrong checks and incompatible workflows
+still fail. Plan live enforcement separately and retain explicit approval for apply.
+
+For an existing rule, `adopt_rulesets: {"main": <observed-rule-ID>}` explicitly
+proposes adopting its ID rather than adding a competing rule. The plan may strengthen
+review requirements and replace the obsolete BR-02 `validation` context with
+`validation / validation` from the same Actions app. It refuses bypass grants,
+lost security checks, reduced review requirements or unrelated policy loss.
+This is a reviewed transition, not a compatibility status alias.
+
+When old main callers prevent installing the new required checks, use
+`repo protection plan --candidate-pr <development-to-main-PR> ...` to bind a bootstrap
+plan to the exact open same-repository candidate, current main/development revisions,
+passing canonical Actions checks and the reviewed caller content. Pass the same
+candidate on separately approved protection apply. Changed candidates/checks fail
+before writes. Readback still reports actual main installation as pending; this
+bootstrap never merges a PR or grants publication authority.
+
+`wood repo init` is one initializer for prepared, approved source baselines.
+React/backend, FastAPI service and Python library layouts share the same
+integration strategy. The existing release contract selects the Python working
+directory; branching and OpenProject context always live in root `pyproject.toml`.
+Perform the template's documented package/project rename first and approve that
+source commit. Initialization does not execute template scripts or mutate the source.
+
+The supported specification is JSON. It supplies the new repository identity,
+planning scope, exact reviewed workflow/tool SHAs, existing integration/security
+commands, GitHub Actions integration ID and baseline commit author. For example:
+
+```json
+{
+  "repository": "owner/new-repository",
+  "project_id": 3,
+  "initiative_id": 552,
+  "release_id": 26,
+  "scope_reference": "<actual approved scope reference>",
+  "workflow_revision": "<approved full BR-02-compatible workflows SHA>",
+  "wood_revision": "<approved full Wood SHA containing repo route and release-context>",
+  "checks_integration_id": 15368,
+  "author_name": "<approved author>",
+  "author_email": "<approved author email>",
+  "required_approvals": 0,
+  "images": []
+}
+```
+
+The SHA placeholders must be replaced; branch names and mutable tags are rejected.
+Verify the GitHub Actions App ID before applying enforcement. Required review count
+is explicit; the sole-maintainer default retains revision-bound release approval
+through BR-02's protected-main authority, without inventing an administrator bypass.
+The OpenProject release must remain open for subsequent Story activation; the
+initializer records approved scope but does not independently approve it.
+
+Images use existing `image_name`, `dockerfile`, `context` inputs, up to sixteen
+distinct declared images. All Dockerfiles/contexts must exist in the source commit.
+No template image or deployment identity is copied. Empty images select the shared
+tag/GitHub Release workflow; declared images select BR-02's coordinated publication
+workflow with one release identity. The existing `release.tag_merged_commit` mode
+is enabled so semantic-release tags the validated main revision without pushing
+version metadata through protected main. Packaging remains the consumer's existing
+capability contract; this command does not publish packages or images.
+
+Optional `deployment` declares `approval_reference`, `automatic` and the existing
+`deploy-ansible` `inputs`: inventory/playbook paths, environment name, concurrency
+group and health check command, with supported rollback/runner inputs when needed.
+Automatic deployment depends on verified publication and its immutable tag;
+`automatic = false` generates a separate main-only dispatch for an already
+published tag. Existing manual deployment exceptions are retained. Secrets are
+referenced through the existing Actions secret inputs; none are written by Wood.
+
+Preview from a task repository, inspect the saved complete plan, then explicitly
+apply the same inputs and returned hash:
+
+```sh
+wood repo init --source /path/to/prepared-source --baseline <full-source-SHA> \
+  --baseline-approval <approval-reference> --destination /path/to/new-repository \
+  --spec /path/to/spec.json --json
+# After plan review, repeat with --apply --plan-hash <reviewed-hash>.
+```
+
+Preview does not create a destination. Apply creates an approved baseline commit
+and points both main and development to that exact commit, checking out development.
+The tracked `.wood-initialization.json` retains source identity, approval, plan hash
+and expected contents/modes. Construction uses disposable staging and an exclusive
+destination reservation. Failed construction leaves the source untouched; exact
+retries reuse the baseline. Occupied destinations, modified/advanced repositories,
+links, submodules, runtime environment files and stale/tampered plans fail closed.
+Existing repositories and their branch arrangements/claims are never migrated.
+
+This operation creates only a local repository and an origin URL, without remote
+creation, pushing, publishing, deployment or live enforcement. `enforcement_verified`
+remains false. Provisioning/pushing a new remote requires separate authorization;
+the existing main publisher may run on an initial main push and needs explicit authorization.
+
+Generated validation/routing workflows use JSON, a valid YAML subset, and immutable
+workflow/helper pins. Development PRs/pushes validate without publication or deployment.
+The existing baseline publisher and deployment controls are preserved, rather than
+replaced with a new publishing engine. Main retains the repository's applicable
+centralized release machinery, invoked after an explicitly approved release merge.
+
+`pr-routing` checks the exact checkout and ancestry: working branches target
+development, development targets main, and current main can reconcile into divergent
+development. Release candidates must contain main ancestry, including hotfixes.
+Emergency Story PRs retain `Hotfix-Incident:` and `Hotfix-Approval:` evidence.
+No hosted OpenProject credentials, release-scope deferral protocol or new CI identity
+is required. Wood/Codex use existing local credentials for planning and evidence.
+
+Enforcement is a separate reviewed operation, after installing the workflows on
+both remote branches:
+
+```sh
+wood repo protection plan --spec /path/to/spec.json --json
+wood repo protection apply --spec /path/to/spec.json \
+  --plan-hash <reviewed-hash> --approval-reference <separate-approval> --json
+wood repo protection readback --spec /path/to/spec.json --json
+```
+
+Protection plans bind the exact remote main and development revisions as well as
+the specification, observed rulesets and available revision-bound CI check contexts,
+application IDs and states. Any branch advance or CI observation change requires a fresh
+plan and review before live application. Readback reports missing callers as
+failed installation checks so a staged migration cannot appear enforced.
+
+The plan binds observed rulesets and desired no-bypass main/development rules to a
+hash. Apply creates missing managed rulesets without rewriting conflicting policy;
+partial failure requires fresh readback/replanning, then reuses already correct
+rules. Required checks must match installed pinned workflows and the verified
+GitHub Actions integration. Both branches require PRs, strict validation and routing,
+and resolved conversations, with zero independent approving reviewers, no bypass actors,\nand no direct/force pushes or deletion. Inspect stronger existing controls and\nreport any material security downgrade before applying it.
+Archived repositories, inherited-policy ambiguity and truncated authority fail
+closed. Application does not attest enforcement: effective readback verifies branch
+rules, bypass actors, required-check parameters and revision-bound workflow sources.
+It uses GitHub's [active branch rules endpoint](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch),
+which excludes disabled/evaluate rulesets. Results and full records are separate
+from publication/deployment authority.
+
+No live protection change or consumer/template migration is part of Story 556's
+implementation validation. Fixtures cover local Git initialization and mocked
+ruleset plan/apply/readback. Generated callers are validated with actionlint when
+available, alongside tests of their pins, routing, permissions and output contracts.
+
 ## Install and inspect
 
 Use Python 3.14 and uv:
