@@ -457,6 +457,78 @@ def test_adoption_rejects_security_loss_even_with_explicit_rule_id(github, weake
         protection.plan(root, {**spec, "adopt_rulesets": {"main": old["id"]}})
 
 
+def test_separately_approved_check_replacement_is_exact_and_policy_bound(github):
+    root, spec, state = github
+    initial = protection.plan(root, spec)
+    protection.apply(root, spec, initial["plan_hash"], "fixture initial")
+    old = state["rulesets"][0]
+    old["rules"][3]["parameters"]["required_status_checks"].append(
+        {"context": "readiness / release-readiness", "integration_id": 15368}
+    )
+    replacement = {
+        "branch": "main",
+        "ruleset_id": old["id"],
+        "context": "readiness / release-readiness",
+        "integration_id": 15368,
+        "replacement": "application-runtime",
+        "approval_reference": "explicit user security review",
+        "observed_ruleset_hash": protection.digest(old),
+    }
+    approved = {
+        **spec,
+        "validation_checks": ["application-runtime"],
+        "adopt_rulesets": {"main": old["id"]},
+        "approved_check_replacements": [replacement],
+    }
+    # Development's identical application check is a strengthening too.
+    state["rulesets"][1]["rules"][3]["parameters"]["required_status_checks"].append(
+        {"context": "application-runtime", "integration_id": 15368}
+    )
+    plan = protection.plan(root, approved)
+    assert [item["action"] for item in plan["operations"]] == ["adopt", "verify"]
+    old["rules"][3]["parameters"]["required_status_checks"].append(
+        {"context": "security", "integration_id": 15368}
+    )
+    with pytest.raises(WorkflowFilesError, match="changed ruleset"):
+        protection.plan(root, approved)
+    replacement["observed_ruleset_hash"] = protection.digest(old)
+    with pytest.raises(WorkflowFilesError, match="weaken existing policy"):
+        protection.plan(root, approved)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"approval_reference": ""},
+        {"replacement": "missing"},
+        {"ruleset_id": 99},
+        {"integration_id": 99},
+    ],
+)
+def test_check_replacement_requires_explicit_bound_approval(github, invalid):
+    _root, spec, _state = github
+    with pytest.raises(WorkflowFilesError, match="Check replacements must bind"):
+        initialization.specification(
+            {
+                **spec,
+                "validation_checks": ["application-runtime"],
+                "adopt_rulesets": {"main": 1},
+                "approved_check_replacements": [
+                    {
+                        "branch": "main",
+                        "ruleset_id": 1,
+                        "context": "old-check",
+                        "integration_id": 15368,
+                        "replacement": "application-runtime",
+                        "approval_reference": "reviewed",
+                        "observed_ruleset_hash": "a" * 64,
+                        **invalid,
+                    }
+                ],
+            }
+        )
+
+
 def test_candidate_bound_bootstrap_has_no_merge_or_release_authority(github, monkeypatch):
     root, spec, state = github
     original = protection.operations._gh
