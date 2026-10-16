@@ -368,12 +368,17 @@ def test_semantic_yaml_and_preserved_reusable_interfaces_are_not_false_drift(git
     assert not protection.readback(root, spec)["passed"]
 
 
-def test_explicit_existing_rule_adoption_retires_old_context_without_weakening(github, monkeypatch):
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("enforcement", ["active", "disabled"])
+def test_explicit_existing_rule_adoption_retires_old_context_without_weakening(
+    github, monkeypatch, strict, enforcement
+):
     root, spec, state = github
     initial = protection.plan(root, spec)
     protection.apply(root, spec, initial["plan_hash"], "fixture initial")
     old = state["rulesets"][0]
     old["name"] = "Protect main"
+    old["enforcement"] = enforcement
     old["rules"][2]["parameters"].update(
         {
             "dismiss_stale_reviews_on_push": False,
@@ -384,6 +389,7 @@ def test_explicit_existing_rule_adoption_retires_old_context_without_weakening(g
     old["rules"][3]["parameters"]["required_status_checks"] = [
         {"context": "validation", "integration_id": 15368}
     ]
+    old["rules"][3]["parameters"]["strict_required_status_checks_policy"] = strict
     adopted = {**spec, "adopt_rulesets": {"main": old["id"]}}
     writes = []
 

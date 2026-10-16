@@ -150,7 +150,7 @@ def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> b
         ]
     if (
         observed.get("target") != "branch"
-        or observed.get("enforcement") != "active"
+        or observed.get("enforcement") not in {"active", "disabled"}
         or observed.get("bypass_actors") != []
         or conditions != desired["conditions"]
     ):
@@ -194,7 +194,11 @@ def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> b
             if any(
                 target.get(key) != value
                 for key, value in previous.items()
-                if key != "required_status_checks"
+                if key not in {"required_status_checks", "strict_required_status_checks_policy"}
+            ):
+                return False
+            if previous.get("strict_required_status_checks_policy", False) and not target.get(
+                "strict_required_status_checks_policy", False
             ):
                 return False
             required = {
