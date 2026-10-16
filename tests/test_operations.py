@@ -11,6 +11,42 @@ from wood.cli import main
 from wood.output import EXIT_CODES
 
 
+def test_validation_baseline_keeps_existing_large_files_and_stages_new_files(
+    tmp_path: Path,
+) -> None:
+    root, checkout = tmp_path / "root", tmp_path / "snapshot"
+    root.mkdir()
+    checkout.mkdir()
+
+    def git(directory: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=directory, check=True, capture_output=True, text=True
+        ).stdout
+
+    git(root, "init", "-q")
+    (root / "uv.lock").write_text("baseline lock\n" * 60000)
+    git(root, "add", ".")
+    git(
+        root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "baseline",
+    )
+    (checkout / "uv.lock").write_bytes((root / "uv.lock").read_bytes())
+    (checkout / "new-large.bin").write_bytes(b"x" * 600000)
+    assert operations._initialize_validation_git(root, checkout)
+    assert git(checkout, "diff", "--cached", "--name-only", "--diff-filter=A").splitlines() == [
+        "new-large.bin"
+    ]
+    assert git(root, "status", "--porcelain") == ""
+
+
 def repository(tmp_path: Path, *, deployed: bool = False, checks: str = '"ruff"') -> Path:
     github = tmp_path / ".github"
     workflows = github / "workflows"
@@ -415,8 +451,14 @@ def test_repository_root_and_github_transport_errors(
 ) -> None:
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     assert operations.repository_root(tmp_path) == tmp_path
-    assert operations._commands("sqlfluff", {})[-2:] == ["lint", "."]  # type: ignore[index]
-    assert operations._commands("dbt-parse", {})[-2:] == ["dbt", "parse"]  # type: ignore[index]
+    assert operations._commands("sqlfluff", {})[-4:] == ["lint", ".", "--templater", "jinja"]  # type: ignore[index]
+    assert operations._commands("dbt-parse", {})[-5:] == [
+        "dbt",
+        "parse",
+        "--profiles-dir",
+        ".",
+        "--no-version-check",
+    ]  # type: ignore[index]
     assert operations._commands("unknown", {}) is None
 
     monkeypatch.setattr(

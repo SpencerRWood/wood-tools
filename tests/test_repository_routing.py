@@ -28,6 +28,7 @@ def pr(head, target="development", body=""):
         ("feature/op-556-change", "development", "", "story"),
         ("feat/change", "development", "", "story"),
         ("fix/change", "development", "", "story"),
+        ("renovate/routine-image-updates", "development", "", "maintenance"),
         ("main", "development", "", "reconciliation"),
         ("development", "main", "", "release"),
         (
@@ -47,6 +48,7 @@ def test_supported_contexts(head, target, body, mode):
     "head,target,body",
     [
         ("feature/change", "main", ""),
+        ("renovate/routine-image-updates", "main", ""),
         ("unapproved/change", "development", ""),
         ("development", "other", ""),
         ("development", "main", "Hotfix-Incident: incident"),

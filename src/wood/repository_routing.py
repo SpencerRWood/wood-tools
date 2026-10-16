@@ -33,12 +33,13 @@ def context(pr: dict[str, Any], repository: str, integration: str) -> dict[str, 
     head, base = pr["head"]["ref"], pr["base"]["ref"]
     incident, approval = references(pr.get("body") or "")
     feature = bool(re.fullmatch(r"(?:feature|feat|fix)/[A-Za-z0-9][A-Za-z0-9._/-]*", head))
+    maintenance = bool(re.fullmatch(r"renovate/[A-Za-z0-9][A-Za-z0-9._/-]*", head))
     if base == integration:
         require(
-            not incident and (feature or head == "main"),
+            not incident and (feature or maintenance or head == "main"),
             "Development accepts supported working branches or main reconciliation.",
         )
-        mode = "reconciliation" if head == "main" else "story"
+        mode = "reconciliation" if head == "main" else "maintenance" if maintenance else "story"
     else:
         require(base == "main", "PR target must match the declared integration or main branch.")
         if head == integration:

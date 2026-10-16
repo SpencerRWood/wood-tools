@@ -339,6 +339,27 @@ def test_shared_publisher_keeps_artifacts_and_inputs_without_protected_branch_pu
     assert contract["build"]["python_package"] is True
 
 
+def test_manual_central_publisher_gets_main_trigger_without_enabling_deployment(repository):
+    root, baseline, spec, _, _ = repository
+    files = initialization.baseline_files(root, baseline)
+    workflow = {
+        "on": {"workflow_dispatch": None},
+        "permissions": {"contents": "write"},
+        "jobs": {"release": {"uses": "SpencerRWood/workflows/.github/workflows/release.yml@v1"}},
+    }
+    files[".github/workflows/release.yml"] = json.dumps(workflow).encode()
+    changes = migration.configuration(files, spec)
+    actual = document(changes[".github/workflows/release.yml"].decode())
+    assert actual["on"]["push"] == {"branches": ["main"]}
+    assert "refs/heads/main" in actual["jobs"]["release"]["if"]
+    workflow["jobs"]["release"]["uses"] = (
+        "SpencerRWood/workflows/.github/workflows/deploy-ansible.yml@v1"
+    )
+    files[".github/workflows/release.yml"] = json.dumps(workflow).encode()
+    with pytest.raises(WorkflowFilesError, match="manual deployment"):
+        migration.configuration(files, spec)
+
+
 def test_yaml_on_boolean_and_duplicate_key_handling():
     value = document(
         "on: [push, pull_request]\npermissions: {contents: read}\njobs:\n"
@@ -377,6 +398,11 @@ def test_release_branches_archives_and_unreconciled_main_fail_closed(repository)
         planned(repository)
     state["archived"] = False
     state["refs"]["release/v2.0.0"] = state["refs"]["main"]
+    assert planned(repository)["reconciled_release_branches"] == {
+        "release/v2.0.0": state["refs"]["main"]
+    }
+    session.git(root, "commit", "--allow-empty", "-qm", "feat: unfinished release")
+    state["refs"]["release/v2.0.0"] = session.git(root, "rev-parse", "HEAD")
     with pytest.raises(WorkflowFilesError, match="release branches"):
         planned(repository)
     state["refs"].pop("release/v2.0.0")

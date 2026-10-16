@@ -89,21 +89,56 @@ def reusable_only(value: dict[str, Any]) -> bool:
     return set(events(value)) == {"workflow_call"}
 
 
+def centralized_validation(value: dict[str, Any]) -> bool:
+    """Recognize immutable calls to the existing nonpublishing validator."""
+
+    def permissions_safe(permissions: Any) -> bool:
+        return permissions is None or (
+            isinstance(permissions, dict)
+            and all(
+                level in {"read", "none"} or (name == "statuses" and level == "write")
+                for name, level in permissions.items()
+            )
+        )
+
+    return (
+        bool(value["jobs"])
+        and all(
+            re.fullmatch(
+                r"SpencerRWood/workflows/\.github/workflows/validate\.yml@[a-f0-9]{40}",
+                str(job.get("uses", "")),
+            )
+            and permissions_safe(job.get("permissions"))
+            for job in value["jobs"].values()
+        )
+        and permissions_safe(value.get("permissions"))
+    )
+
+
 def main_publication(value: dict[str, Any]) -> bool:
     """Recognize existing pinned publishers isolated from development events."""
     trigger = events(value)
     push = trigger.get("push")
     if not (
         set(trigger) <= {"push", "workflow_dispatch", "workflow_call"}
-        and isinstance(push, dict)
-        and push.get("branches") == ["main"]
-        and not (set(push) - {"branches", "paths", "paths-ignore"})
+        and (
+            push is None
+            or (
+                isinstance(push, dict)
+                and push.get("branches") == ["main"]
+                and not (set(push) - {"branches", "paths", "paths-ignore"})
+            )
+        )
     ):
         return False
-    if "workflow_dispatch" not in trigger:
+    if push is not None and "workflow_dispatch" not in trigger:
         return True
-    for job in value["jobs"].values():
+    for key, job in value["jobs"].items():
         if "github.ref == 'refs/heads/main'" in str(job.get("if", "")):
+            continue
+        if read_only({**value, "jobs": {key: job}}):
+            continue
+        if push is not None and job.get("if") == "github.event_name == 'push'":
             continue
         # These existing centralized engines independently reject non-main
         # publication. Arbitrary reusable jobs need a repository-local guard.
@@ -126,7 +161,11 @@ def read_only(value: dict[str, Any]) -> bool:
     ):
         return False
     for job in value["jobs"].values():
-        if job.get("runs-on") not in {"ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04"}:
+        if not isinstance(job.get("runs-on"), str) or job.get("runs-on") not in {
+            "ubuntu-latest",
+            "ubuntu-24.04",
+            "ubuntu-22.04",
+        }:
             return False
         permissions = job.get("permissions", defaults)
         if (
