@@ -69,7 +69,13 @@ def github(tmp_path, monkeypatch):
         if "/check-runs?" in path:
             return {"total_count": len(state["check_runs"]), "check_runs": state["check_runs"]}
         if "/contents/.github/workflows?" in path:
+            if state.get("missing_github_directory"):
+                raise operations.OperationsError(
+                    "GITHUB_UNAVAILABLE", "fixture missing directory", "unavailable"
+                )
             return [{"name": name, "type": "file"} for name in state["workflows"]]
+        if "/contents?ref=" in path:
+            return state.get("root_listing", [{"name": "README.md", "type": "file"}])
         if "/contents/.github/workflows/" in path:
             name = path.rsplit("/", 1)[1].split("?")[0]
             return {
@@ -114,6 +120,22 @@ def test_plan_apply_readback_and_idempotent_retry(github):
     assert {operation["action"] for operation in retry["operations"]} == {"verify"}
     assert protection.apply(root, spec, retry["plan_hash"], "approval:retry")["readback"]["passed"]
     assert len(state["created"]) == 2
+
+
+def test_missing_github_baseline_is_pending_installation_instead_of_api_outage(github):
+    root, spec, state = github
+    state["missing_github_directory"] = True
+    result = protection.workflow_readback(root, spec)
+    assert not result["passed"]
+    assert not any(check["passed"] for check in result["checks"])
+
+
+def test_existing_github_directory_does_not_hide_workflow_api_failure(github):
+    root, spec, state = github
+    state["missing_github_directory"] = True
+    state["root_listing"] = [{"name": ".github", "type": "dir"}]
+    with pytest.raises(operations.OperationsError, match="fixture missing directory"):
+        protection.workflow_readback(root, spec)
 
 
 def test_missing_approval_and_stale_plan_never_write(github):
