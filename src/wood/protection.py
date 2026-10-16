@@ -150,7 +150,7 @@ def _adoptable(observed: dict[str, Any], desired: dict[str, Any], app: int) -> b
         ]
     if (
         observed.get("target") != "branch"
-        or observed.get("enforcement") != "active"
+        or observed.get("enforcement") not in {"active", "disabled"}
         or observed.get("bypass_actors") != []
         or conditions != desired["conditions"]
     ):
