@@ -18,6 +18,7 @@ from . import operations
 from .delivery import _available, _missing, collect_optional_delivery
 from .output import envelope
 from .release_pipeline import collect_release_pipeline
+from .reviews import collect_review
 
 
 def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
@@ -31,6 +32,8 @@ def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
     status.add_argument("--environment", help="Select the deployment environment")
     status.add_argument("--hotfix-incident")
     status.add_argument("--hotfix-approval")
+    status.add_argument("--review-reference")
+    status.add_argument("--reviewed-revision")
     status.add_argument("--json", dest="delivery_json", action="store_true")
 
 
@@ -54,6 +57,7 @@ def reconcile(
     environment: str | None = None,
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
+    operator_approval: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if story_id <= 0 or (pr_number is not None and pr_number <= 0):
         raise StoryWorkflowError("INVALID_ID", "Story and PR IDs must be positive.")
@@ -73,6 +77,9 @@ def reconcile(
             "deployment_environment",
             "deployed_revision",
             "verification_state",
+            "review",
+            "release_readiness",
+            "rollback",
         )
     }
     result: dict[str, Any] = {
@@ -190,6 +197,16 @@ def reconcile(
         state = "merged" if pr.get("merged") is True else pr.get("state")
         fields["pull_request"] = _available({"number": pr_number, "state": state}, url)
         fields["source_revision"] = _available(head["sha"], url)
+        fields["review"] = collect_review(
+            root, slug, pr_number, pr, operator_approval=operator_approval
+        )
+        fields["release_readiness"] = _missing(
+            "No current accumulated release-readiness record was supplied; Story CI is separate."
+        )
+        fields["rollback"] = _missing(
+            "No revision-bound rollback evidence provider is configured.",
+            applicable=bool(deployment["applicable"]),
+        )
         result["delivery_stage"] = "ci"
         merged = pr.get("merge_commit_sha") if state == "merged" else None
         pipeline = None
@@ -248,7 +265,7 @@ def reconcile(
             )
         ci_state = run.get("conclusion") or run.get("status")
         fields["ci"] = _available(
-            {"state": ci_state, "run_id": run.get("id")},
+            {"state": ci_state, "run_id": run.get("id"), "attempt": run.get("run_attempt")},
             f"https://github.com/{slug}/actions/runs/{run.get('id')}",
         )
         if ci_state != "success" or run.get("status") != "completed":
@@ -256,6 +273,13 @@ def reconcile(
                 "ci",
                 "Validation has not completed successfully.",
                 "Resolve failed validation or await the pending validation run.",
+            )
+        review = fields["review"]
+        if review["state"] != "available" or review["value"]["state"] != "approved":
+            return stop(
+                "review",
+                "Current PR revision has no current review approval evidence.",
+                "Obtain source-bound review approval and resolve outstanding change requests.",
             )
         if state != "merged":
             return stop(
@@ -350,6 +374,12 @@ def run_delivery_command(args: argparse.Namespace, cwd: Path) -> dict[str, Any]:
             environment=args.environment,
             hotfix_incident=args.hotfix_incident,
             hotfix_approval=args.hotfix_approval,
+            operator_approval={
+                "reference": args.review_reference,
+                "revision": args.reviewed_revision,
+            }
+            if args.review_reference is not None or args.reviewed_revision is not None
+            else None,
         )
         return envelope(
             command="delivery status",

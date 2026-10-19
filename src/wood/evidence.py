@@ -15,6 +15,7 @@ from wood_project.story.openproject import work_package_description_text
 
 from . import operations
 from .delivery import collect_delivery
+from .reviews import collect_review
 from .verification import load_contract, verify_record
 from .workflow_files import (
     WorkflowFilesError,
@@ -61,6 +62,7 @@ def _verify(
     target_branch: str | None = None,
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
+    operator_approval: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if pr_number <= 0 or run_id <= 0:
         raise _invalid("PR and CI run IDs must be positive integers.")
@@ -171,6 +173,12 @@ def _verify(
         raise _invalid(
             "Validation results do not match the PR's implementation files; validate again."
         )
+    review = collect_review(root, slug, pr_number, pr, operator_approval=operator_approval)
+    if review["state"] != "available" or review["value"]["state"] != "approved":
+        raise _invalid(
+            "Current PR revision requires independent GitHub approval or explicit source-bound "
+            "operator approval, without change requests."
+        )
     run = _document(root, f"repos/{slug}/actions/runs/{run_id}")
     if (
         run.get("id") != run_id
@@ -188,6 +196,7 @@ def _verify(
         "branching": branch_plan,
         "repository": slug,
         "source_fingerprint": fingerprint,
+        "review": review,
         "validation_file": str(validation_path.resolve()),
         "validation_sha256": _file_hash(validation_path),
         "repository_checks": [{"name": check["name"], "status": "passed"} for check in checks],
@@ -237,6 +246,7 @@ def generate_evidence(
     target_branch: str | None = None,
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
+    operator_approval: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
     evidence, story, record, pr = _verify(
@@ -250,6 +260,7 @@ def generate_evidence(
         target_branch,
         hotfix_incident,
         hotfix_approval,
+        operator_approval,
     )
     delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
@@ -263,8 +274,18 @@ def generate_evidence(
         f"Validated implementation: {evidence['pull_request']['source_sha']}\n"
         f"Repository checks passed: {checks}\n"
         f"CI passed: {evidence['ci']['url']}\n"
+        f"Review basis: {evidence['review']['value']['basis']}; "
+        f"source: {evidence['review']['source']}\n"
         "Evidence verified against the current merged PR and CI state.\n"
     )
+    if evidence["review"]["value"]["basis"] == "operator_attestation":
+        update += (
+            "Human approval reference (operator asserted): "
+            + evidence["review"]["value"]["operator_approval"]["reference"]
+            + "\n"
+            + evidence["review"]["value"]["limitation"]
+            + "\n"
+        )
     if "verification" in evidence:
         names = ", ".join(
             check["name"] for check in evidence["verification"]["checks"] if check["required"]
@@ -284,6 +305,7 @@ def generate_evidence(
         "required_criteria": [
             "matching_repository_validation",
             "merged_story_pr",
+            "approved_source_review",
             "passed_revision_ci",
             "posted_implementation_summary",
         ],
@@ -340,6 +362,7 @@ def verify_generated_evidence(
             Path(evidence["verification"]["path"]) if "verification" in evidence else None,
             hotfix_incident=evidence.get("branching", {}).get("hotfix_incident"),
             hotfix_approval=evidence.get("branching", {}).get("hotfix_approval"),
+            operator_approval=evidence.get("review", {}).get("value", {}).get("operator_approval"),
         )
         for key, value in fresh.items():
             if evidence.get(key) != value:

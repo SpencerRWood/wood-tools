@@ -292,3 +292,29 @@ def add_activity(
     activity = _request(client, "GET", f"/api/v3/activities/{activity_id}")
     _verify_activity(activity, story_id, comment)
     return {"story_id": story_id, "activity_id": activity_id, "reused": False, "dry_run": False}
+
+
+def add_milestone(
+    client: OpenProjectClient, story_id: int, key: str, comment: str
+) -> dict[str, Any]:
+    """Reconcile an exact deterministic event, including an ambiguous prior POST."""
+    heading = f"Wood milestone (WP-{story_id}; {key})"
+    if (
+        not comment
+        or re.fullmatch(r"[0-9a-f]{64}", key) is None
+        or comment.splitlines()[0] != heading
+        or len(comment.encode("utf-8")) > MAX_COMMENT_BYTES
+    ):
+        raise StoryWorkflowError("INVALID_COMMENT", "Invalid milestone identity or size.")
+    matches = [
+        item
+        for item in _activities(client, story_id)
+        if (_activity_comment(item) or "").split("\n", 1)[0] == heading
+    ]
+    if len(matches) > 1 or any(_activity_comment(item) != comment for item in matches):
+        raise StoryWorkflowError("ACTIVITY_CONFLICT", "Milestone activity is ambiguous or changed.")
+    if matches:
+        activity = _request(client, "GET", f"/api/v3/activities/{matches[0]['id']}")
+        identifier = _verify_activity(activity, story_id, comment)
+        return {"activity_id": identifier, "reused": True}
+    return add_activity(client, story_id, comment, apply=True)

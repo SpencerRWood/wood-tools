@@ -441,6 +441,46 @@ objects, not Stories or software releases.
 
 ## Story workflow
 
+### Deterministic milestones
+
+`wood story milestones <id> --owner <owner> --json` previews structured observations
+from the active primary-repository claim. Add `--validation <saved-validation.json>`
+after validation, and `--pr <number>` after PR, review, merge or CI state changes.
+Apply the inspected preview with `--apply`. Reporting never runs validation,
+requests model inference, opens/merges PRs, closes Stories, publishes or deploys.
+
+Apply saves each event in a private outbox under the shared Git metadata before
+submitting any activity through Wood. Each activity has a deterministic identity
+and a retained observation time. Exact retries reconcile a prior ambiguous POST
+by reading OpenProject before writing. Changed or duplicate remote activities fail
+closed. `--retry --apply` submits pending saved evidence without gathering new
+observations. A submission failure returns `unavailable`, its pending count and
+the outbox path. Keep those files; retries are historical observations, not a new
+attestation of current state. Each call submits at most 20 pending events.
+Locking covers cooperating worktrees on one host, not independent clones/hosts.
+
+PR selection produces a separately saved delivery snapshot and milestones for PR,
+review, CI and merge observations. Release readiness, semantic publication,
+immutable artifact identity, deployment, rollback and verification stay separate;
+missing and non-applicable authorities remain explicit. An optional
+`--readiness <saved-readiness.json>` reports an existing record after checking its
+scope and cached remote revisions. Reporting does not refresh those refs or grant
+release authority. No rollback evidence provider is currently configured.
+
+Repository Story closure requires generated `story evidence` with matching local
+validation, merged PR, current review approval and revision-bound successful CI.
+Deployment is not required for ordinary integration Stories. Current independent
+GitHub reviews are checked across at most 1000 entries; stale approvals, outstanding
+change requests and inaccessible review collections cannot attest approval.
+For the explicit human approval in the shared workflow, `story evidence`,
+`delivery status` and `story milestones` also accept both `--review-reference <reference>`
+and `--reviewed-revision <exact-source-sha>`. This records an operator attestation,
+clearly distinguished from independently verified GitHub reviews. Wood cannot
+verify the human reference itself; supply it only after actual approval of that
+source. It cannot override outstanding GitHub change requests. Reverification
+checks the saved source binding and current GitHub state. No raw command output,
+credentials or arbitrary activity body is accepted by the milestone command.
+
 ### Epic and planning Release inspection
 
 ```sh

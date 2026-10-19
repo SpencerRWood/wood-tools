@@ -64,6 +64,7 @@ def delivered(tmp_path, monkeypatch):
         "story": story,
         "pr": {
             "number": 44,
+            "user": {"id": 1},
             "merged": True,
             "merge_commit_sha": merged,
             "head": {"ref": "feature/op-410-implementation", "sha": head},
@@ -82,6 +83,19 @@ def delivered(tmp_path, monkeypatch):
 
     def gh(_root, path):
         state["remote_calls"].append(path)
+        if "/reviews?" in path:
+            return state.get(
+                "reviews",
+                [
+                    {
+                        "id": 51,
+                        "user": {"id": 2},
+                        "state": "APPROVED",
+                        "submitted_at": "2026-10-19T00:00:00Z",
+                        "commit_id": state["pr"]["head"]["sha"],
+                    }
+                ],
+            )
         return state["pr"] if "/pulls/" in path else state["run"]
 
     monkeypatch.setattr(operations, "_slug", lambda _root: "owner/wood-tools")
@@ -103,6 +117,58 @@ def generate(state, *, apply=True, verification_path=None):
         apply=apply,
         verification_path=verification_path,
     )
+
+
+@pytest.mark.parametrize(
+    "reviews",
+    [
+        [],
+        [{"id": 1, "user": {"id": 2}, "state": "APPROVED", "commit_id": "0" * 40}],
+        [{"id": 1, "user": {"id": 2}, "state": "CHANGES_REQUESTED"}],
+    ],
+)
+def test_completion_evidence_requires_current_independent_review(delivered, reviews):
+    delivered["reviews"] = reviews
+    with pytest.raises(StoryWorkflowError, match="independent GitHub approval"):
+        generate(delivered)
+
+
+def test_cli_refuses_unverified_repository_completion_inputs(delivered, tmp_path, capsys):
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "repository_checks": [{"name": "ruff", "status": "passed"}],
+                "ci": {"status": "passed", "url": "https://example.test/run"},
+            }
+        )
+    )
+    assert main(["story", "complete", "410", "--evidence", str(path), "--json"]) == 3
+    assert "generated merge, review and CI evidence" in capsys.readouterr().out
+
+
+def test_operator_review_approval_is_retained_and_reverified(delivered):
+    delivered["reviews"] = []
+    approval = {
+        "revision": delivered["pr"]["head"]["sha"],
+        "reference": "User approved reviewed batch on 2026-10-19 in Codex session",
+    }
+    result = evidence.generate_evidence(
+        OpenProjectClient(settings()),
+        410,
+        validation_path=Path(delivered["record"]["validation_file"]),
+        pr_number=44,
+        run_id=123,
+        apply=True,
+        operator_approval=approval,
+    )
+    generated = json.loads(Path(result["evidence_file"]).read_text())
+    assert generated["review"]["value"]["basis"] == "operator_attestation"
+    assert approval["reference"] in Path(result["update_file"]).read_text()
+    evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+    delivered["reviews"] = [{"id": 2, "user": {"id": 2}, "state": "CHANGES_REQUESTED"}]
+    with pytest.raises(StoryWorkflowError, match="operator approval"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
 
 
 @pytest.fixture
@@ -437,7 +503,7 @@ def test_cli_generation_activity_and_complete_consume_outputs(delivered, monkeyp
     assert main(args) == 0
     output = capsys.readouterr().out
     assert "secret-token" not in output
-    assert len(output) < 3000
+    assert len(output) < 4000
     path = json.loads(output)["data"]["evidence_file"]
     activity_calls = []
     monkeypatch.setattr(

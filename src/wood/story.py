@@ -18,10 +18,11 @@ from wood_project.story.activity import (
     upsert_summary,
 )
 from wood_project.story.models import StoryWorkflowError
+from wood_project.story.openproject import work_package_description_text
 from wood_project.story.repository_context import story_reference
 
 from . import evidence as story_evidence
-from . import operations
+from . import milestones, operations
 from .output import Mutation, Status, envelope
 from .workflow_files import WorkflowFilesError, read_json
 
@@ -41,6 +42,17 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item.add_argument("id", type=int)
     item.add_argument("--offset", type=int, default=0)
     item.add_argument("--json", dest="story_json", action="store_true")
+    item = actions.add_parser("milestones", help="Preview or submit deterministic Story milestones")
+    item.add_argument("id", type=int)
+    item.add_argument("--owner", required=True)
+    item.add_argument("--validation", type=Path)
+    item.add_argument("--pr", type=int)
+    item.add_argument("--readiness", type=Path)
+    item.add_argument("--review-reference")
+    item.add_argument("--reviewed-revision")
+    item.add_argument("--retry", action="store_true")
+    item.add_argument("--apply", action="store_true")
+    item.add_argument("--json", dest="story_json", action="store_true")
     item = actions.add_parser(
         "evidence", help="Generate verified delivery inputs for a merged Story"
     )
@@ -50,6 +62,8 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item.add_argument("--target-branch")
     item.add_argument("--hotfix-incident")
     item.add_argument("--hotfix-approval")
+    item.add_argument("--review-reference")
+    item.add_argument("--reviewed-revision")
     item.add_argument("--pr", type=int, required=True)
     item.add_argument("--ci-run", type=int, required=True)
     item.add_argument("--apply", action="store_true")
@@ -199,6 +213,33 @@ def _remote_story_command(
 ) -> dict[str, Any]:
     try:
         client = OpenProjectClient(load_settings())
+        if action == "milestones":
+            data = milestones.report(
+                client,
+                args.id,
+                owner=args.owner,
+                apply=apply,
+                validation=args.validation,
+                pr=args.pr,
+                retry=args.retry,
+                readiness=args.readiness,
+                operator_approval={
+                    "reference": args.review_reference,
+                    "revision": args.reviewed_revision,
+                }
+                if args.review_reference is not None or args.reviewed_revision is not None
+                else None,
+            )
+            return envelope(
+                command=command,
+                status="unavailable" if data.get("pending_count") else "success",
+                mutation="mutating" if apply else "preview",
+                summary="Story milestones retained; submission pending."
+                if data.get("pending_count")
+                else "Story milestones reconciled.",
+                data=data,
+                next_actions=[data["next_action"]],
+            )
         if claimed_server is not None and client.settings.base_url.rstrip("/") != claimed_server:
             raise StoryWorkflowError(
                 "CLAIM_CONFLICT", "OpenProject server differs from the recorded claim."
@@ -229,6 +270,12 @@ def _remote_story_command(
                 target_branch=args.target_branch,
                 hotfix_incident=args.hotfix_incident,
                 hotfix_approval=args.hotfix_approval,
+                operator_approval={
+                    "reference": args.review_reference,
+                    "revision": args.reviewed_revision,
+                }
+                if args.review_reference is not None or args.reviewed_revision is not None
+                else None,
                 apply=apply,
             )
         elif action == "create":
@@ -299,6 +346,13 @@ def _remote_story_command(
                 require_summary(
                     client, args.id, read_comment(Path(evidence["implementation_update"]["path"]))
                 )
+            elif workflow._repository(
+                work_package_description_text(workflow._story(client, args.id))
+            ):
+                raise StoryWorkflowError(
+                    "VALIDATION_REQUIRED",
+                    "Repository Story closure requires generated merge, review and CI evidence.",
+                )
             data = workflow.complete_story(client, args.id, evidence=evidence, apply=apply)
         mutation: Mutation = (
             "read-only"
@@ -337,6 +391,19 @@ def _remote_story_command(
             mutation="mutating" if apply else "read-only",
             summary="OpenProject request failed.",
             errors=[{"code": exc.code, "message": "Check connection, credentials, and access."}],
+        )
+    except OSError:
+        return envelope(
+            command=command,
+            status="unavailable",
+            mutation="mutating" if apply else "read-only",
+            summary="Local workflow storage is unavailable; inspect retained records before retry.",
+            errors=[
+                {
+                    "code": "WORKFLOW_IO_UNAVAILABLE",
+                    "message": "Cannot read or retain workflow state.",
+                }
+            ],
         )
 
 
