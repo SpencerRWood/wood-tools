@@ -33,16 +33,18 @@
 
 ["tool"."wood"."openproject"]
 "project_id" = 3
-"initiative_id" = 552
+"initiative_id" = 531
+"release_id" = 24
+"epic_id" = 532
 
 ["tool"."wood"."workflow"]
 "output_directory" = "/private/tmp"
 
 ["tool"."wood"."branching"]
 "strategy" = "integration"
-"release_id" = 26
+"release_id" = 24
 "integration_branch" = "development"
-"scope_reference" = "https://projects.woodhost.cloud/work_packages/558; user approved Wave 1 migration of wood-tools, workflows and codex-config on 2026-10-15; no live protection or main release integration authorized."
+"scope_reference" = "https://projects.woodhost.cloud/work_packages/537; user approved closing completed planning release 26 and rolling Wood Tools scope to release 24 (Wood Pi Harness) on 2026-10-19; main integration, publication and deployment remain separately approved."
 
 ["tool"."wood"."architecture"]
 "domain" = "engineering"
