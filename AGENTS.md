@@ -6,7 +6,7 @@ Use root [tool.wood.branching]: feature branches and Story PRs start from and ta
 
 ## Branching strategy
 
-- This checkout adopts integration through root `[tool.wood.branching]` for OpenProject planning release 26. New Stories start from fetched `development` and target `development`. Preserve existing trunk Story claims and worktrees; do not rewrite their recorded branch arrangements.
+- This checkout adopts integration through root `[tool.wood.branching]` for OpenProject planning release 24 (Wood Pi Harness), initiative 531. Completed planning release 26 was closed and this scope rollover was approved on 2026-10-19 for OP-537. New Stories start from fetched `development` and target `development`. Preserve existing Story claims and worktrees; do not rewrite their recorded branch arrangements.
 - Follow the [canonical branching and delivery policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md), available through the installed codex-config source path. Verify the strategy, release association, fetched base and PR target before implementation and record them in Story evidence. Story completion does not authorize publication or deployment; retain existing review, CI, security and rollback requirements.
 
 ## Scope
