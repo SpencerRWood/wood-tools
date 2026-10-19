@@ -26,6 +26,7 @@ def authority(monkeypatch, tmp_path):
         "search": {"total_count": 1, "incomplete_results": False, "items": [{"number": 9}]},
         "pr": {
             "merged": True,
+            "user": {"id": 1},
             "state": "closed",
             "merge_commit_sha": "b" * 40,
             "head": {"sha": "a" * 40, "ref": "feature/op-414-delivery"},
@@ -65,6 +66,19 @@ def authority(monkeypatch, tmp_path):
         state["calls"].append(path)
         if path.startswith("search/"):
             return state["search"]
+        if "/reviews?" in path:
+            return state.get(
+                "reviews",
+                [
+                    {
+                        "id": 4,
+                        "user": {"id": 2},
+                        "state": "APPROVED",
+                        "submitted_at": "2026-10-19T00:00:00Z",
+                        "commit_id": state["pr"]["head"]["sha"],
+                    }
+                ],
+            )
         if "/pulls/" in path:
             return state["pr"]
         if "workflows/release.yml/" in path:
@@ -93,7 +107,21 @@ def test_delivered_cli_and_normalized_fields(authority, capsys):
     assert data["fields"]["verification_state"]["state"] == "not_applicable"
     assert data["fields"]["merged_revision"]["value"] == "b" * 40
     assert data["observed_at"].endswith("+00:00")
-    assert len(authority["calls"]) == 6
+    assert len(authority["calls"]) == 7
+
+
+def test_merged_validated_but_unreviewed_is_not_story_complete(authority, monkeypatch):
+    monkeypatch.setattr(
+        status.branching,
+        "select",
+        lambda *_args, **_kwargs: {"strategy": "integration", "target_branch": "development"},
+    )
+    authority["pr"]["base"]["ref"] = "development"
+    authority["reviews"] = []
+    result = reconcile()
+    assert result["delivery_stage"] == "review" and result["blocker"]
+    assert result["fields"]["release_readiness"]["state"] == "unavailable"
+    assert result["fields"]["rollback"]["state"] == "not_applicable"
 
 
 @pytest.mark.parametrize(
@@ -143,7 +171,7 @@ def test_release_story_is_complete_without_release_or_deployment_queries(
     assert result["blocker"] is None
     assert result["fields"]["merged_revision"]["value"] == "b" * 40
     assert result["fields"]["release"]["state"] == "not_applicable"
-    assert len(authority["calls"]) == 2
+    assert len(authority["calls"]) == 3
 
 
 @pytest.mark.parametrize("field,value", [("ref", "feature/op-415-other"), ("sha", "invalid")])

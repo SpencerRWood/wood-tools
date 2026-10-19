@@ -35,6 +35,11 @@ def collect_delivery(root: Path, evidence: dict[str, Any], branch: str) -> dict[
         "pull_request": _available(pr["number"], pr["url"]),
         "validation": _available(evidence["repository_checks"], evidence["validation_file"]),
         "ci": _available(evidence["ci"]["run_id"], evidence["ci"]["url"]),
+        "review": evidence["review"],
+        "release_readiness": _missing(
+            "Accumulated release readiness is separate from Story validation."
+        ),
+        "rollback": _missing("No revision-bound rollback evidence provider is configured."),
         "merged_revision": _available(merged, pr["url"]),
         "semantic_release": _missing("No verified semantic release contains the merge."),
     }

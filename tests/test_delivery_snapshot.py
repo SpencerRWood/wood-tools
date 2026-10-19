@@ -58,6 +58,10 @@ def providers(monkeypatch):
         "validation_file": "/validation.json",
         "repository_checks": [{"name": "ruff", "status": "passed"}],
         "ci": {"run_id": 1, "url": "https://github.com/owner/repo/actions/runs/1"},
+        "review": delivery._available(
+            {"state": "approved", "revision": "d" * 40},
+            "https://github.com/owner/repo/pull/2#pullrequestreview",
+        ),
         "pull_request": {
             "number": 2,
             "url": "https://github.com/owner/repo/pull/2",
@@ -88,6 +92,9 @@ def test_all_fields_and_revision_bound_attestations(providers):
         "pull_request",
         "validation",
         "ci",
+        "review",
+        "release_readiness",
+        "rollback",
         "merged_revision",
         "semantic_release",
         "container_image_digest",
@@ -95,7 +102,13 @@ def test_all_fields_and_revision_bound_attestations(providers):
         "deployed_revision",
         "runtime_verification",
     }
-    assert all(item["state"] == "available" for item in result.values())
+    assert all(
+        item["state"] == "available"
+        for name, item in result.items()
+        if name not in {"release_readiness", "rollback"}
+    )
+    assert result["release_readiness"]["state"] == "unavailable"
+    assert result["rollback"]["state"] == "unavailable"
     assert result["deployed_revision"]["value"]["environment"] == "production"
 
 
