@@ -467,16 +467,21 @@ def plan(
         image = spec["images"][0]
         contract["container"] = {"publish": True, **image}
     files[".github/release.toml"] = toml(contract).encode()
-    # Retain baseline publishing and deployment gates instead of adding a publisher.
+    generated_workflows = {
+        f".github/workflows/{name}": text.encode() for name, text in workflows(spec).items()
+    }
+    # Review retained workflows; generated validation/routing replace the source
+    # files completely, so source-only jobs at those exact paths cannot survive.
     for path, contents in files.items():
         if path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml")):
+            if path in generated_workflows:
+                continue
             value = workflow_document(contents.decode())
             require(
-                reusable_only(value) or main_publication(value) or path.endswith("/validate.yml"),
+                reusable_only(value) or main_publication(value),
                 f"Review baseline workflow before initialization: {path}",
             )
-    for name, text in workflows(spec).items():
-        files[f".github/workflows/{name}"] = text.encode()
+    files.update(generated_workflows)
     files["AGENTS.md"] = (
         (
             b"# Repository guidance\n\nFollow root [tool.wood.branching]: working branches start "

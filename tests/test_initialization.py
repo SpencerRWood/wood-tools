@@ -48,6 +48,68 @@ def test_superseded_governance_configuration_is_rejected(spec):
         init.specification({**spec, "deferred_stories": {"558": "old gate"}})
 
 
+@pytest.mark.parametrize("prefix", ["", "wood-"])
+def test_generated_workflows_replace_adopted_template_callers(tmp_path, spec, prefix):
+    source, _baseline = source_repository(tmp_path)
+    spec["workflow_prefix"] = prefix
+    # Reproduce an already-adopted template, including its old tool/workflow pins.
+    source_spec = {**spec, "workflow_revision": "c" * 40, "wood_revision": "d" * 40}
+    for name, text in init.workflows(init.specification(source_spec)).items():
+        (source / ".github/workflows" / name).write_text(text)
+    session.git(source, "add", ".")
+    session.git(source, "commit", "-q", "-m", "ci: adopt template routing")
+    baseline = session.git(source, "rev-parse", "HEAD")
+
+    _record, files = init.plan(source, baseline, "approval", tmp_path / "target", spec)
+
+    for name, text in init.workflows(init.specification(spec)).items():
+        assert files[f".github/workflows/{name}"] == text.encode()
+    assert not (tmp_path / "target").exists()
+    assert session.git(source, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("prefix", ["", "wood-"])
+@pytest.mark.parametrize("name", ["routing.yml", "validate.yml"])
+def test_replaced_source_jobs_cannot_survive_initialization(tmp_path, spec, prefix, name):
+    source, _baseline = source_repository(tmp_path)
+    spec["workflow_prefix"] = prefix
+    path = f".github/workflows/{prefix}{name}"
+    (source / path).write_text(
+        json.dumps(
+            {
+                "on": {"pull_request": {}},
+                "permissions": {"contents": "write"},
+                "jobs": {"unreviewed": {"runs-on": "ubuntu-latest", "steps": [{"run": "publish"}]}},
+            }
+        )
+    )
+    session.git(source, "add", ".")
+    session.git(source, "commit", "-q", "-m", "ci: source-only jobs")
+    baseline = session.git(source, "rev-parse", "HEAD")
+
+    _record, files = init.plan(source, baseline, "approval", tmp_path / "target", spec)
+
+    assert "unreviewed" not in files[path].decode()
+    assert "publish" not in files[path].decode()
+
+
+@pytest.mark.parametrize("name", ["routing.yml", "validate.yml", "extra.yml"])
+def test_retained_template_workflows_still_require_review(tmp_path, spec, name):
+    source, _baseline = source_repository(tmp_path)
+    # These unprefixed files are retained when generated callers use wood-.
+    spec["workflow_prefix"] = "wood-"
+    (source / ".github/workflows" / name).write_text(
+        json.dumps({"on": {"pull_request": {}}, "jobs": {"unknown": {"steps": []}}})
+    )
+    session.git(source, "add", ".")
+    session.git(source, "commit", "-q", "-m", "ci: unreviewed retained workflow")
+    baseline = session.git(source, "rev-parse", "HEAD")
+
+    with pytest.raises(WorkflowFilesError, match="Review baseline workflow"):
+        init.plan(source, baseline, "approval", tmp_path / "target", spec)
+    assert not (tmp_path / "target").exists()
+
+
 def source_repository(tmp_path, layout="library"):
     source = tmp_path / "source"
     source.mkdir()
