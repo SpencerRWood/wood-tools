@@ -112,3 +112,117 @@ def test_review_bound_exhaustion_and_missing_author(monkeypatch):
     assert (
         reviews.collect_review(Path("."), "owner/repo", 7, {"user": None})["state"] == "unavailable"
     )
+
+
+def self_review_case(monkeypatch, *, values=None, **kwargs):
+    monkeypatch.setattr(operations, "_gh", lambda *_: values or [])
+    return reviews.collect_review(
+        Path("."),
+        "owner/repo",
+        7,
+        kwargs.pop(
+            "pr",
+            {
+                "user": {"id": 1},
+                "head": {"sha": "a" * 40},
+                "base": {"ref": "development"},
+                "merged": True,
+            },
+        ),
+        self_review=kwargs.pop(
+            "self_review",
+            {
+                "reference": "PR7 source-bound agent review",
+                "authorization": "User explicitly authorized autonomous self-review",
+                "revision": "a" * 40,
+            },
+        ),
+        integration_branch=kwargs.pop("integration_branch", "development"),
+        **kwargs,
+    )
+
+
+def test_authorized_self_review_is_distinct_from_human_approval(monkeypatch):
+    result = self_review_case(monkeypatch)
+    assert result["value"]["state"] == "self_reviewed"
+    assert result["value"]["basis"] == "authorized_self_review"
+    assert result["value"]["approval_ids"] == []
+    assert "no independent human approval" in result["value"]["limitation"]
+    assert reviews.review_satisfied(result)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"authorization": ""},
+        {"authorization": None},
+        {"authorization": "x\ny"},
+        {"reference": " "},
+        {"reference": "x" * 501},
+        {"revision": "b" * 40},
+        {"extra": "unexpected"},
+    ],
+)
+def test_partial_stale_and_malformed_self_review_fail_closed(monkeypatch, change):
+    value = {"reference": "review", "authorization": "user authorization", "revision": "a" * 40}
+    assert self_review_case(monkeypatch, self_review={**value, **change})["state"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "branch,merged,target",
+    [
+        ("main", True, "main"),
+        ("development", False, "development"),
+        ("development", True, None),
+        ("release/v1", True, "development"),
+    ],
+)
+def test_self_review_cannot_authorize_merging_or_other_targets(monkeypatch, branch, merged, target):
+    pr = {"user": {"id": 1}, "head": {"sha": "a" * 40}, "base": {"ref": branch}, "merged": merged}
+    assert self_review_case(monkeypatch, pr=pr, integration_branch=target)["state"] == "unavailable"
+
+
+def test_self_review_keeps_review_authority_and_changes_requests(monkeypatch):
+    requested = self_review_case(monkeypatch, values=[item(state="CHANGES_REQUESTED")])
+    assert requested["value"]["state"] == "changes_requested"
+    assert not reviews.review_satisfied(requested)
+    approved = self_review_case(monkeypatch, values=[item()])
+    assert approved["value"]["basis"] == "github_reviews"
+    mixed = self_review_case(
+        monkeypatch, operator_approval={"reference": "human", "revision": "a" * 40}
+    )
+    assert mixed["state"] == "unavailable"
+
+    def unavailable(*_):
+        raise operations.OperationsError("GITHUB_UNAVAILABLE", "private diagnostic")
+
+    monkeypatch.setattr(operations, "_gh", unavailable)
+    result = reviews.collect_review(
+        Path("."),
+        "owner/repo",
+        7,
+        {
+            "user": {"id": 1},
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "development"},
+            "merged": True,
+        },
+        self_review={"reference": "review", "authorization": "user", "revision": "a" * 40},
+        integration_branch="development",
+    )
+    assert result["state"] == "unavailable"
+    assert not reviews.review_satisfied(result)
+    assert "private diagnostic" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        {"strategy": "trunk", "target_branch": "main"},
+        {"adopted": True, "strategy": "release", "target_branch": "release/v1"},
+        {"adopted": True, "strategy": "integration", "mode": "hotfix", "target_branch": "main"},
+        {"strategy": "integration", "target_branch": "development"},
+    ],
+)
+def test_nonintegration_or_unadopted_scope_cannot_enable_self_review(plan):
+    assert reviews.integration_target(plan) is None

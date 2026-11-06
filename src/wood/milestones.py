@@ -73,6 +73,7 @@ def _collect(
     validation: Path | None,
     pr: int | None,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
     story = workflow._story(client, story_id)
     slug = operations._slug(root)
@@ -100,6 +101,7 @@ def _collect(
             story_id,
             pr_number=pr,
             operator_approval=operator_approval,
+            self_review=self_review,
             hotfix_incident=claim["branching"].get("hotfix_incident"),
             hotfix_approval=claim["branching"].get("hotfix_approval"),
         )
@@ -156,6 +158,7 @@ def report(
     retry: bool = False,
     readiness: Path | None = None,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root, directory = session.locations()
     with session.locked(directory, apply=apply):
@@ -171,15 +174,18 @@ def report(
             or pr is not None
             or readiness is not None
             or operator_approval is not None
+            or self_review is not None
         ):
             raise _invalid("Retry uses retained evidence; omit new validation and PR selectors.")
         events, snapshot = (
             ({}, None)
             if retry
-            else _collect(client, root, story_id, claim, validation, pr, operator_approval)
+            else _collect(
+                client, root, story_id, claim, validation, pr, operator_approval, self_review
+            )
         )
-        if operator_approval is not None and pr is None:
-            raise _invalid("An operator approval requires an explicit PR selection.")
+        if (operator_approval is not None or self_review is not None) and pr is None:
+            raise _invalid("An operator review attestation requires an explicit PR selection.")
         if readiness is not None:
             events["release_readiness"] = _readiness(root, readiness, claim)
             if snapshot is not None:

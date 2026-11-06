@@ -18,7 +18,7 @@ from . import operations
 from .delivery import _available, _missing, collect_optional_delivery
 from .output import envelope
 from .release_pipeline import collect_release_pipeline
-from .reviews import collect_review
+from .reviews import collect_review, integration_target, review_satisfied
 
 
 def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
@@ -34,6 +34,8 @@ def add_delivery_parser(commands: argparse._SubParsersAction[Any]) -> None:
     status.add_argument("--hotfix-approval")
     status.add_argument("--review-reference")
     status.add_argument("--reviewed-revision")
+    status.add_argument("--self-review-reference")
+    status.add_argument("--self-review-authorization")
     status.add_argument("--json", dest="delivery_json", action="store_true")
 
 
@@ -58,6 +60,7 @@ def reconcile(
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if story_id <= 0 or (pr_number is not None and pr_number <= 0):
         raise StoryWorkflowError("INVALID_ID", "Story and PR IDs must be positive.")
@@ -198,7 +201,13 @@ def reconcile(
         fields["pull_request"] = _available({"number": pr_number, "state": state}, url)
         fields["source_revision"] = _available(head["sha"], url)
         fields["review"] = collect_review(
-            root, slug, pr_number, pr, operator_approval=operator_approval
+            root,
+            slug,
+            pr_number,
+            pr,
+            operator_approval=operator_approval,
+            self_review=self_review,
+            integration_branch=integration_target(branch_plan),
         )
         fields["release_readiness"] = _missing(
             "No current accumulated release-readiness record was supplied; Story CI is separate."
@@ -275,11 +284,12 @@ def reconcile(
                 "Resolve failed validation or await the pending validation run.",
             )
         review = fields["review"]
-        if review["state"] != "available" or review["value"]["state"] != "approved":
+        if not review_satisfied(review):
             return stop(
                 "review",
                 "Current PR revision has no current review approval evidence.",
-                "Obtain source-bound review approval and resolve outstanding change requests.",
+                "Obtain source-bound approval or explicitly authorized integration self-review; "
+                "resolve outstanding change requests.",
             )
         if state != "merged":
             return stop(
@@ -378,7 +388,19 @@ def run_delivery_command(args: argparse.Namespace, cwd: Path) -> dict[str, Any]:
                 "reference": args.review_reference,
                 "revision": args.reviewed_revision,
             }
-            if args.review_reference is not None or args.reviewed_revision is not None
+            if args.review_reference is not None
+            or (
+                args.reviewed_revision is not None
+                and args.self_review_reference is None
+                and args.self_review_authorization is None
+            )
+            else None,
+            self_review={
+                "reference": args.self_review_reference,
+                "authorization": args.self_review_authorization,
+                "revision": args.reviewed_revision,
+            }
+            if args.self_review_reference is not None or args.self_review_authorization is not None
             else None,
         )
         return envelope(

@@ -50,6 +50,8 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item.add_argument("--readiness", type=Path)
     item.add_argument("--review-reference")
     item.add_argument("--reviewed-revision")
+    item.add_argument("--self-review-reference")
+    item.add_argument("--self-review-authorization")
     item.add_argument("--retry", action="store_true")
     item.add_argument("--apply", action="store_true")
     item.add_argument("--json", dest="story_json", action="store_true")
@@ -64,6 +66,8 @@ def add_story_parser(commands: argparse._SubParsersAction[Any]) -> None:
     item.add_argument("--hotfix-approval")
     item.add_argument("--review-reference")
     item.add_argument("--reviewed-revision")
+    item.add_argument("--self-review-reference")
+    item.add_argument("--self-review-authorization")
     item.add_argument("--pr", type=int, required=True)
     item.add_argument("--ci-run", type=int, required=True)
     item.add_argument("--apply", action="store_true")
@@ -227,7 +231,20 @@ def _remote_story_command(
                     "reference": args.review_reference,
                     "revision": args.reviewed_revision,
                 }
-                if args.review_reference is not None or args.reviewed_revision is not None
+                if args.review_reference is not None
+                or (
+                    args.reviewed_revision is not None
+                    and args.self_review_reference is None
+                    and args.self_review_authorization is None
+                )
+                else None,
+                self_review={
+                    "reference": args.self_review_reference,
+                    "authorization": args.self_review_authorization,
+                    "revision": args.reviewed_revision,
+                }
+                if args.self_review_reference is not None
+                or args.self_review_authorization is not None
                 else None,
             )
             return envelope(
@@ -274,7 +291,20 @@ def _remote_story_command(
                     "reference": args.review_reference,
                     "revision": args.reviewed_revision,
                 }
-                if args.review_reference is not None or args.reviewed_revision is not None
+                if args.review_reference is not None
+                or (
+                    args.reviewed_revision is not None
+                    and args.self_review_reference is None
+                    and args.self_review_authorization is None
+                )
+                else None,
+                self_review={
+                    "reference": args.self_review_reference,
+                    "authorization": args.self_review_authorization,
+                    "revision": args.reviewed_revision,
+                }
+                if args.self_review_reference is not None
+                or args.self_review_authorization is not None
                 else None,
                 apply=apply,
             )

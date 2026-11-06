@@ -124,6 +124,63 @@ def test_merged_validated_but_unreviewed_is_not_story_complete(authority, monkey
     assert result["fields"]["rollback"]["state"] == "not_applicable"
 
 
+def test_merged_integration_self_review_and_delivery_cli(authority, monkeypatch, capsys):
+    monkeypatch.setattr(
+        status.branching,
+        "select",
+        lambda *_args, **_kwargs: {
+            "adopted": True,
+            "strategy": "integration",
+            "target_branch": "development",
+        },
+    )
+    authority["pr"]["base"]["ref"] = "development"
+    authority["reviews"] = []
+    attestation = {
+        "reference": "Agent reviewed source",
+        "authorization": "User authorized self-review",
+        "revision": authority["pr"]["head"]["sha"],
+    }
+    result = status.reconcile(
+        OpenProjectClient(settings()), Path("."), 414, pr_number=9, self_review=attestation
+    )
+    assert result["delivery_stage"] == "story_complete"
+    assert result["fields"]["review"]["value"]["state"] == "self_reviewed"
+    assert result["fields"]["release_run"]["state"] == "not_applicable"
+    assert (
+        main(
+            [
+                "delivery",
+                "status",
+                "414",
+                "--pr",
+                "9",
+                "--self-review-reference",
+                "review",
+                "--self-review-authorization",
+                "authorization",
+                "--reviewed-revision",
+                attestation["revision"],
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["data"]["delivery_stage"] == "story_complete"
+    authority["reviews"] = [
+        {
+            "id": 2,
+            "user": {"id": 2},
+            "state": "CHANGES_REQUESTED",
+            "submitted_at": "2026-10-19T00:00:00Z",
+        }
+    ]
+    blocked = status.reconcile(
+        OpenProjectClient(settings()), Path("."), 414, pr_number=9, self_review=attestation
+    )
+    assert blocked["delivery_stage"] == "review"
+
+
 @pytest.mark.parametrize(
     "count,stage", [(0, "implementation"), (2, "pull_request"), (51, "pull_request")]
 )
