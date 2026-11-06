@@ -8,6 +8,35 @@ from . import operations
 from .delivery import _available, _missing
 
 
+def integration_target(plan: dict[str, Any]) -> str | None:
+    """Self-review evidence applies only to adopted ordinary integration Stories."""
+    target = plan.get("target_branch")
+    return (
+        target
+        if plan.get("adopted") is True
+        and plan.get("strategy") == "integration"
+        and plan.get("mode") != "hotfix"
+        and isinstance(target, str)
+        and target != "main"
+        else None
+    )
+
+
+def review_satisfied(review: dict[str, Any]) -> bool:
+    """A self-review satisfies its own criterion without becoming human approval."""
+    if review.get("state") != "available":
+        return False
+    value = review.get("value")
+    if not isinstance(value, dict):
+        return False
+    return bool(
+        value.get("state") == "approved"
+        or (
+            value.get("state") == "self_reviewed" and value.get("basis") == "authorized_self_review"
+        )
+    )
+
+
 def collect_review(
     root: Path,
     slug: str,
@@ -15,6 +44,8 @@ def collect_review(
     pr: dict[str, Any],
     *,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
+    integration_branch: str | None = None,
 ) -> dict[str, Any]:
     source = f"https://github.com/{slug}/pull/{number}#pullrequestreview"
     user, head = pr.get("user"), pr.get("head")
@@ -22,6 +53,36 @@ def collect_review(
     revision = head.get("sha") if isinstance(head, dict) else None
     if type(author) is not int or not isinstance(revision, str):
         return _missing("PR author or source revision is unavailable.")
+    if self_review is not None:
+        base = pr.get("base")
+        if (
+            not isinstance(self_review, dict)
+            or operator_approval is not None
+            or set(self_review) != {"reference", "authorization", "revision"}
+            or self_review.get("revision") != revision
+            or any(
+                not isinstance(self_review.get(key), str)
+                or not self_review[key].strip()
+                or len(self_review[key]) > 500
+                or any(character in self_review[key] for character in "\r\n")
+                for key in ("reference", "authorization")
+            )
+        ):
+            return _missing(
+                "Self-review requires separate review and authorization references bound to "
+                "the source revision; do not combine it with human approval."
+            )
+        if (
+            integration_branch is None
+            or integration_branch == "main"
+            or pr.get("merged") is not True
+            or not isinstance(base, dict)
+            or base.get("ref") != integration_branch
+        ):
+            return _missing(
+                "Authorized self-review evidence requires a merged ordinary integration Story; "
+                "it cannot authorize a merge, release or hotfix."
+            )
     if operator_approval is not None and (
         set(operator_approval) != {"reference", "revision"}
         or operator_approval.get("revision") != revision
@@ -83,6 +144,20 @@ def collect_review(
         if item["state"] == "APPROVED" and item.get("commit_id") == revision
     )
     changes = sorted(item["id"] for item in latest.values() if item["state"] == "CHANGES_REQUESTED")
+    if not approved and not changes and self_review is not None:
+        return _available(
+            {
+                "state": "self_reviewed",
+                "revision": revision,
+                "approval_ids": [],
+                "change_request_ids": [],
+                "basis": "authorized_self_review",
+                "self_review": self_review,
+                "limitation": "Operator attested authorized agent self-review; no independent "
+                "human approval is asserted. Wood cannot verify the authorization reference.",
+            },
+            source,
+        )
     if not approved and not changes and operator_approval is not None:
         return _available(
             {

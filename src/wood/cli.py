@@ -86,6 +86,18 @@ def _contract() -> dict[str, object]:
             "public_executable": "wood",
             "openproject_credentials": "injected-environment-or-infisical",
             "branching": branching.contract(),
+            "source_review": {
+                "version": 1,
+                "bases": ["github_reviews", "operator_attestation", "authorized_self_review"],
+                "self_review": {
+                    "state": "self_reviewed",
+                    "scope": "merged-adopted-integration-story",
+                    "required": ["reference", "authorization", "revision"],
+                    "asserts_human_approval": False,
+                    "overrides_change_requests": False,
+                    "authorizes_merge_or_release": False,
+                },
+            },
             "initialization": {
                 "version": 1,
                 "branches": ["main", "development"],

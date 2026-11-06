@@ -252,3 +252,83 @@ def test_delivery_snapshot_is_saved_separately_and_unchanged_observations_dedupl
     assert Path(result["delivery_file"]).exists() and authority["posts"] == 5
     snapshot["observed_at"] = "later"
     assert report(pr=9)["submitted"] == [] and authority["posts"] == 5
+
+
+def test_self_review_milestone_retains_authorization_and_retry_guards(
+    authority, monkeypatch, capsys
+):
+    attestation = {
+        "reference": "Agent review",
+        "authorization": "User authorization",
+        "revision": "a" * 40,
+    }
+
+    def reconcile(*_args, **kwargs):
+        assert kwargs["self_review"] == attestation
+        assert kwargs["operator_approval"] is None
+        return {
+            "fields": {
+                name: {
+                    "state": "available",
+                    "value": {
+                        "state": "self_reviewed",
+                        "basis": "authorized_self_review",
+                        "self_review": attestation,
+                    },
+                    "source": "https://github.com/owner/wood-tools/pull/9",
+                }
+                if name == "review"
+                else {"state": "unavailable", "reason": "fixture"}
+                for name in ("pull_request", "review", "ci", "merged_revision")
+            }
+        }
+
+    monkeypatch.setattr(milestones.delivery_status, "reconcile", reconcile)
+    assert (
+        main(
+            [
+                "story",
+                "milestones",
+                "410",
+                "--owner",
+                "owner-1",
+                "--pr",
+                "9",
+                "--self-review-reference",
+                "Agent review",
+                "--self-review-authorization",
+                "User authorization",
+                "--reviewed-revision",
+                "a" * 40,
+                "--json",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)["data"]
+    review = next(
+        item["event"]["observation"]
+        for item in result["milestones"]
+        if item["event"]["kind"] == "review"
+    )
+    assert review["value"]["state"] == "self_reviewed"
+    # CLI depth limits stay bounded; the actual evidence/outbox retains the references.
+    assert review["value"]["self_review"] == "<depth limit>"
+    preview = milestones.report(
+        OpenProjectClient(settings()),
+        410,
+        owner="owner-1",
+        apply=False,
+        pr=9,
+        self_review=attestation,
+    )
+    saved_review = next(
+        item["event"]["observation"]
+        for item in preview["milestones"]
+        if item["event"]["kind"] == "review"
+    )
+    assert saved_review["value"]["self_review"] == attestation
+    with pytest.raises(StoryWorkflowError, match="explicit PR selection"):
+        report(self_review=attestation)
+    with pytest.raises(StoryWorkflowError, match="Retry uses retained evidence"):
+        report(retry=True, self_review=attestation)

@@ -481,6 +481,24 @@ source. It cannot override outstanding GitHub change requests. Reverification
 checks the saved source binding and current GitHub state. No raw command output,
 credentials or arbitrary activity body is accepted by the milestone command.
 
+When the user explicitly authorizes agent self-review, a **merged ordinary Story**
+in an adopted integration repository can instead supply
+`--self-review-reference <review-record> --self-review-authorization <user-authorization>`
+and `--reviewed-revision <exact-source-sha>` on these three commands. Both references
+are required and operator-attested; Wood cannot independently verify their contents.
+This records `state=self_reviewed`, `basis=authorized_self_review`, and the separate
+`authorized_source_self_review` completion criterion. It never asserts human approval.
+Do not supply the human `--review-reference` at the same time. No mode is inferred
+from a missing GitHub approval, and the default review behavior is unchanged.
+
+Self-review evidence is restricted to an already merged PR targeting the mapped
+integration branch. It cannot authorize a merge or satisfy a release, protected-main,
+trunk or hotfix review. GitHub review collection must remain accessible and any
+outstanding change request still blocks evidence. Existing merge protections and
+required checks remain enforced by GitHub; this command neither changes them nor
+performs a merge. Generated evidence consumers reverify the source, authorization
+reference, review state, validation and CI at activity posting and completion.
+
 ### Epic and planning Release inspection
 
 ```sh

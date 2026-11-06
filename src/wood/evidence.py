@@ -15,7 +15,7 @@ from wood_project.story.openproject import work_package_description_text
 
 from . import operations
 from .delivery import collect_delivery
-from .reviews import collect_review
+from .reviews import collect_review, integration_target, review_satisfied
 from .verification import load_contract, verify_record
 from .workflow_files import (
     WorkflowFilesError,
@@ -63,6 +63,7 @@ def _verify(
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if pr_number <= 0 or run_id <= 0:
         raise _invalid("PR and CI run IDs must be positive integers.")
@@ -173,11 +174,19 @@ def _verify(
         raise _invalid(
             "Validation results do not match the PR's implementation files; validate again."
         )
-    review = collect_review(root, slug, pr_number, pr, operator_approval=operator_approval)
-    if review["state"] != "available" or review["value"]["state"] != "approved":
+    review = collect_review(
+        root,
+        slug,
+        pr_number,
+        pr,
+        operator_approval=operator_approval,
+        self_review=self_review,
+        integration_branch=integration_target(branch_plan),
+    )
+    if not review_satisfied(review):
         raise _invalid(
             "Current PR revision requires independent GitHub approval or explicit source-bound "
-            "operator approval, without change requests."
+            "operator approval, or authorized integration self-review, without change requests."
         )
     run = _document(root, f"repos/{slug}/actions/runs/{run_id}")
     if (
@@ -247,6 +256,7 @@ def generate_evidence(
     hotfix_incident: str | None = None,
     hotfix_approval: str | None = None,
     operator_approval: dict[str, str] | None = None,
+    self_review: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = operations.repository_root(Path.cwd())
     evidence, story, record, pr = _verify(
@@ -261,6 +271,7 @@ def generate_evidence(
         hotfix_incident,
         hotfix_approval,
         operator_approval,
+        self_review,
     )
     delivery = collect_delivery(root, evidence, pr["head"]["ref"])
     checks = ", ".join(check["name"] for check in evidence["repository_checks"])
@@ -286,6 +297,17 @@ def generate_evidence(
             + evidence["review"]["value"]["limitation"]
             + "\n"
         )
+    if evidence["review"]["value"]["basis"] == "authorized_self_review":
+        attestation = evidence["review"]["value"]["self_review"]
+        update += (
+            "Agent self-review reference (operator asserted): "
+            + attestation["reference"]
+            + "\nSelf-review authorization reference (operator asserted): "
+            + attestation["authorization"]
+            + "\n"
+            + evidence["review"]["value"]["limitation"]
+            + "\n"
+        )
     if "verification" in evidence:
         names = ", ".join(
             check["name"] for check in evidence["verification"]["checks"] if check["required"]
@@ -305,7 +327,9 @@ def generate_evidence(
         "required_criteria": [
             "matching_repository_validation",
             "merged_story_pr",
-            "approved_source_review",
+            "authorized_source_self_review"
+            if evidence["review"]["value"]["basis"] == "authorized_self_review"
+            else "approved_source_review",
             "passed_revision_ci",
             "posted_implementation_summary",
         ],
@@ -363,6 +387,7 @@ def verify_generated_evidence(
             hotfix_incident=evidence.get("branching", {}).get("hotfix_incident"),
             hotfix_approval=evidence.get("branching", {}).get("hotfix_approval"),
             operator_approval=evidence.get("review", {}).get("value", {}).get("operator_approval"),
+            self_review=evidence.get("review", {}).get("value", {}).get("self_review"),
         )
         for key, value in fresh.items():
             if evidence.get(key) != value:

@@ -107,7 +107,7 @@ def delivered(tmp_path, monkeypatch):
     return state
 
 
-def generate(state, *, apply=True, verification_path=None):
+def generate(state, *, apply=True, verification_path=None, self_review=None):
     return evidence.generate_evidence(
         OpenProjectClient(settings()),
         410,
@@ -116,6 +116,7 @@ def generate(state, *, apply=True, verification_path=None):
         run_id=123,
         apply=apply,
         verification_path=verification_path,
+        self_review=self_review,
     )
 
 
@@ -168,6 +169,106 @@ def test_operator_review_approval_is_retained_and_reverified(delivered):
     evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
     delivered["reviews"] = [{"id": 2, "user": {"id": 2}, "state": "CHANGES_REQUESTED"}]
     with pytest.raises(StoryWorkflowError, match="operator approval"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+
+
+@pytest.fixture
+def self_reviewed_delivery(delivered):
+    root = delivered["root"]
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text() + '\n[tool.wood.branching]\nstrategy = "integration"\n'
+        'release_id = 20\nintegration_branch = "development"\n'
+        'scope_reference = "User explicitly authorized autonomous agent self-review"\n'
+    )
+    delivered["story"]["_links"]["version"]["href"] = "/api/v3/versions/20"
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "Adopt approved integration fixture")
+    revision = git(root, "rev-parse", "HEAD")
+    delivered["pr"]["head"]["sha"] = revision
+    delivered["pr"]["merge_commit_sha"] = revision
+    delivered["pr"]["base"]["ref"] = "development"
+    delivered["run"]["head_sha"] = revision
+    delivered["record"] = operations.repo_validate(root)
+    delivered["reviews"] = []
+    delivered["self_review"] = {
+        "reference": "Agent reviewed exact source against acceptance and passing tests",
+        "authorization": "User explicitly authorized agent self-review and development integration",
+        "revision": revision,
+    }
+    return delivered
+
+
+def test_self_review_evidence_is_truthful_and_reverified(self_reviewed_delivery):
+    state = self_reviewed_delivery
+    with pytest.raises(StoryWorkflowError, match="independent GitHub approval"):
+        generate(state, apply=False)
+    result = generate(state, self_review=state["self_review"])
+    generated = workflow_files.read_json(Path(result["evidence_file"]))
+    assert generated["review"]["value"]["state"] == "self_reviewed"
+    assert generated["review"]["value"]["self_review"] == state["self_review"]
+    assert "authorized_source_self_review" in result["required_criteria"]
+    assert "approved_source_review" not in result["required_criteria"]
+    assert result["delivery"]["review"]["value"]["basis"] == "authorized_self_review"
+    update = Path(result["update_file"]).read_text()
+    assert "Agent self-review reference" in update
+    assert "Self-review authorization reference" in update
+    assert "Human approval reference" not in update
+    evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+    state["reviews"] = [
+        {
+            "id": 2,
+            "user": {"id": 2},
+            "state": "CHANGES_REQUESTED",
+            "submitted_at": "2026-10-19T00:00:00Z",
+        }
+    ]
+    with pytest.raises(StoryWorkflowError, match="authorized integration self-review"):
+        evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
+
+
+def test_self_review_cli_and_missing_authorization(self_reviewed_delivery, capsys):
+    state = self_reviewed_delivery
+    args = [
+        "story",
+        "evidence",
+        "410",
+        "--validation",
+        state["record"]["validation_file"],
+        "--pr",
+        "44",
+        "--ci-run",
+        "123",
+        "--target-branch",
+        "development",
+        "--self-review-reference",
+        state["self_review"]["reference"],
+        "--reviewed-revision",
+        state["self_review"]["revision"],
+        "--json",
+    ]
+    assert main(args) != 0
+    output = capsys.readouterr().out
+    assert "Self-review requires" in output or "independent GitHub" in output
+    args.extend(["--self-review-authorization", state["self_review"]["authorization"]])
+    assert main(args) == 0
+    assert (
+        json.loads(capsys.readouterr().out)["data"]["delivery"]["review"]["value"]["state"]
+        == "self_reviewed"
+    )
+
+
+def test_self_review_still_requires_successful_ci_and_complete_record(self_reviewed_delivery):
+    state = self_reviewed_delivery
+    state["run"]["conclusion"] = "failure"
+    with pytest.raises(StoryWorkflowError, match="CI must be a passed"):
+        generate(state, self_review=state["self_review"])
+    state["run"]["conclusion"] = "success"
+    generated = workflow_files.read_json(
+        Path(generate(state, self_review=state["self_review"])["evidence_file"])
+    )
+    del generated["review"]["value"]["self_review"]["authorization"]
+    with pytest.raises(StoryWorkflowError, match="authorized integration self-review"):
         evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, generated)
 
 
@@ -486,7 +587,11 @@ def test_consumption_reverifies_generated_inputs(delivered, change):
         evidence.verify_generated_evidence(OpenProjectClient(settings()), 410, value)
 
 
-def test_cli_generation_activity_and_complete_consume_outputs(delivered, monkeypatch, capsys):
+@pytest.mark.parametrize("fixture", ["delivered", "self_reviewed_delivery"])
+def test_cli_generation_activity_and_complete_consume_outputs(
+    request, fixture, monkeypatch, capsys
+):
+    delivered = request.getfixturevalue(fixture)
     args = [
         "story",
         "evidence",
@@ -500,10 +605,23 @@ def test_cli_generation_activity_and_complete_consume_outputs(delivered, monkeyp
         "--apply",
         "--json",
     ]
+    if fixture == "self_reviewed_delivery":
+        attestation = delivered["self_review"]
+        args.extend(
+            [
+                "--self-review-reference",
+                attestation["reference"],
+                "--self-review-authorization",
+                attestation["authorization"],
+                "--reviewed-revision",
+                attestation["revision"],
+            ]
+        )
     assert main(args) == 0
     output = capsys.readouterr().out
     assert "secret-token" not in output
-    assert len(output) < 4000
+    # Integration scope and two attested references add bounded metadata.
+    assert len(output) < (5000 if fixture == "self_reviewed_delivery" else 4000)
     path = json.loads(output)["data"]["evidence_file"]
     activity_calls = []
     monkeypatch.setattr(
@@ -516,6 +634,9 @@ def test_cli_generation_activity_and_complete_consume_outputs(delivered, monkeyp
     capsys.readouterr()
     assert activity_calls[0][0].startswith("Implementation update (WP-410)")
     assert activity_calls[0][1] is False
+    if fixture == "self_reviewed_delivery":
+        assert "Agent self-review reference" in activity_calls[0][0]
+        assert "Human approval reference" not in activity_calls[0][0]
     calls = []
     monkeypatch.setattr("wood.story.require_summary", lambda *_args: None)
     monkeypatch.setattr(
